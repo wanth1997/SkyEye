@@ -204,7 +204,7 @@
     {
       "id": 13,
       "type": "stat",
-      "title": "Last heartbeat (hr ago)",
+      "title": "P3 digest emails sent (lifetime)",
       "gridPos": {
         "x": 18,
         "y": 1,
@@ -221,7 +221,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "(time() - max(ALERTS_FOR_STATE{alertname=\"DailyHeartbeat\"})) / 3600",
+          "expr": "sum(alertmanager_notifications_total{receiver=\"p3-digest\"}) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
@@ -241,27 +241,24 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "h",
+          "unit": "short",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "yellow",
-                "value": 25
-              },
-              {
-                "color": "red",
-                "value": 48
+                "color": "green",
+                "value": 1
               }
             ]
           }
         },
         "overrides": []
-      }
+      },
+      "description": "Counter: alertmanager_notifications_total{receiver=\"p3-digest\"}. Should grow by ~1 per day. If the number does NOT grow for 2+ days, the alert delivery pipeline is broken (Prom / AM / Gmail SMTP). Check your inbox for the daily digest."
     },
     {
       "id": 2,
