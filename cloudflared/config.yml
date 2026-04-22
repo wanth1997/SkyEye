@@ -1,4 +1,6 @@
-tunnel: skyeye-monitoring-prod
+# Tunnel UUID (from `cloudflared tunnel list`) — using UUID instead of name
+# means cloudflared does not need cert.pem for API lookups at runtime.
+tunnel: b4ac7827-024e-4de9-9d48-89bbee46c483
 credentials-file: /etc/cloudflared/credentials.json
 
 # Increase grace for slow queries
