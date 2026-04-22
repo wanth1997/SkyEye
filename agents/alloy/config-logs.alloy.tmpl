@@ -45,38 +45,47 @@ loki.relabel "journal" {
 ////////////////////////////////////////////////////////////////////////////////
 
 loki.process "scrub_pii" {
-  // Taiwan mobile: 09xxxxxxxx or 09xx-xxx-xxx
+  // IMPORTANT — Alloy's stage.replace does NOT use Go regex backreferences.
+  // It replaces the captured-group TEXT with the `replace` template. Everything
+  // OUTSIDE capture groups (but still inside the match) is preserved.
+  //
+  // So to redact only a VALUE, capture ONLY the value:
+  //   expression = "key: '([^']+)'"    ← group 1 = value
+  //   replace    = "[REDACTED]"        ← replaces group 1's text
+  //   result:  key: '[REDACTED]'
+  //
+  // A regex with no capture groups replaces the entire match (what we want for
+  // the broad phone / email sweeps).
+
+  // Taiwan mobile: 09xxxxxxxx or 09xx-xxx-xxx (whole match replaced)
   stage.replace {
-    expression = "09\\d{2}[-]?\\d{3}[-]?\\d{3}"
+    expression = "09\\d{2}-?\\d{3}-?\\d{3}"
     replace    = "[PHONE]"
   }
 
-  // Email (broad)
+  // Broad email sweep — whole match replaced with [EMAIL]
   stage.replace {
     expression = "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
     replace    = "[EMAIL]"
   }
 
-  // Chinese 姓名 key (keep the key, redact the value)
-  // Go regexp replacement: $1 / $2 refer to capture groups. (NOT $${1} —
-  // River does not escape $$, and envsubst does not fold $${N} to ${N}.)
+  // Chinese 姓名 value — handles both quoted 'X' and unquoted X forms.
+  // Outer '? quotes are OUTSIDE the capture group so they survive; capture
+  // contains only the name chars.
   stage.replace {
-    expression = "('?姓名'?\\s*[:：=]\\s*)[^\\s,}]+"
-    replace    = "$1[NAME]"
+    expression = "'?姓名'?\\s*[:：=]\\s*'?([^\\s,}'\"]+)'?"
+    replace    = "[NAME]"
   }
 
-  // NewebPay-style Email field in dict: 'Email': 'x@y.com'
+  // NewebPay-style 'Email': 'x@y.com' — backup rule in case the broad sweep
+  // misses (e.g. someone puts an email-like string in an Email key that
+  // doesn't match the broad regex). Captures only the value.
   stage.replace {
-    expression = "('Email'\\s*:\\s*')[^']+(')"
-    replace    = "$1[REDACTED]$2"
+    expression = "'Email'\\s*:\\s*'([^']+)'"
+    replace    = "[REDACTED]"
   }
 
-  // NewebPay Amt field — currently NOT scrubbed (amounts are useful for ops).
-  // Uncomment to redact:
-  // stage.replace {
-  //   expression = "('Amt'\\s*:\\s*')\\d+(')"
-  //   replace    = "$1[AMT]$2"
-  // }
+  // Amounts are intentionally NOT scrubbed — useful for ops.
 
   forward_to = [loki.write.central.receiver]
 }
