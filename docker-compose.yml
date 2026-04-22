@@ -3,8 +3,9 @@ services:
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/rules:/etc/prometheus/rules:ro
+      # Mount whole directory (not individual file) so edits that change inode
+      # — like atomic-rename editors — propagate into the container.
+      - ./prometheus:/etc/prometheus:ro
       - prometheus_data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -21,8 +22,9 @@ services:
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
     volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      - ./alertmanager/secrets:/etc/alertmanager/secrets:ro
+      # Mount whole directory (includes ./alertmanager/secrets/) so file
+      # edits via atomic rename propagate without needing container restart.
+      - ./alertmanager:/etc/alertmanager:ro
       - alertmanager_data:/alertmanager
     command:
       - --config.file=/etc/alertmanager/alertmanager.yml

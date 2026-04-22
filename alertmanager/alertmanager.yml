@@ -32,14 +32,13 @@ time_intervals:
   - name: work-hours
     time_intervals:
       - times: [{ start_time: '09:00', end_time: '21:00' }]
-        weekdays: ['monday:sunday']
         location: Asia/Taipei
 
 receivers:
   - name: telegram-p1
     telegram_configs:
       - bot_token_file: /etc/alertmanager/secrets/tg_token
-        chat_id: -5142388781
+        chat_id: -1003712147883
         parse_mode: HTML
         disable_notifications: false
         send_resolved: true
@@ -58,7 +57,7 @@ receivers:
   - name: telegram-p2
     telegram_configs:
       - bot_token_file: /etc/alertmanager/secrets/tg_token
-        chat_id: -5142388781
+        chat_id: -1003712147883
         parse_mode: HTML
         disable_notifications: true
         send_resolved: true
