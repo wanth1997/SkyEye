@@ -204,7 +204,7 @@
     {
       "id": 13,
       "type": "stat",
-      "title": "P3 digest emails sent (lifetime)",
+      "title": "Emails sent (last 24h)",
       "gridPos": {
         "x": 18,
         "y": 1,
@@ -221,7 +221,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(alertmanager_notifications_total{receiver=\"p3-digest\"}) OR on() vector(0)",
+          "expr": "sum(increase(alertmanager_notifications_total{integration=\"email\"}[24h])) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
@@ -254,11 +254,12 @@
                 "value": 1
               }
             ]
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },
-      "description": "Counter: alertmanager_notifications_total{receiver=\"p3-digest\"}. Should grow by ~1 per day. If the number does NOT grow for 2+ days, the alert delivery pipeline is broken (Prom / AM / Gmail SMTP). Check your inbox for the daily digest."
+      "description": "increase(alertmanager_notifications_total{integration=\"email\"}[24h]). Should be >= 1 per day — the DailyHeartbeat digest alone guarantees that. 0 for 24h+ means the Prom → AM → Gmail SMTP chain is broken. (Note: the metric doesn't expose per-receiver counts, so this is a coarse liveness probe; the real verification is still the email in your inbox.)"
     },
     {
       "id": 2,
