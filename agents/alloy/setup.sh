@@ -83,19 +83,30 @@ mkdir -p "$(dirname "$ALLOY_CONFIG")"
 
 # Only listed variables get substituted — unlisted $vars (including Alloy
 # regex capture refs like $1) stay intact.
-ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL'
+ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET'
 export PRODUCT SERVER_ID JOURNAL_MATCHES LOKI_PUSH_URL \
-       CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET PROM_PUSH_URL
+       CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET \
+       PROM_PUSH_URL APP_METRICS_TARGET
 
-# Always: logs section
+# Always: logs section (Phase 2A)
 envsubst "$ENVSUBST_VARS" < config-logs.alloy.tmpl > "$ALLOY_CONFIG"
 
-# Phase 2B: append metrics section when PROM_PUSH_URL is set
+# Phase 2B: append node metrics section when PROM_PUSH_URL is set
 if [ -n "${PROM_PUSH_URL:-}" ]; then
   echo "==> PROM_PUSH_URL set — appending node metrics section"
   envsubst "$ENVSUBST_VARS" < config-metrics.alloy.tmpl >> "$ALLOY_CONFIG"
 else
   echo "==> PROM_PUSH_URL unset — log-only mode (Phase 2A)"
+fi
+
+# Phase 2C: append app /metrics scrape when APP_METRICS_TARGET is set
+if [ -n "${APP_METRICS_TARGET:-}" ]; then
+  if [ -z "${PROM_PUSH_URL:-}" ]; then
+    echo "ERROR: APP_METRICS_TARGET requires PROM_PUSH_URL to be set too" >&2
+    exit 2
+  fi
+  echo "==> APP_METRICS_TARGET set ($APP_METRICS_TARGET) — appending app scrape section"
+  envsubst "$ENVSUBST_VARS" < config-app.alloy.tmpl >> "$ALLOY_CONFIG"
 fi
 
 chmod 640 "$ALLOY_CONFIG"

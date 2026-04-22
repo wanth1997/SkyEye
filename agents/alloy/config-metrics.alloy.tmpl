@@ -40,17 +40,9 @@ prometheus.scrape "node" {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// 7. (Phase 2C placeholder) Scrape: app /metrics — enabled once APP_METRICS_URL
-// is set by setup.sh. When PPClub backend exposes /metrics via
-// prometheus-fastapi-instrumentator, remove the leading // and re-run setup.sh.
+// (Phase 2C app /metrics scrape lives in config-app.alloy.tmpl, appended by
+// setup.sh when APP_METRICS_TARGET is set.)
 ////////////////////////////////////////////////////////////////////////////////
-
-// prometheus.scrape "app" {
-//   targets         = [{ __address__ = "${APP_METRICS_TARGET}" }]
-//   forward_to      = [prometheus.remote_write.central.receiver]
-//   scrape_interval = "15s"
-//   job_name        = "${PRODUCT}-backend"
-// }
 
 ////////////////////////////////////////////////////////////////////////////////
 // 8. Sink: central Prometheus via Cloudflare tunnel + Access Service Token

@@ -152,12 +152,20 @@ node_memory_MemAvailable_bytes{product="ppclub"}
 node_filesystem_avail_bytes{product="ppclub", mountpoint="/"}
 ```
 
-### Phase 2C — app /metrics (not yet)
+## Phase 2C — app `/metrics` scrape
 
-Once PPClub backend exposes `/metrics` via `prometheus-fastapi-instrumentator`, set:
+Once the app exposes `/metrics` on localhost (see [docs/phase-2c-ppclub-changes.md](../../docs/phase-2c-ppclub-changes.md) for the FastAPI side), add:
 
 ```bash
-export APP_METRICS_URL=http://localhost:8090/metrics
+export APP_METRICS_TARGET=localhost:8090
+sudo -E bash agents/alloy/setup.sh
 ```
 
-and uncomment the Phase 2C `prometheus.scrape "app"` block in `config-metrics.alloy.tmpl`. (This lands with Phase 2C work — not needed yet.)
+setup.sh appends `config-app.alloy.tmpl` to the config, adding a `prometheus.scrape "app"` block that forwards to the same `prometheus.remote_write.central` used by node metrics.
+
+### Verify
+
+```
+up{job="ppclub-backend"}                            # == 1 when scrape succeeds
+http_requests_total{product="ppclub"}               # non-empty
+```
