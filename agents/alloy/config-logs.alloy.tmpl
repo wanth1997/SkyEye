@@ -58,22 +58,24 @@ loki.process "scrub_pii" {
   }
 
   // Chinese 姓名 key (keep the key, redact the value)
+  // Go regexp replacement: $1 / $2 refer to capture groups. (NOT $${1} —
+  // River does not escape $$, and envsubst does not fold $${N} to ${N}.)
   stage.replace {
     expression = "('?姓名'?\\s*[:：=]\\s*)[^\\s,}]+"
-    replace    = "$${1}[NAME]"
+    replace    = "$1[NAME]"
   }
 
   // NewebPay-style Email field in dict: 'Email': 'x@y.com'
   stage.replace {
     expression = "('Email'\\s*:\\s*')[^']+(')"
-    replace    = "$${1}[REDACTED]$${2}"
+    replace    = "$1[REDACTED]$2"
   }
 
   // NewebPay Amt field — currently NOT scrubbed (amounts are useful for ops).
   // Uncomment to redact:
   // stage.replace {
   //   expression = "('Amt'\\s*:\\s*')\\d+(')"
-  //   replace    = "$${1}[AMT]$${2}"
+  //   replace    = "$1[AMT]$2"
   // }
 
   forward_to = [loki.write.central.receiver]
