@@ -136,9 +136,10 @@ On the host:
 # Alloy should report the remote_write target
 sudo journalctl -u alloy --since=1m --no-pager | grep -i 'remote_write\|prometheus'
 
-# Metrics throughput
+# Metrics throughput — Alloy 1.x uses prometheus_remote_storage_* (not
+# _remote_write_* which was the classic prometheus exporter name).
 curl -s http://127.0.0.1:12345/metrics 2>/dev/null \
-  | grep -E '^prometheus_remote_write_samples_sent_total|^prometheus_remote_write_failed_samples_total' \
+  | grep -E '^prometheus_remote_storage_samples_total|^prometheus_remote_storage_samples_failed_total|^prometheus_remote_storage_samples_retried_total|^prometheus_remote_storage_highest_timestamp' \
   | head
 ```
 
