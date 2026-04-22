@@ -142,7 +142,7 @@
     {
       "id": 12,
       "type": "stat",
-      "title": "Active alerts",
+      "title": "Active alerts (P1/P2)",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -159,7 +159,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(ALERTS{alertstate=\"firing\"}) OR on() vector(0)",
+          "expr": "sum(ALERTS{alertstate=\"firing\",severity=~\"P1|P2\"}) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
@@ -204,7 +204,7 @@
     {
       "id": 13,
       "type": "stat",
-      "title": "Log stream (lines/min)",
+      "title": "Last heartbeat (hr ago)",
       "gridPos": {
         "x": 18,
         "y": 1,
@@ -212,16 +212,16 @@
         "h": 4
       },
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          "expr": "sum(rate({product=~\".+\"}[1m])) * 60",
+          "expr": "(time() - max(ALERTS_FOR_STATE{alertname=\"DailyHeartbeat\"})) / 3600",
           "refId": "A",
           "instant": true
         }
@@ -241,13 +241,21 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "h",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 25
+              },
+              {
+                "color": "red",
+                "value": 48
               }
             ]
           }
@@ -559,7 +567,7 @@
     {
       "id": 4,
       "type": "row",
-      "title": "🚨 Alerts",
+      "title": "🚨 Alerts — P1 / P2 only（heartbeat 類已濾掉）",
       "gridPos": {
         "x": 0,
         "y": 21,
@@ -570,30 +578,208 @@
     },
     {
       "id": 40,
-      "type": "alertlist",
-      "title": "Active & pending alerts",
+      "type": "table",
+      "title": "🚨 Active alerts — P1 / P2 (需要處理)",
       "gridPos": {
         "x": 0,
         "y": 22,
         "w": 24,
         "h": 8
       },
-      "options": {
-        "showOptions": "current",
-        "maxItems": 10,
-        "sortOrder": 1,
-        "dashboardAlerts": false,
-        "alertName": "",
-        "dashboardTitle": "",
-        "tags": [],
-        "stateFilter": {
-          "firing": true,
-          "pending": true,
-          "inactive": false,
-          "error": true,
-          "noData": false,
-          "normal": false
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Firing alerts routed to Telegram / Email. This is what you should fix.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "ALERTS{alertstate=\"firing\",severity=~\"P1|P2\"}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
         }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "alertstate": true
+            },
+            "indexByName": {},
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "Severity",
+              "product": "Product",
+              "server_id": "Server"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "P1": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "P2": {
+                        "color": "yellow",
+                        "index": 1
+                      },
+                      "P3": {
+                        "color": "blue",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 41,
+      "type": "table",
+      "title": "ℹ️ Informational — P3 / heartbeat (正常都會有)",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "P3 alerts like DailyHeartbeat (vector(1)) — always firing on purpose as an end-to-end liveness probe of the alert pipeline.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "ALERTS{alertstate=\"firing\",severity=~\"P3\"}",
+          "refId": "A",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "alertstate": true
+            },
+            "indexByName": {},
+            "renameByName": {
+              "alertname": "Alert",
+              "severity": "Severity",
+              "product": "Product",
+              "server_id": "Server"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "P1": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "P2": {
+                        "color": "yellow",
+                        "index": 1
+                      },
+                      "P3": {
+                        "color": "blue",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
       }
     }
   ],
