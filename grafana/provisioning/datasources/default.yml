@@ -1,7 +1,10 @@
 apiVersion: 1
 
+# UIDs are pinned so dashboards JSON can reference them stably across
+# container rebuilds. Do NOT change these after go-live.
 datasources:
   - name: Prometheus
+    uid: prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090
@@ -11,6 +14,7 @@ datasources:
       timeInterval: 15s
 
   - name: Loki
+    uid: loki
     type: loki
     access: proxy
     url: http://loki:3100
@@ -19,6 +23,7 @@ datasources:
       maxLines: 1000
 
   - name: Alertmanager
+    uid: alertmanager
     type: alertmanager
     access: proxy
     url: http://alertmanager:9093
