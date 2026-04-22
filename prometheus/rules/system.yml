@@ -1,0 +1,55 @@
+groups:
+  - name: system
+    interval: 30s
+    rules:
+      - alert: HostHighCPU
+        expr: 100 - (avg by (instance, product) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 10m
+        labels:
+          severity: P2
+        annotations:
+          summary: "{{ $labels.instance }} CPU > 85% for 10min"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-cpu.md"
+
+      - alert: HostDiskLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 20
+        for: 10m
+        labels:
+          severity: P2
+        annotations:
+          summary: "{{ $labels.instance }} disk < 20%"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/disk-full.md"
+
+      - alert: HostDiskCritical
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 5
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "{{ $labels.instance }} disk < 5% — imminent failure"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/disk-full.md"
+
+      - alert: HostOOM
+        expr: increase(node_vmstat_oom_kill[5m]) > 0
+        for: 1m
+        labels:
+          severity: P1
+        annotations:
+          summary: "{{ $labels.instance }} OOM killer activated"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/oom.md"
+
+      - alert: HostMemoryHigh
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+        for: 15m
+        labels:
+          severity: P2
+        annotations:
+          summary: "{{ $labels.instance }} memory > 90% for 15min"
+
+      - alert: SystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "systemd unit {{ $labels.name }} failed on {{ $labels.instance }}"

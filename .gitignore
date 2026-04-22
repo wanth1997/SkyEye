@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Alertmanager secrets (token files, SMTP password) — but keep the README
+alertmanager/secrets/*
+!alertmanager/secrets/README.md
+
+# Cloudflared tunnel credentials (UUID.json)
+cloudflared/credentials.json
+cloudflared/*.json
+!cloudflared/config.yml
+
+# AWS temp credentials
+.aws-credentials
+
+# macOS / editor noise
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Docker / runtime
+*.log

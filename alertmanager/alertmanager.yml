@@ -1,0 +1,79 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: smtp.gmail.com:587
+  smtp_from: wanth1997@gmail.com
+  smtp_auth_username: wanth1997@gmail.com
+  smtp_auth_password_file: /etc/alertmanager/secrets/smtp_pass
+  smtp_require_tls: true
+
+route:
+  receiver: telegram-p2
+  group_by: [alertname, product, severity]
+  group_wait: 10s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="P1"]
+      receiver: telegram-p1
+      group_wait: 0s
+      repeat_interval: 30m
+      continue: false
+    - matchers: [severity="P2"]
+      receiver: telegram-p2
+      active_time_intervals: [work-hours]
+      continue: false
+    - matchers: [severity="P3"]
+      receiver: p3-digest
+      group_interval: 24h
+      repeat_interval: 24h
+      continue: false
+
+time_intervals:
+  - name: work-hours
+    time_intervals:
+      - times: [{ start_time: '09:00', end_time: '21:00' }]
+        weekdays: ['monday:sunday']
+        location: Asia/Taipei
+
+receivers:
+  - name: telegram-p1
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/secrets/tg_token
+        chat_id: -5142388781
+        parse_mode: HTML
+        disable_notifications: false
+        send_resolved: true
+        message: |-
+          <b>{{ if eq .Status "firing" }}🚨 P1 FIRING{{ else }}✅ P1 RESOLVED{{ end }} — {{ .GroupLabels.alertname }}</b>
+          {{ if .GroupLabels.product }}Product: <code>{{ .GroupLabels.product }}</code>{{ end }}
+          {{ range .Alerts }}
+          • {{ .Annotations.summary }}
+          {{- end }}
+          {{ if .CommonAnnotations.runbook_url }}
+          📖 <a href="{{ .CommonAnnotations.runbook_url }}">Runbook</a>{{ end }}
+    email_configs:
+      - to: wanth1997@gmail.com
+        send_resolved: true
+
+  - name: telegram-p2
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/secrets/tg_token
+        chat_id: -5142388781
+        parse_mode: HTML
+        disable_notifications: true
+        send_resolved: true
+        message: |-
+          <b>{{ if eq .Status "firing" }}⚠️ P2 FIRING{{ else }}✅ P2 RESOLVED{{ end }} — {{ .GroupLabels.alertname }}</b>
+          {{ if .GroupLabels.product }}Product: <code>{{ .GroupLabels.product }}</code>{{ end }}
+          {{ range .Alerts }}
+          • {{ .Annotations.summary }}
+          {{- end }}
+          {{ if .CommonAnnotations.runbook_url }}
+          📖 <a href="{{ .CommonAnnotations.runbook_url }}">Runbook</a>{{ end }}
+
+  - name: p3-digest
+    email_configs:
+      - to: wanth1997@gmail.com
+        send_resolved: false
+        headers:
+          Subject: '[SkyEye P3] {{ .GroupLabels.alertname }}'

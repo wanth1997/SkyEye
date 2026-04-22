@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: monitoring-prod
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  # Monitoring machine self-metrics
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ['alertmanager:9093']
+
+  # All application metrics arrive via remote_write from Alloy agents.
+  # Agents set external_labels {product, server_id}, so no per-target config here.

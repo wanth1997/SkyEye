@@ -1,0 +1,56 @@
+groups:
+  - name: app
+    interval: 30s
+    rules:
+      - alert: BackendDown
+        expr: up{job=~".+-backend"} == 0
+        for: 2m
+        labels:
+          severity: P1
+        annotations:
+          summary: "{{ $labels.product }} backend unreachable for 2min"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backend-down.md"
+
+      - alert: High5xxRate
+        expr: |
+          sum by (product) (rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          sum by (product) (rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: P2
+        annotations:
+          summary: "{{ $labels.product }} 5xx rate > 5% for 5min"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md"
+
+      - alert: Critical5xxRate
+        expr: |
+          sum by (product) (rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          sum by (product) (rate(http_requests_total[5m])) > 0.10
+        for: 2m
+        labels:
+          severity: P1
+        annotations:
+          summary: "{{ $labels.product }} 5xx rate > 10% for 2min"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md"
+
+      - alert: LatencyP99High
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, product) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 3
+        for: 10m
+        labels:
+          severity: P2
+        annotations:
+          summary: "{{ $labels.product }} p99 latency > 3s for 10min"
+
+      - alert: UnhandledException
+        expr: increase(ppc_unhandled_exception_total[5m]) > 3
+        for: 0m
+        labels:
+          severity: P2
+        annotations:
+          summary: "{{ $labels.product }} > 3 unhandled exceptions in 5min"

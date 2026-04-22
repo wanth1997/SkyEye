@@ -1,0 +1,35 @@
+groups:
+  - name: deadman
+    interval: 1m
+    rules:
+      # Scheduler jobs push a timestamp gauge; if nothing updates it for 1hr,
+      # the scheduler is probably dead.
+      - alert: SchedulerNoHeartbeat
+        expr: time() - ppc_scheduled_job_last_run_timestamp > 3600
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "{{ $labels.product }} scheduler job '{{ $labels.job }}' silent for > 1hr"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/scheduler-dead.md"
+
+      # Prometheus itself went stale — backup for UptimeRobot external check.
+      # prometheus_tsdb_head_max_time is in milliseconds since epoch.
+      - alert: PrometheusSelfStale
+        expr: time() - (prometheus_tsdb_head_max_time / 1000) > 300
+        for: 1m
+        labels:
+          severity: P1
+        annotations:
+          summary: "Prometheus TSDB head has not advanced in 5min — ingestion stopped"
+
+      # Always-firing heartbeat — proves the entire alert pipeline (rules →
+      # alertmanager → SMTP → Gmail) is alive. Routed to P3 email digest.
+      # If the daily digest stops arriving, investigate.
+      - alert: DailyHeartbeat
+        expr: vector(1)
+        for: 0s
+        labels:
+          severity: P3
+        annotations:
+          summary: "SkyEye monitoring is alive"

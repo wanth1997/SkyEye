@@ -1,0 +1,20 @@
+tunnel: skyeye-monitoring-prod
+credentials-file: /etc/cloudflared/credentials.json
+
+# Increase grace for slow queries
+originRequest:
+  connectTimeout: 30s
+  noHappyEyeballs: true
+
+ingress:
+  - hostname: grafana.wanbrain.com
+    service: http://grafana:3000
+
+  - hostname: prom-push.wanbrain.com
+    service: http://prometheus:9090
+
+  - hostname: loki-push.wanbrain.com
+    service: http://loki:3100
+
+  # Catch-all: anything else → 404
+  - service: http_status:404

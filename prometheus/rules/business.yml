@@ -1,0 +1,46 @@
+groups:
+  - name: business
+    interval: 1m
+    rules:
+      - alert: ZeroPayment1Hour
+        expr: |
+          (hour() >= 1 and hour() <= 14)
+          and
+          sum(increase(ppc_payment_success_total[1h])) == 0
+        # hour() is UTC; Asia/Taipei 09:00-22:00 == UTC 01:00-14:00
+        for: 5m
+        labels:
+          severity: P1
+          product: ppclub
+        annotations:
+          summary: "PPClub: zero successful payments in last 1hr during business hours"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/payment-zero.md"
+
+      - alert: RefundSurge
+        expr: |
+          sum(increase(ppc_refund_total[1h]))
+          >
+          3 * avg_over_time(sum(increase(ppc_refund_total[1h]))[7d:1h])
+        for: 10m
+        labels:
+          severity: P3
+          product: ppclub
+        annotations:
+          summary: "PPClub: refund rate > 3x 7-day average"
+
+      - alert: ExternalApiDown
+        expr: probe_success{job="blackbox"} == 0
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "External API {{ $labels.target }} unreachable for 5min"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/external-api-down.md"
+
+      - alert: ExternalApiSlow
+        expr: probe_duration_seconds{job="blackbox"} > 5
+        for: 10m
+        labels:
+          severity: P2
+        annotations:
+          summary: "External API {{ $labels.target }} probe > 5s for 10min"
