@@ -1,17 +1,6 @@
 {
   "Rules": [
     {
-      "ID": "transition-to-ia-after-7d",
-      "Status": "Enabled",
-      "Filter": { "Prefix": "" },
-      "Transitions": [
-        {
-          "Days": 7,
-          "StorageClass": "STANDARD_IA"
-        }
-      ]
-    },
-    {
       "ID": "expire-after-30d",
       "Status": "Enabled",
       "Filter": { "Prefix": "" },

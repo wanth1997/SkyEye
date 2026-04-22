@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# Disable aws cli pager (CloudShell defaults to less, which blocks scripts)
+export AWS_PAGER=""
+
 cd "$(dirname "$0")"
 
 # ---------- Config ----------
