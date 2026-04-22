@@ -81,14 +81,22 @@ fi
 echo "==> Rendering $ALLOY_CONFIG"
 mkdir -p "$(dirname "$ALLOY_CONFIG")"
 
-# Only substitute listed variables — leaves $${...} (Alloy regex capture groups) intact.
+# Only listed variables get substituted — unlisted $vars (including Alloy
+# regex capture refs like $1) stay intact.
+ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL'
 export PRODUCT SERVER_ID JOURNAL_MATCHES LOKI_PUSH_URL \
-       CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
+       CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET PROM_PUSH_URL
 
-envsubst \
-  '$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET' \
-  < config-logs.alloy.tmpl \
-  > "$ALLOY_CONFIG"
+# Always: logs section
+envsubst "$ENVSUBST_VARS" < config-logs.alloy.tmpl > "$ALLOY_CONFIG"
+
+# Phase 2B: append metrics section when PROM_PUSH_URL is set
+if [ -n "${PROM_PUSH_URL:-}" ]; then
+  echo "==> PROM_PUSH_URL set — appending node metrics section"
+  envsubst "$ENVSUBST_VARS" < config-metrics.alloy.tmpl >> "$ALLOY_CONFIG"
+else
+  echo "==> PROM_PUSH_URL unset — log-only mode (Phase 2A)"
+fi
 
 chmod 640 "$ALLOY_CONFIG"
 chown root:alloy "$ALLOY_CONFIG" 2>/dev/null || true

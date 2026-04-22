@@ -107,9 +107,56 @@ sudo bash agents/alloy/uninstall.sh
 
 Removes package, config, and apt repo. Does NOT remove previously-pushed logs from central Loki (they age out per retention policy, 30 days).
 
-## Phase 2B / 2C additions
+## Phase 2B — node metrics (CPU / RAM / disk / net)
 
-Coming soon:
-- `config-full.alloy.tmpl` — adds `prometheus.exporter.unix` + `prometheus.scrape` + `prometheus.remote_write`
-- `setup.sh --mode=full` flag — re-renders config with node metrics enabled
-- Phase 2C enables app scrape once PPClub backend has `/metrics` endpoint
+Add the `PROM_PUSH_URL` env var to enable node_exporter collection and push to the central Prometheus. Re-run `setup.sh` — it re-renders the config, appends the metrics section, and restarts alloy.
+
+```bash
+cd /home/ubuntu/skyeye-agent
+git pull
+
+# Keep existing Phase 2A vars (if session is fresh, re-export them)
+export PRODUCT=ppclub
+export SERVER_ID=ppclub-prod
+export JOURNAL_MATCHES='_SYSTEMD_UNIT=ppclub-backend.service _SYSTEMD_UNIT=caddy.service'
+export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
+
+# NEW: Phase 2B — enable metrics push
+export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
+
+# CF_ACCESS_CLIENT_ID / SECRET prompt as before (same Service Token)
+sudo -E bash agents/alloy/setup.sh
+```
+
+### Verify
+
+On the host:
+
+```bash
+# Alloy should report the remote_write target
+sudo journalctl -u alloy --since=1m --no-pager | grep -i 'remote_write\|prometheus'
+
+# Metrics throughput
+curl -s http://127.0.0.1:12345/metrics 2>/dev/null \
+  | grep -E '^prometheus_remote_write_samples_sent_total|^prometheus_remote_write_failed_samples_total' \
+  | head
+```
+
+From central Grafana (Explore → Prometheus):
+
+```
+up{product="ppclub"}                    # should be 1
+node_cpu_seconds_total{product="ppclub"}  # host CPU
+node_memory_MemAvailable_bytes{product="ppclub"}
+node_filesystem_avail_bytes{product="ppclub", mountpoint="/"}
+```
+
+### Phase 2C — app /metrics (not yet)
+
+Once PPClub backend exposes `/metrics` via `prometheus-fastapi-instrumentator`, set:
+
+```bash
+export APP_METRICS_URL=http://localhost:8090/metrics
+```
+
+and uncomment the Phase 2C `prometheus.scrape "app"` block in `config-metrics.alloy.tmpl`. (This lands with Phase 2C work — not needed yet.)
