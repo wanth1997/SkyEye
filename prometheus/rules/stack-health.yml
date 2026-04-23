@@ -1,0 +1,115 @@
+groups:
+  - name: stack-health
+    interval: 30s
+    rules:
+      # ────────────────────────────────────────────────────────────
+      # Stack component liveness
+      # ────────────────────────────────────────────────────────────
+
+      - alert: AlertmanagerDown
+        # If AM is down, we CAN'T use AM to deliver this alert. This rule
+        # still records the firing state in Prometheus and shows in the
+        # SkyEye — Stack health dashboard. The actual "you can't get
+        # alerts" signal comes from external monitoring (UptimeRobot,
+        # etc). Keep this rule anyway — it's diagnostically useful after
+        # the fact and triggers the DailyHeartbeat email to stop.
+        expr: up{job="alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "Alertmanager is DOWN — alerts cannot be delivered. External monitoring (UptimeRobot) needed to learn of this."
+
+      - alert: LokiDown
+        expr: up{job="loki"} == 0
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "Loki is DOWN — logs from agents will buffer locally then drop."
+
+      - alert: GrafanaDown
+        expr: up{job="grafana"} == 0
+        for: 5m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Grafana is DOWN — dashboards and SSO path unavailable. Backend data still arrives."
+
+      - alert: BlackboxExporterDown
+        expr: up{job="blackbox-exporter"} == 0
+        for: 5m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Blackbox exporter down — probe_* metrics will go stale; TLS/reachability signals lost."
+
+      # ────────────────────────────────────────────────────────────
+      # Prometheus performance / health
+      # ────────────────────────────────────────────────────────────
+
+      - alert: PrometheusRuleEvalSlow
+        # Healthy rule eval is < 1s p95. If it creeps to 10s+, Prom is
+        # under load (cardinality, query cost). TSDB performance degrades.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(prometheus_rule_evaluation_duration_seconds_bucket[10m]))
+          ) > 10
+        for: 15m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Prometheus rule evaluation p95 > 10s for 15min — cardinality or query cost spike"
+
+      - alert: PrometheusRuleEvalFailures
+        expr: |
+          increase(prometheus_rule_evaluation_failures_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Prometheus rule(s) failing evaluation — likely syntax / missing series / label drift"
+
+      # ────────────────────────────────────────────────────────────
+      # Loki pipeline health
+      # ────────────────────────────────────────────────────────────
+
+      - alert: LokiIngestStalled
+        # Under normal operation agents are pushing ~0.5+ lines/sec.
+        # If the rate hits 0 for 10 min AND the agents' Prom targets
+        # are UP, something in the Loki ingest path is broken even
+        # though Loki itself reports healthy.
+        expr: |
+          sum(rate(loki_distributor_lines_received_total[5m])) == 0
+          and on() (sum(up{job="loki"}) == 1)
+        for: 10m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Loki ingest stalled — no lines received for 10min while Loki is UP. Check agent → tunnel → Loki path."
+
+      - alert: LokiPushErrors
+        # 5xx on the push endpoint. Indicates problems in write path
+        # (TSDB / S3 / internal quotas).
+        expr: |
+          sum(rate(loki_request_duration_seconds_count{route="loki_api_v1_push",status_code=~"5.."}[5m])) > 0.01
+        for: 10m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Loki /push 5xx rate > 0.01/s for 10min — write path degraded"
+
+      # ────────────────────────────────────────────────────────────
+      # Alertmanager delivery health
+      # ────────────────────────────────────────────────────────────
+
+      - alert: AlertmanagerNotifyFailures
+        expr: |
+          sum by (integration) (
+            rate(alertmanager_notifications_failed_total[15m])
+          ) > 0
+        for: 15m
+        labels:
+          severity: P2
+        annotations:
+          summary: "Alertmanager failing to deliver via {{ $labels.integration }} for 15min"
