@@ -89,7 +89,9 @@ TODO (low priority): add a pre-commit hook that runs `jq` against every dashboar
 
 | Folder | Title | UID | Source |
 |---|---|---|---|
-| Overview | Overview — All products | `overview-all` | Built in-house (`scripts/` if ever regenerated) |
-| Hosts | Hosts — Node exporter | `hosts-node-exporter` | Grafana.com ID 1860, rewritten for pinned UID + `$product` variable |
+| Overview | Overview — All products | `overview-all` | Built in-house |
+| Hosts | Hosts — Node exporter | `hosts-node-exporter` | grafana.com ID 1860, rewritten for pinned UID + `$product` variable |
+| PPClub | PPClub — Backend overview | `ppclub-backend-overview` | Built in-house (replaces grafana.com 18739; queries adapted to our `product` / `status` label shape) |
+| PPClub | PPClub — Business | `ppclub-business` | Built in-house — payment / refund / external API / scheduler heartbeats |
 
 Add a row here each time a new dashboard is committed.
