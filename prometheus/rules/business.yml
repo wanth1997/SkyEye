@@ -2,18 +2,21 @@ groups:
   - name: business
     interval: 1m
     rules:
-      - alert: ZeroPayment1Hour
+      - alert: ZeroPaymentHalfDay
+        # Fires if the backend recorded no successful payments for the past
+        # 12 hours AND we're currently in business hours. 1h was too aggressive
+        # for PPClub's traffic pattern (long quiet spells are normal).
         expr: |
           (hour() >= 1 and hour() <= 14)
           and
-          sum(increase(ppc_payment_success_total[1h])) == 0
+          sum(increase(ppc_payment_success_total[12h])) == 0
         # hour() is UTC; Asia/Taipei 09:00-22:00 == UTC 01:00-14:00
-        for: 5m
+        for: 15m
         labels:
           severity: P1
           product: ppclub
         annotations:
-          summary: "PPClub: zero successful payments in last 1hr during business hours"
+          summary: "PPClub: zero successful payments in last 12hr during business hours"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/payment-zero.md"
 
       - alert: RefundSurge
@@ -47,9 +50,18 @@ groups:
           summary: "External API {{ $labels.target }} probe > 5s for 10min"
 
       - alert: TlsCertExpiringSoon
-        # Days left on the soonest-to-expire cert the probe observed.
-        # P2 when < 14 days, P1 when already expired (negative).
-        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+        # Fires when cert is within 14 days of expiry BUT not yet expired.
+        # Caddy's LE auto-renewal for our own domains targets ~30 days
+        # remaining, so a firing alert means renewal has already had its
+        # window and failed — or the cert is vendor-managed (NewebPay,
+        # Hengfu, Google) and we need to prompt them. Already-expired
+        # certs are covered by TlsCertExpired below (P1), so we exclude
+        # the negative range here to avoid double-alerting on the same
+        # underlying problem.
+        expr: |
+          (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+          and
+          (probe_ssl_earliest_cert_expiry - time()) > 0
         for: 10m
         labels:
           severity: P2
