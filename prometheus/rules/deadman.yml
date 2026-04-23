@@ -10,7 +10,10 @@ groups:
         labels:
           severity: P1
         annotations:
-          summary: "{{ $labels.product }} scheduler job '{{ $labels.job }}' silent for > 1hr"
+          # $labels.job is the Prometheus scrape job (e.g. "ppclub-backend"); the
+          # app-side job name (reconcile_pending_payments, …) lands under
+          # $labels.exported_job after Prometheus' label-collision rename.
+          summary: "{{ $labels.product }} scheduler job '{{ $labels.exported_job }}' silent for > 1hr"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/scheduler-dead.md"
 
       # Prometheus itself went stale — backup for UptimeRobot external check.
