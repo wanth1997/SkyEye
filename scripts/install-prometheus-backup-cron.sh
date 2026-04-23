@@ -28,7 +28,7 @@ cat > "$CRON_FILE" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-0 19 * * * ubuntu  $SCRIPT >> $LOG 2>&1
+0 19 * * * root  $SCRIPT >> $LOG 2>&1
 EOF
 chmod 0644 "$CRON_FILE"
 
@@ -40,12 +40,13 @@ $LOG {
     compress
     missingok
     notifempty
-    create 0644 ubuntu ubuntu
+    create 0644 root root
 }
 EOF
 
 touch "$LOG"
-chown ubuntu:ubuntu "$LOG"
+chown root:root "$LOG"
+chmod 0644 "$LOG"
 
 cat <<EOF
 
@@ -58,7 +59,7 @@ cat <<EOF
          sudo docker compose up -d --force-recreate prometheus
 
   2. Run the backup script once by hand to verify:
-         sudo -u ubuntu $SCRIPT
+         sudo $SCRIPT
 
   3. Then let cron take over. First automatic run at 19:00 UTC.
 EOF
