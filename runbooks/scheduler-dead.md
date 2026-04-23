@@ -8,7 +8,7 @@ time() - ppc_scheduled_job_last_run_timestamp > 3600   # for 5 minutes
 
 A specific scheduler job hasn't updated its heartbeat gauge for an hour. The job's label lands under `exported_job` (Prometheus renames collision with reserved `job` label).
 
-- P1 — Telegram (loud).
+- High — Telegram (loud).
 - Usually affects ONE job; if ALL 4 PPClub scheduled jobs go silent, the scheduler itself (not a single job) is dead.
 
 ## PPClub scheduled jobs today

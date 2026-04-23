@@ -9,7 +9,7 @@ sum(increase(ppc_payment_success_total[1h])) == 0
 ```
 
 - During business hours, no successful payments for 1 full hour
-- P1 Telegram delivery
+- High Telegram delivery
 
 Pay attention to **baseline** — at 9:00 AM Taipei the first-hour counter may legitimately be 0 if no morning customers. Cross-reference against `ppc_payment_created_total` (lots of create, zero success = real problem; zero create too = probably not an incident, just quiet).
 

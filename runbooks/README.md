@@ -13,16 +13,16 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 
 | Rule | Runbook | Severity |
 |---|---|---|
-| `BackendDown` | [backend-down.md](./backend-down.md) | P1 |
-| `High5xxRate` / `Critical5xxRate` | [high-5xx.md](./high-5xx.md) | P2 / P1 |
-| `HostDiskLow` / `HostDiskCritical` | [disk-full.md](./disk-full.md) | P2 / P1 |
-| `HostHighCPU` | [high-cpu.md](./high-cpu.md) | P2 |
-| `HostOOM` | [oom.md](./oom.md) | P1 |
-| `ZeroPaymentHalfDay` | [payment-zero.md](./payment-zero.md) | P1 |
-| `ExternalApiDown` / `TlsCertExpired` | [external-api-down.md](./external-api-down.md) | P1 |
-| `SchedulerNoHeartbeat` | [scheduler-dead.md](./scheduler-dead.md) | P1 |
+| `BackendDown` | [backend-down.md](./backend-down.md) | High |
+| `High5xxRate` / `Critical5xxRate` | [high-5xx.md](./high-5xx.md) | Medium / High |
+| `HostDiskLow` / `HostDiskCritical` | [disk-full.md](./disk-full.md) | Medium / High |
+| `HostHighCPU` | [high-cpu.md](./high-cpu.md) | Medium |
+| `HostOOM` | [oom.md](./oom.md) | High |
+| `ZeroPaymentHalfDay` | [payment-zero.md](./payment-zero.md) | High |
+| `ExternalApiDown` / `TlsCertExpired` | [external-api-down.md](./external-api-down.md) | High |
+| `SchedulerNoHeartbeat` | [scheduler-dead.md](./scheduler-dead.md) | High |
 
-Add a row + a runbook here every time you add a rule with `severity: P1` or `P2`.
+Add a row + a runbook here every time you add a rule with `severity: High` or `Medium`.
 
 ## Template
 

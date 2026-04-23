@@ -7,23 +7,23 @@ global:
   smtp_require_tls: true
 
 route:
-  receiver: telegram-p2
+  receiver: telegram-medium
   group_by: [alertname, product, severity]
   group_wait: 10s
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    - matchers: [severity="P1"]
-      receiver: telegram-p1
+    - matchers: [severity="High"]
+      receiver: telegram-high
       group_wait: 0s
       repeat_interval: 30m
       continue: false
-    - matchers: [severity="P2"]
-      receiver: telegram-p2
+    - matchers: [severity="Medium"]
+      receiver: telegram-medium
       active_time_intervals: [work-hours]
       continue: false
-    - matchers: [severity="P3"]
-      receiver: p3-digest
+    - matchers: [severity="Low"]
+      receiver: low-digest
       group_interval: 24h
       repeat_interval: 24h
       continue: false
@@ -35,7 +35,7 @@ time_intervals:
         location: Asia/Taipei
 
 receivers:
-  - name: telegram-p1
+  - name: telegram-high
     telegram_configs:
       - bot_token_file: /etc/alertmanager/secrets/tg_token
         chat_id: -1003712147883
@@ -43,7 +43,7 @@ receivers:
         disable_notifications: false
         send_resolved: true
         message: |-
-          <b>{{ if eq .Status "firing" }}🚨 P1 FIRING{{ else }}✅ P1 RESOLVED{{ end }} — {{ .GroupLabels.alertname }}</b>
+          <b>{{ if eq .Status "firing" }}🚨 High FIRING{{ else }}✅ High RESOLVED{{ end }} — {{ .GroupLabels.alertname }}</b>
           {{ if .GroupLabels.product }}Product: <code>{{ .GroupLabels.product }}</code>{{ end }}
           {{ range .Alerts }}
           • {{ .Annotations.summary }}
@@ -54,7 +54,7 @@ receivers:
       - to: wanth1997@gmail.com
         send_resolved: true
 
-  - name: telegram-p2
+  - name: telegram-medium
     telegram_configs:
       - bot_token_file: /etc/alertmanager/secrets/tg_token
         chat_id: -1003712147883
@@ -62,7 +62,7 @@ receivers:
         disable_notifications: true
         send_resolved: true
         message: |-
-          <b>{{ if eq .Status "firing" }}⚠️ P2 FIRING{{ else }}✅ P2 RESOLVED{{ end }} — {{ .GroupLabels.alertname }}</b>
+          <b>{{ if eq .Status "firing" }}⚠️ Medium FIRING{{ else }}✅ Medium RESOLVED{{ end }} — {{ .GroupLabels.alertname }}</b>
           {{ if .GroupLabels.product }}Product: <code>{{ .GroupLabels.product }}</code>{{ end }}
           {{ range .Alerts }}
           • {{ .Annotations.summary }}
@@ -70,9 +70,9 @@ receivers:
           {{ if .CommonAnnotations.runbook_url }}
           📖 <a href="{{ .CommonAnnotations.runbook_url }}">Runbook</a>{{ end }}
 
-  - name: p3-digest
+  - name: low-digest
     email_configs:
       - to: wanth1997@gmail.com
         send_resolved: false
         headers:
-          Subject: '[SkyEye P3] {{ .GroupLabels.alertname }}'
+          Subject: '[SkyEye Low] {{ .GroupLabels.alertname }}'

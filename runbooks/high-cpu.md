@@ -8,7 +8,7 @@
 
 - CPU pegged above 85% across all cores for 10+ minutes.
 - May correlate with slower HTTP response times (check `http_request_duration_seconds` p95).
-- P2 — Telegram (silent) during work hours.
+- Medium — Telegram (silent) during work hours.
 
 ## Likely causes
 

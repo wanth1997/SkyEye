@@ -142,7 +142,7 @@
     {
       "id": 12,
       "type": "stat",
-      "title": "現用告警(P1/P2)",
+      "title": "現用告警(High/Medium)",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -159,7 +159,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(ALERTS{alertstate=\"firing\",severity=~\"P1|P2\"}) OR on() vector(0)",
+          "expr": "sum(ALERTS{alertstate=\"firing\",severity=~\"High|Medium\"}) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
@@ -565,7 +565,7 @@
     {
       "id": 4,
       "type": "row",
-      "title": "🚨 告警 — 只含 P1 / P2(已濾掉 heartbeat 類)",
+      "title": "🚨 告警 — 只含 High / Medium(已濾掉 heartbeat 類)",
       "gridPos": {
         "x": 0,
         "y": 21,
@@ -577,7 +577,7 @@
     {
       "id": 40,
       "type": "table",
-      "title": "🚨 現用告警 — P1 / P2 (需處理)",
+      "title": "🚨 現用告警 — High / Medium (需處理)",
       "gridPos": {
         "x": 0,
         "y": 22,
@@ -595,7 +595,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "ALERTS{alertstate=\"firing\",severity=~\"P1|P2\"}",
+          "expr": "ALERTS{alertstate=\"firing\",severity=~\"High|Medium\"}",
           "refId": "A",
           "format": "table",
           "instant": true
@@ -656,15 +656,15 @@
                   {
                     "type": "value",
                     "options": {
-                      "P1": {
+                      "High": {
                         "color": "red",
                         "index": 0
                       },
-                      "P2": {
+                      "Medium": {
                         "color": "yellow",
                         "index": 1
                       },
-                      "P3": {
+                      "Low": {
                         "color": "blue",
                         "index": 2
                       }
@@ -680,7 +680,7 @@
     {
       "id": 41,
       "type": "table",
-      "title": "ℹ️ 資訊性 — P3 / heartbeat (正常都會有)",
+      "title": "ℹ️ 資訊性 — Low / heartbeat (正常都會有)",
       "gridPos": {
         "x": 0,
         "y": 30,
@@ -691,14 +691,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "P3 alerts like DailyHeartbeat (vector(1)) — always firing on purpose as an end-to-end liveness probe of the alert pipeline.",
+      "description": "Low alerts like DailyHeartbeat (vector(1)) — always firing on purpose as an end-to-end liveness probe of the alert pipeline.",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "ALERTS{alertstate=\"firing\",severity=~\"P3\"}",
+          "expr": "ALERTS{alertstate=\"firing\",severity=~\"Low\"}",
           "refId": "A",
           "format": "table",
           "instant": true
@@ -759,15 +759,15 @@
                   {
                     "type": "value",
                     "options": {
-                      "P1": {
+                      "High": {
                         "color": "red",
                         "index": 0
                       },
-                      "P2": {
+                      "Medium": {
                         "color": "yellow",
                         "index": 1
                       },
-                      "P3": {
+                      "Low": {
                         "color": "blue",
                         "index": 2
                       }

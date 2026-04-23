@@ -7,7 +7,7 @@ up{job=~".+-backend"} == 0   # for 2 minutes
 ```
 
 - Users see 502 / 504 from `https://ppclub.tw`
-- `Alertmanager` delivers P1 Telegram + email
+- `Alertmanager` delivers High Telegram + email
 - Caddy access log shows upstream timeouts / refused
 
 ## Likely causes

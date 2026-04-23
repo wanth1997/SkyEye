@@ -19,7 +19,7 @@ groups:
           sum(increase(ppc_payment_created_total[12h])) > 0
         for: 15m
         labels:
-          severity: P1
+          severity: High
           product: ppclub
         annotations:
           summary: "PPClub: {{ with query \"sum(increase(ppc_payment_created_total[12h]))\" }}{{ . | first | value }}{{ end }} payment attempts in last 12hr but 0 succeeded during business hours"
@@ -32,7 +32,7 @@ groups:
           3 * avg_over_time(sum(increase(ppc_refund_total[1h]))[7d:1h])
         for: 10m
         labels:
-          severity: P3
+          severity: Low
           product: ppclub
         annotations:
           summary: "PPClub: refund rate > 3x 7-day average"
@@ -42,7 +42,7 @@ groups:
         expr: probe_success{job=~"blackbox.*"} == 0
         for: 5m
         labels:
-          severity: P1
+          severity: High
         annotations:
           summary: "External API {{ $labels.target }} unreachable for 5min"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/external-api-down.md"
@@ -51,7 +51,7 @@ groups:
         expr: probe_duration_seconds{job=~"blackbox.*"} > 5
         for: 10m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "External API {{ $labels.target }} probe > 5s for 10min"
 
@@ -61,7 +61,7 @@ groups:
         # remaining, so a firing alert means renewal has already had its
         # window and failed — or the cert is vendor-managed (NewebPay,
         # Hengfu, Google) and we need to prompt them. Already-expired
-        # certs are covered by TlsCertExpired below (P1), so we exclude
+        # certs are covered by TlsCertExpired below (High), so we exclude
         # the negative range here to avoid double-alerting on the same
         # underlying problem.
         expr: |
@@ -70,7 +70,7 @@ groups:
           (probe_ssl_earliest_cert_expiry - time()) > 0
         for: 10m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "TLS cert for {{ $labels.target }} expires in {{ $value | humanize }} days"
 
@@ -78,7 +78,7 @@ groups:
         expr: (probe_ssl_earliest_cert_expiry - time()) < 0
         for: 5m
         labels:
-          severity: P1
+          severity: High
         annotations:
           summary: "TLS cert for {{ $labels.target }} has EXPIRED ({{ $value | humanizeDuration }} ago)"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/external-api-down.md"

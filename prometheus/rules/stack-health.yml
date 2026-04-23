@@ -16,7 +16,7 @@ groups:
         expr: up{job="alertmanager"} == 0
         for: 5m
         labels:
-          severity: P1
+          severity: High
         annotations:
           summary: "Alertmanager is DOWN — alerts cannot be delivered. External monitoring (UptimeRobot) needed to learn of this."
 
@@ -24,7 +24,7 @@ groups:
         expr: up{job="loki"} == 0
         for: 5m
         labels:
-          severity: P1
+          severity: High
         annotations:
           summary: "Loki is DOWN — logs from agents will buffer locally then drop."
 
@@ -32,7 +32,7 @@ groups:
         expr: up{job="grafana"} == 0
         for: 5m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "Grafana is DOWN — dashboards and SSO path unavailable. Backend data still arrives."
 
@@ -40,7 +40,7 @@ groups:
         expr: up{job="blackbox-exporter"} == 0
         for: 5m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "Blackbox exporter down — probe_* metrics will go stale; TLS/reachability signals lost."
 
@@ -57,7 +57,7 @@ groups:
           ) > 10
         for: 15m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "Prometheus rule evaluation p95 > 10s for 15min — cardinality or query cost spike"
 
@@ -66,7 +66,7 @@ groups:
           increase(prometheus_rule_evaluation_failures_total[15m]) > 0
         for: 5m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "Prometheus rule(s) failing evaluation — likely syntax / missing series / label drift"
 
@@ -84,7 +84,7 @@ groups:
           and on() (sum(up{job="loki"}) == 1)
         for: 10m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "Loki ingest stalled — no lines received for 10min while Loki is UP. Check agent → tunnel → Loki path."
 
@@ -95,7 +95,7 @@ groups:
           sum(rate(loki_request_duration_seconds_count{route="loki_api_v1_push",status_code=~"5.."}[5m])) > 0.01
         for: 10m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "Loki /push 5xx rate > 0.01/s for 10min — write path degraded"
 
@@ -110,6 +110,6 @@ groups:
           ) > 0
         for: 15m
         labels:
-          severity: P2
+          severity: Medium
         annotations:
           summary: "Alertmanager failing to deliver via {{ $labels.integration }} for 15min"

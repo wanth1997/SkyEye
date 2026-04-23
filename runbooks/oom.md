@@ -8,7 +8,7 @@ increase(node_vmstat_oom_kill[5m]) > 0   # for 1 minute
 
 Linux's OOM killer activated at least once in the last 5 minutes. Something on the host hit the memory ceiling and got killed.
 
-- P1 — Telegram (loud) immediately.
+- High — Telegram (loud) immediately.
 - The killed process may or may not have been the backend. Check before assuming.
 
 ## Likely causes
@@ -84,7 +84,7 @@ node_memory_MemAvailable_bytes{product="$PRODUCT"} / node_memory_MemTotal_bytes{
 - If it was a legit workload (traffic spike): bump EC2 instance size.
 - If it was a leak: `pmap -x <pid>` before kill was the useful snapshot — next time enable and save.
 - If it was a Prom cardinality incident: add a recording rule / drop rule to prevent recurrence, document the offending label.
-- Add a pre-OOM P2 warning at ~90% memory so you get 15 minutes heads-up next time:
+- Add a pre-OOM Medium warning at ~90% memory so you get 15 minutes heads-up next time:
   ```promql
   (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
   ```

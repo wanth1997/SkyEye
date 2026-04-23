@@ -34,9 +34,9 @@ PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
 - `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, DailyHeartbeat
 
 Severity → routing:
-- **P1** → 🚨 Telegram (sound) + Gmail backup (24/7)
-- **P2** → ⚠️ Telegram (silent) (work hours Asia/Taipei 09:00-21:00)
-- **P3** → Email daily digest
+- **High** → 🚨 Telegram (sound) + Gmail backup (24/7)
+- **Medium** → ⚠️ Telegram (silent) (work hours Asia/Taipei 09:00-21:00)
+- **Low** → Email daily digest
 
 ## Directory map
 
@@ -48,7 +48,7 @@ SkyEye/
 ├── .env.example                         GF_ADMIN_PW — the only env var
 │
 ├── alertmanager/
-│   ├── alertmanager.yml                 routes + receivers (P1 loud / P2 silent / P3 digest)
+│   ├── alertmanager.yml                 routes + receivers (High loud / Medium silent / Low digest)
 │   └── secrets/                         tg_token, smtp_pass (gitignored, 0644)
 │
 ├── prometheus/
@@ -111,7 +111,7 @@ SkyEye/
 
 See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest version:
 
-- **Morning habit**: check Gmail for the overnight P3 digest. If it arrived, the alert pipeline is alive.
+- **Morning habit**: check Gmail for the overnight Low digest. If it arrived, the alert pipeline is alive.
 - **When paged (Telegram 🚨)**: click the Runbook link in the message.
 - **Dashboards**: https://grafana.wanbrain.com → Overview folder (daily), PPClub folder (deep dive), Hosts folder (troubleshoot).
 

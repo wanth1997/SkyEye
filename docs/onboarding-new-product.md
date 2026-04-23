@@ -100,7 +100,7 @@ Open the Hosts dashboard, switch Product variable to the new product — host pa
 
 ## What you DON'T need to do per product
 
-- No new Alertmanager receivers — P1/P2/P3 receivers handle everything, dedup by `product` label
+- No new Alertmanager receivers — High/Medium/Low receivers handle everything, dedup by `product` label
 - No new Prometheus rule groups — rules in `system.yml` / `app.yml` / `business.yml` key off labels (`product`, `job=~".*-backend"`)
 - No new Cloudflare tunnels — one tunnel (`skyeye-monitoring-prod`) fronts the entire stack
 - No new Loki tenant — `auth_enabled: false`, single `fake` tenant; `product` label partitions logs

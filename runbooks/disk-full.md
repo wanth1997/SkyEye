@@ -3,14 +3,14 @@
 ## Symptoms
 
 ```promql
-# P2
+# Medium
 (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 20
 
-# P1
+# High
 (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 5
 ```
 
-- P2 fires quietly (< 20%); P1 is audible (< 5%).
+- Medium fires quietly (< 20%); High is audible (< 5%).
 - At < 5%, SQLite writes can start failing; Loki on the monitoring machine can fall over.
 
 ## Likely causes
@@ -64,7 +64,7 @@ sudo truncate -s 0 $(sudo journalctl --disk-usage | grep -oE '/var/log/journal/[
 
 ```
 (node_filesystem_avail_bytes{product="$PRODUCT",mountpoint="/"} / node_filesystem_size_bytes{product="$PRODUCT",mountpoint="/"}) * 100
-# should be > 25% to clear P2, > 10% for P1 buffer
+# should be > 25% to clear Medium, > 10% for High buffer
 ```
 
 ## Post-incident
@@ -72,4 +72,4 @@ sudo truncate -s 0 $(sudo journalctl --disk-usage | grep -oE '/var/log/journal/[
 - Figure out why it grew: pure traffic, or a leak / runaway log
 - Add logrotate if missing (`/etc/logrotate.d/<service>`)
 - On the monitoring machine, bump EBS size (`aws ec2 modify-volume`) before the next near-miss
-- Add a `HostDiskGrowthRate` P3 informational alert if you find repeat offense: `deriv(node_filesystem_avail_bytes[1h]) < -500 * 1024 * 1024` (shrinking > 500 MB/hour)
+- Add a `HostDiskGrowthRate` Low informational alert if you find repeat offense: `deriv(node_filesystem_avail_bytes[1h]) < -500 * 1024 * 1024` (shrinking > 500 MB/hour)

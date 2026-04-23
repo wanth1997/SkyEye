@@ -17,7 +17,7 @@
 | 第二產品 | 假設未來 | **現在就有**：`enyoung-server`（port 8080）已併行 |
 | 共機 or 獨立 | 先共機再搬 | **直接開獨立機**（遷移工程沒比較大，但換來運維乾淨） |
 | PII 處理 | 泛談 | **具體 scrub regex**，姓名 / 手機 / email / 金額 |
-| 告警分級 | 單一層 | **三層 P1/P2/P3**，不同通道 + 時段路由 |
+| 告警分級 | 單一層 | **三層 High/Medium/Low**，不同通道 + 時段路由 |
 
 ---
 
@@ -123,9 +123,9 @@
 
 | 層級 | 語意 | 觸發範例 | 通道 | 時段 |
 |------|-----|---------|------|------|
-| **P1** | 服務無法提供 | backend down、5xx > 10%、磁碟 < 5%、連續 1hr 零付款 | **Telegram 立即推 + Email 備份** | 24/7 |
-| **P2** | 功能降級 / 可預測劣化 | 5xx > 5%、磁碟 < 20%、latency p99 > 3s | **Telegram** | **工作時間 09:00–21:00** |
-| **P3** | 趨勢異常 / 資訊性 | 前日退款率上升 2x、新用戶註冊數偏低 | **Email digest** | 每日 09:00 匯總 |
+| **High** | 服務無法提供 | backend down、5xx > 10%、磁碟 < 5%、連續 1hr 零付款 | **Telegram 立即推 + Email 備份** | 24/7 |
+| **Medium** | 功能降級 / 可預測劣化 | 5xx > 5%、磁碟 < 20%、latency p99 > 3s | **Telegram** | **工作時間 09:00–21:00** |
+| **Low** | 趨勢異常 / 資訊性 | 前日退款率上升 2x、新用戶註冊數偏低 | **Email digest** | 每日 09:00 匯總 |
 
 ### Alertmanager 路由（摘要）
 ```yaml
@@ -136,15 +136,15 @@ route:
   repeat_interval: 4h    # 同告警 4 小時後才重發
   receiver: p2-telegram  # 預設
   routes:
-    - match: { severity: P1 }
+    - match: { severity: High }
       receiver: p1-telegram-email
       group_wait: 0s
       repeat_interval: 30m
-    - match: { severity: P2 }
+    - match: { severity: Medium }
       receiver: p2-telegram
       active_time_intervals: [work-hours]
-    - match: { severity: P3 }
-      receiver: p3-digest
+    - match: { severity: Low }
+      receiver: low-digest
       group_interval: 24h
       repeat_interval: 24h
 
@@ -478,15 +478,15 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
-    - matchers: [severity="P1"]
+    - matchers: [severity="High"]
       receiver: p1-telegram-email
       group_wait: 0s
       repeat_interval: 30m
-    - matchers: [severity="P2"]
+    - matchers: [severity="Medium"]
       receiver: p2-telegram
       active_time_intervals: [work-hours]
-    - matchers: [severity="P3"]
-      receiver: p3-digest
+    - matchers: [severity="Low"]
+      receiver: low-digest
       group_interval: 24h
       repeat_interval: 24h
 
@@ -504,7 +504,7 @@ receivers:
         chat_id: ${TG_CHAT_P1}
         parse_mode: MarkdownV2
         message: |
-          *🚨 P1 {{ .GroupLabels.alertname }}*
+          *🚨 High {{ .GroupLabels.alertname }}*
           Product: {{ .GroupLabels.product }}
           {{ range .Alerts }}- {{ .Annotations.summary }}{{ end }}
           Runbook: {{ .CommonAnnotations.runbook_url }}
@@ -518,7 +518,7 @@ receivers:
         chat_id: ${TG_CHAT_P2}
         parse_mode: MarkdownV2
 
-  - name: p3-digest
+  - name: low-digest
     email_configs:
       - to: 'reports@wanbrain.com'
         send_resolved: false
@@ -533,7 +533,7 @@ groups:
       - alert: HostHighCPU
         expr: 100 - (avg by (instance, product) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
         for: 10m
-        labels: { severity: P2 }
+        labels: { severity: Medium }
         annotations:
           summary: "{{ $labels.instance }} CPU > 85% 10min"
           runbook_url: "https://github.com/<you>/ppc-observability/blob/main/runbooks/high-cpu.md"
@@ -541,7 +541,7 @@ groups:
       - alert: HostDiskLow
         expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
         for: 5m
-        labels: { severity: P1 }
+        labels: { severity: High }
         annotations:
           summary: "{{ $labels.instance }} 磁碟剩 < 10%"
           runbook_url: "..."
@@ -549,13 +549,13 @@ groups:
       - alert: HostOOM
         expr: node_vmstat_oom_kill > 0
         for: 1m
-        labels: { severity: P1 }
+        labels: { severity: High }
         annotations: { summary: "{{ $labels.instance }} OOM killer 啟動" }
 
       - alert: SystemdUnitDown
         expr: node_systemd_unit_state{state="failed"} == 1
         for: 5m
-        labels: { severity: P1 }
+        labels: { severity: High }
         annotations: { summary: "{{ $labels.name }} systemd failed on {{ $labels.instance }}" }
 ```
 
@@ -568,7 +568,7 @@ groups:
       - alert: BackendDown
         expr: up{job="ppclub-backend"} == 0
         for: 2m
-        labels: { severity: P1, product: ppclub }
+        labels: { severity: High, product: ppclub }
         annotations:
           summary: "PPClub backend 無法 scrape > 2min"
           runbook_url: "..."
@@ -579,7 +579,7 @@ groups:
           /
           sum by (product) (rate(http_requests_total{product="ppclub"}[5m])) > 0.05
         for: 5m
-        labels: { severity: P2, product: ppclub }
+        labels: { severity: Medium, product: ppclub }
         annotations: { summary: "PPClub 5xx 比率 > 5% 持續 5min" }
 
       - alert: Critical5xxRate
@@ -588,17 +588,17 @@ groups:
           /
           sum by (product) (rate(http_requests_total{product="ppclub"}[5m])) > 0.10
         for: 2m
-        labels: { severity: P1, product: ppclub }
+        labels: { severity: High, product: ppclub }
 
       - alert: LatencyP99High
         expr: histogram_quantile(0.99, sum by (le, product) (rate(http_request_duration_seconds_bucket{product="ppclub"}[5m]))) > 3
         for: 10m
-        labels: { severity: P2, product: ppclub }
+        labels: { severity: Medium, product: ppclub }
 
       - alert: UnhandledException
         expr: increase(ppc_unhandled_exception_total[5m]) > 3
         for: 0m
-        labels: { severity: P2, product: ppclub }
+        labels: { severity: Medium, product: ppclub }
 ```
 
 **`prometheus/rules/business.yml`**
@@ -613,7 +613,7 @@ groups:
           and
           sum(increase(ppc_payment_success_total[1h])) == 0
         for: 5m
-        labels: { severity: P1, product: ppclub }
+        labels: { severity: High, product: ppclub }
         annotations: { summary: "白天連續 1hr 零成功付款" }
 
       - alert: RefundSurge
@@ -621,13 +621,13 @@ groups:
           sum(increase(ppc_refund_total[1h]))
           > 3 * avg_over_time(sum(increase(ppc_refund_total[1h]))[7d:1h])
         for: 10m
-        labels: { severity: P3, product: ppclub }
+        labels: { severity: Low, product: ppclub }
         annotations: { summary: "退款 rate 是 7 天均值 3x" }
 
       - alert: ExternalApiDown
         expr: probe_success{job="blackbox"} == 0
         for: 5m
-        labels: { severity: P1 }
+        labels: { severity: High }
         annotations: { summary: "{{ $labels.target }} 外部 API 不通" }
 ```
 
@@ -640,14 +640,14 @@ groups:
       - alert: SchedulerNoHeartbeat
         expr: time() - ppc_scheduled_job_last_run_timestamp > 3600
         for: 5m
-        labels: { severity: P1, product: ppclub }
+        labels: { severity: High, product: ppclub }
         annotations: { summary: "scheduler {{ $labels.job }} 1hr 無心跳" }
 
       - alert: PrometheusSelfStale
         # 中央 Prom 自己停了要靠 UptimeRobot 抓；這條是備援
         expr: time() - prometheus_tsdb_head_max_time_seconds > 300
         for: 1m
-        labels: { severity: P1 }
+        labels: { severity: High }
 ```
 
 ### 6.4 建置 SOP
@@ -670,7 +670,7 @@ groups:
    ```bash
    # 手動觸發測試 alert
    curl -H 'Content-Type: application/json' -d '[{
-     "labels": {"alertname":"TestP1","severity":"P1"},
+     "labels": {"alertname":"TestP1","severity":"High"},
      "annotations":{"summary":"test"}
    }]' http://127.0.0.1:9093/api/v2/alerts
    ```
@@ -837,7 +837,7 @@ Alloy 可以同時 scrape 多個本機 target，`config.alloy` 加第二個 `pro
 **Phase 2 驗收**
 - `curl localhost:8090/metrics` 回 Prom 格式
 - Grafana 查 `rate(http_requests_total[5m])` 有數據
-- `systemctl stop ppclub-backend` → 2 min 內 Telegram P1 收到 BackendDown
+- `systemctl stop ppclub-backend` → 2 min 內 Telegram High 收到 BackendDown
 - LogQL `{product="ppclub"} |= "refund"` 能撈出退款 log，且姓名/手機/email 已被遮
 
 ---
@@ -894,7 +894,7 @@ Prometheus 加 scrape job：
       replacement: blackbox:9115
 ```
 
-→ `probe_success == 0` 就觸發 P1 ExternalApiDown alert（已在 `business.yml`）
+→ `probe_success == 0` 就觸發 High ExternalApiDown alert（已在 `business.yml`）
 
 ### 8.4 Prometheus Snapshot 備份（可選）
 
@@ -927,8 +927,8 @@ Lifecycle 規則 30 天 expire（與 Prometheus in-place retention 對齊）。
 
 **Phase 3 驗收**
 - 多個 product 都能在 Grafana 切換
-- 關閉 NewebPay DNS 解析測試（或設假 target）→ P1 alert 觸發
-- Scheduler 停 1 hr → deadman P1 觸發
+- 關閉 NewebPay DNS 解析測試（或設假 target）→ High alert 觸發
+- Scheduler 停 1 hr → deadman High 觸發
 - Runbook URL 在 Telegram 訊息中能點開
 
 ---
@@ -989,9 +989,9 @@ Lifecycle 規則 30 天 expire（與 Prometheus in-place retention 對齊）。
 
 | 風險 | 影響 | 緩解 |
 |------|------|------|
-| Monitoring 自己掛 | 全盲 | UptimeRobot 外部 probe + 收 Telegram P1 |
+| Monitoring 自己掛 | 全盲 | UptimeRobot 外部 probe + 收 Telegram High |
 | Cloudflare tunnel 斷 | Agent push 失敗 | Alloy 本機 buffer 預設 2hr；超過會 drop |
-| Gmail 帳號遭 Google 風控鎖住 | **告警送不出來** | Daily heartbeat email（§13.2）；另配一個備用通道（Telegram 已是 P1，email 只是備份） |
+| Gmail 帳號遭 Google 風控鎖住 | **告警送不出來** | Daily heartbeat email（§13.2）；另配一個備用通道（Telegram 已是 High，email 只是備份） |
 | S3 bucket 遭誤刪 | 過去 log 遺失 | S3 versioning 或 bucket policy 禁 delete（運維高階操作才能關） |
 | PII regex miss | log 洩漏 | Code review 新 logger 時檢查；每季 sample log 掃描 |
 | Prometheus 高 cardinality 爆記憶體 | OOM | `.env` 設 memory limit；新 metric code review 走 label cardinality checklist |
@@ -1074,7 +1074,7 @@ Cloudflare Zero Trust → Access → Applications：
 | 成本 | $0 | ~$0.10 / 千封 | 免費（3k 內） | 免費（100/天內） |
 | 告警可靠性 | **中**：若 Gmail 帳號異常，告警也送不出 | 高 | 高 | 高 |
 
-**為什麼接受 Gmail 先上**：告警量小（P1 一天應該 < 10 封；P3 digest 一天 1 封），500 封/天綽綽有餘；對新建 infra 來說降低初期複雜度優先。
+**為什麼接受 Gmail 先上**：告警量小（High 一天應該 < 10 封；Low digest 一天 1 封），500 封/天綽綽有餘；對新建 infra 來說降低初期複雜度優先。
 
 **但要接受這些取捨**：
 1. 發信地址會是 `your@gmail.com` 或 Workspace 的 `alerts@wanbrain.com`（後者較好）
@@ -1108,12 +1108,12 @@ global:
 **Heartbeat 驗證機制**（補進 Phase 3 runbook）：
 - 每天 09:00 發一封「monitoring heartbeat」到你的主信箱
 - 若連續 2 天沒收到 → 代表 Gmail SMTP 或整個監控掛了
-- 實作：加一個 `DailyHeartbeat` alert，always firing，走 P3 digest
+- 實作：加一個 `DailyHeartbeat` alert，always firing，走 Low digest
   ```yaml
   - alert: DailyHeartbeat
     expr: vector(1)
     for: 0s
-    labels: { severity: P3 }
+    labels: { severity: Low }
     annotations: { summary: "monitoring-prod is alive at {{ $value }}" }
   ```
 

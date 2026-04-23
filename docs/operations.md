@@ -6,9 +6,9 @@ Day-2 reference: what to do when, by whom, and how often. If you're reading this
 
 Morning check (9:00-10:00 Taipei):
 
-1. **Gmail inbox** — expect one `[SkyEye P3] DailyHeartbeat` email per 24 h. If absent for 2+ days, the alert pipeline has a problem somewhere (Prom ↔ AM ↔ Gmail). Investigate even if Grafana looks fine.
+1. **Gmail inbox** — expect one `[SkyEye Low] DailyHeartbeat` email per 24 h. If absent for 2+ days, the alert pipeline has a problem somewhere (Prom ↔ AM ↔ Gmail). Investigate even if Grafana looks fine.
 2. **Grafana Overview** (https://grafana.wanbrain.com) — 30-second glance:
-   - `Active alerts (P1/P2)` = 0 — green
+   - `Active alerts (High/Medium)` = 0 — green
    - `Products UP` == product count — nothing has fallen off
    - `Emails sent (last 24h)` ≥ 1 — pipeline lived through the night
 3. **Scroll Telegram group** — anything overnight you may have slept through.
@@ -54,7 +54,7 @@ If all three are fine, you're done. Total: under 2 minutes.
 
 ## Emergency playbook
 
-### A Telegram 🚨 P1 fires
+### A Telegram 🚨 High fires
 
 1. Click the runbook link in the message → runbooks/*.md on GitHub. Follow the steps.
 2. If unrecoverable within 15 min, acknowledge in Telegram (reply to the bot message with context so team sees it), silence the alert for 1 h while you work.
@@ -191,8 +191,8 @@ New product added = $0 incremental (agent runs on the product's own host).
 
 ## FAQ
 
-**Q: Why are there P3 alerts that are always firing?**
-A: `DailyHeartbeat` is a `vector(1)` rule — intentional. Its daily email digest is proof the full Prom→AM→Gmail path is alive. If you stop getting the P3 email, something's broken.
+**Q: Why are there Low alerts that are always firing?**
+A: `DailyHeartbeat` is a `vector(1)` rule — intentional. Its daily email digest is proof the full Prom→AM→Gmail path is alive. If you stop getting the Low email, something's broken.
 
 **Q: Why does the scrape `job` label say `integrations/unix` instead of `node-exporter`?**
 A: Alloy's `prometheus.exporter.unix` integration sets its own job name. Our rules don't filter by `job` so it doesn't matter.

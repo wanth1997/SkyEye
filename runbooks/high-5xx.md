@@ -3,11 +3,11 @@
 ## Symptoms
 
 ```promql
-# P2 — 5% over 5 minutes
+# Medium — 5% over 5 minutes
 sum by (product) (rate(http_requests_total{status=~"5.."}[5m]))
   / sum by (product) (rate(http_requests_total[5m])) > 0.05
 
-# P1 — 10% over 2 minutes
+# High — 10% over 2 minutes
 # (same numerator/denominator, threshold 0.10)
 ```
 

@@ -8,7 +8,7 @@ groups:
         expr: time() - ppc_scheduled_job_last_run_timestamp > 3600
         for: 5m
         labels:
-          severity: P1
+          severity: High
         annotations:
           # $labels.job is the Prometheus scrape job (e.g. "ppclub-backend"); the
           # app-side job name (reconcile_pending_payments, …) lands under
@@ -22,17 +22,17 @@ groups:
         expr: time() - (prometheus_tsdb_head_max_time / 1000) > 300
         for: 1m
         labels:
-          severity: P1
+          severity: High
         annotations:
           summary: "Prometheus TSDB head has not advanced in 5min — ingestion stopped"
 
       # Always-firing heartbeat — proves the entire alert pipeline (rules →
-      # alertmanager → SMTP → Gmail) is alive. Routed to P3 email digest.
+      # alertmanager → SMTP → Gmail) is alive. Routed to Low email digest.
       # If the daily digest stops arriving, investigate.
       - alert: DailyHeartbeat
         expr: vector(1)
         for: 0s
         labels:
-          severity: P3
+          severity: Low
         annotations:
           summary: "SkyEye monitoring is alive"
