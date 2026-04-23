@@ -139,14 +139,27 @@ setup.sh will now print `==> APP_METRICS_TARGET set ... — appending app scrape
 
 ## Step 6: Verify
 
-On the host:
+On the host (Alloy 1.x — names DIFFER from classic Prometheus):
 
 ```bash
-# Alloy scraping the new target
+# 1. Alloy config picked up the new scrape block
+sudo grep -A 3 'prometheus.scrape "app"' /etc/alloy/config.alloy
+
+# 2. The scrape target is registered (should be 1 per product)
 curl -s http://127.0.0.1:12345/metrics 2>/dev/null \
-  | grep -E '^prometheus_target_scrape_.*ppclub-backend|^up{.*ppclub-backend' \
-  | head
+  | grep 'prometheus_target_scrape_pool_targets.*prometheus.scrape.app'
+
+# 3. Samples are actually flowing from app scrape to remote_write
+curl -s http://127.0.0.1:12345/metrics 2>/dev/null \
+  | grep 'prometheus_forwarded_samples_total.*prometheus.scrape.app'
+# Expect: counter growing over time. 1 scrape every 15s with ~200 series →
+# ~230 samples per scrape → thousands/hour.
+
+# 4. Sanity: /metrics endpoint itself is reachable from Alloy's perspective
+curl -sf http://127.0.0.1:8090/metrics | wc -l
 ```
+
+> **Note on Alloy metric names**: `prometheus_target_scrape_duration_seconds_count`, `scrape_samples_scraped`, and similar classic-Prometheus exporter names do NOT exist in Alloy 1.x. Use `prometheus_target_scrape_pool_targets` and `prometheus_forwarded_samples_total{component_id="..."}` instead. The central Prometheus still exposes the classic `up{}` / `scrape_*` metrics — see below.
 
 From central Grafana (Explore → Prometheus):
 
