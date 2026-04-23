@@ -1,6 +1,6 @@
 {
   "uid": "ppclub-backend-overview",
-  "title": "PPClub — Backend overview",
+  "title": "PPClub — 後端總覽",
   "tags": [
     "product:ppclub",
     "layer:app",
@@ -17,7 +17,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "🟢 At a glance",
+      "title": "🟢 一眼速覽",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -29,7 +29,7 @@
     {
       "id": 10,
       "type": "stat",
-      "title": "Req/sec (5m)",
+      "title": "請求/秒 (5 分鐘)",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -84,7 +84,7 @@
     {
       "id": 11,
       "type": "stat",
-      "title": "4xx rate (5m)",
+      "title": "4xx 比率 (5 分鐘)",
       "gridPos": {
         "x": 6,
         "y": 1,
@@ -147,7 +147,7 @@
     {
       "id": 12,
       "type": "stat",
-      "title": "5xx rate (5m)",
+      "title": "5xx 比率 (5 分鐘)",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -210,7 +210,7 @@
     {
       "id": 13,
       "type": "stat",
-      "title": "p95 latency (5m)",
+      "title": "p95 延遲 (5 分鐘)",
       "gridPos": {
         "x": 18,
         "y": 1,
@@ -273,7 +273,7 @@
     {
       "id": 2,
       "type": "row",
-      "title": "📊 Per-status trend",
+      "title": "📊 各狀態碼趨勢",
       "gridPos": {
         "x": 0,
         "y": 5,
@@ -285,7 +285,7 @@
     {
       "id": 20,
       "type": "timeseries",
-      "title": "Req/sec by status",
+      "title": "各狀態碼請求/秒",
       "gridPos": {
         "x": 0,
         "y": 6,
@@ -333,7 +333,7 @@
     {
       "id": 21,
       "type": "timeseries",
-      "title": "p50 / p95 / p99 latency (5m)",
+      "title": "p50 / p95 / p99 延遲 (5 分鐘)",
       "gridPos": {
         "x": 12,
         "y": 6,
@@ -399,7 +399,7 @@
     {
       "id": 3,
       "type": "row",
-      "title": "🧭 Routes",
+      "title": "🧭 路由",
       "gridPos": {
         "x": 0,
         "y": 14,
@@ -411,7 +411,7 @@
     {
       "id": 30,
       "type": "timeseries",
-      "title": "Top 8 routes by request rate (5m)",
+      "title": "請求量最高 Top 8 路由 (5 分鐘)",
       "gridPos": {
         "x": 0,
         "y": 15,
@@ -459,7 +459,7 @@
     {
       "id": 31,
       "type": "timeseries",
-      "title": "p95 latency per route (top 8)",
+      "title": "各路由 p95 延遲 (Top 8)",
       "gridPos": {
         "x": 12,
         "y": 15,
@@ -507,7 +507,7 @@
     {
       "id": 4,
       "type": "row",
-      "title": "🐍 Python runtime",
+      "title": "🐍 Python Runtime",
       "gridPos": {
         "x": 0,
         "y": 23,
@@ -519,7 +519,7 @@
     {
       "id": 40,
       "type": "timeseries",
-      "title": "Process RSS",
+      "title": "進程 RSS (常駐記憶體)",
       "gridPos": {
         "x": 0,
         "y": 24,
@@ -567,7 +567,7 @@
     {
       "id": 41,
       "type": "timeseries",
-      "title": "CPU rate (cores)",
+      "title": "CPU 使用率 (核數)",
       "gridPos": {
         "x": 8,
         "y": 24,
@@ -615,7 +615,7 @@
     {
       "id": 42,
       "type": "timeseries",
-      "title": "Open FDs",
+      "title": "開啟檔案描述子數",
       "gridPos": {
         "x": 16,
         "y": 24,
@@ -665,7 +665,7 @@
     "list": [
       {
         "name": "product",
-        "label": "Product",
+        "label": "產品",
         "type": "query",
         "datasource": {
           "type": "prometheus",

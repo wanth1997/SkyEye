@@ -1,6 +1,6 @@
 {
   "uid": "overview-all",
-  "title": "Overview — All products",
+  "title": "總覽 — 全產品",
   "tags": [
     "layer:overview",
     "provisioned"
@@ -18,7 +18,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "🟢 Status",
+      "title": "🟢 狀態總覽",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -30,7 +30,7 @@
     {
       "id": 10,
       "type": "stat",
-      "title": "Products UP",
+      "title": "上線產品數",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -47,7 +47,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "count(up{product!=\"\"} == 1)",
+          "expr": "count(count by (product) (up{product!=\"\"} == 1))",
           "refId": "A",
           "instant": true
         }
@@ -84,7 +84,7 @@
     {
       "id": 11,
       "type": "stat",
-      "title": "Products DOWN",
+      "title": "離線產品數",
       "gridPos": {
         "x": 6,
         "y": 1,
@@ -101,7 +101,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "count(up{product!=\"\"} == 0) OR on() vector(0)",
+          "expr": "(count(count by (product) (up{product!=\"\"} == 0)) OR on() vector(0))",
           "refId": "A",
           "instant": true
         }
@@ -142,7 +142,7 @@
     {
       "id": 12,
       "type": "stat",
-      "title": "Active alerts (P1/P2)",
+      "title": "現用告警(P1/P2)",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -204,7 +204,7 @@
     {
       "id": 13,
       "type": "stat",
-      "title": "Emails sent (last 24h)",
+      "title": "24 小時內寄出 Email",
       "gridPos": {
         "x": 18,
         "y": 1,
@@ -264,7 +264,7 @@
     {
       "id": 2,
       "type": "row",
-      "title": "🖥️ Resources — $product",
+      "title": "🖥️ 資源 — $product",
       "gridPos": {
         "x": 0,
         "y": 5,
@@ -276,7 +276,7 @@
     {
       "id": 20,
       "type": "gauge",
-      "title": "CPU used %",
+      "title": "CPU 使用率 %",
       "gridPos": {
         "x": 0,
         "y": 6,
@@ -337,7 +337,7 @@
     {
       "id": 21,
       "type": "gauge",
-      "title": "RAM used %",
+      "title": "RAM 使用率 %",
       "gridPos": {
         "x": 8,
         "y": 6,
@@ -398,7 +398,7 @@
     {
       "id": 22,
       "type": "gauge",
-      "title": "Disk / used %",
+      "title": "根目錄使用率 %",
       "gridPos": {
         "x": 16,
         "y": 6,
@@ -459,7 +459,7 @@
     {
       "id": 3,
       "type": "row",
-      "title": "📈 Trends",
+      "title": "📈 趨勢",
       "gridPos": {
         "x": 0,
         "y": 12,
@@ -471,7 +471,7 @@
     {
       "id": 30,
       "type": "timeseries",
-      "title": "CPU % by product",
+      "title": "各產品 CPU %",
       "gridPos": {
         "x": 0,
         "y": 13,
@@ -518,7 +518,7 @@
     {
       "id": 31,
       "type": "timeseries",
-      "title": "Log lines/sec by product",
+      "title": "各產品 Log 速率 (行/秒)",
       "gridPos": {
         "x": 12,
         "y": 13,
@@ -565,7 +565,7 @@
     {
       "id": 4,
       "type": "row",
-      "title": "🚨 Alerts — P1 / P2 only（heartbeat 類已濾掉）",
+      "title": "🚨 告警 — 只含 P1 / P2(已濾掉 heartbeat 類)",
       "gridPos": {
         "x": 0,
         "y": 21,
@@ -577,7 +577,7 @@
     {
       "id": 40,
       "type": "table",
-      "title": "🚨 Active alerts — P1 / P2 (需要處理)",
+      "title": "🚨 現用告警 — P1 / P2 (需處理)",
       "gridPos": {
         "x": 0,
         "y": 22,
@@ -680,7 +680,7 @@
     {
       "id": 41,
       "type": "table",
-      "title": "ℹ️ Informational — P3 / heartbeat (正常都會有)",
+      "title": "ℹ️ 資訊性 — P3 / heartbeat (正常都會有)",
       "gridPos": {
         "x": 0,
         "y": 30,
@@ -785,7 +785,7 @@
     "list": [
       {
         "name": "product",
-        "label": "Product",
+        "label": "產品",
         "type": "query",
         "datasource": {
           "type": "prometheus",

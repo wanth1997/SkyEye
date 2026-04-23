@@ -1,6 +1,6 @@
 {
   "uid": "ppclub-business",
-  "title": "PPClub — Business",
+  "title": "PPClub — 業務指標",
   "tags": [
     "product:ppclub",
     "layer:business",
@@ -17,7 +17,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "💰 Payment (daily window)",
+      "title": "💰 付款(24小時窗口)",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -29,7 +29,7 @@
     {
       "id": 100,
       "type": "stat",
-      "title": "Created (24h)",
+      "title": "24h 建立數",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -84,7 +84,7 @@
     {
       "id": 101,
       "type": "stat",
-      "title": "Succeeded (24h)",
+      "title": "24h 成功數",
       "gridPos": {
         "x": 6,
         "y": 1,
@@ -139,7 +139,7 @@
     {
       "id": 102,
       "type": "gauge",
-      "title": "Success rate (24h)",
+      "title": "24h 成功率",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -198,7 +198,7 @@
     {
       "id": 103,
       "type": "stat",
-      "title": "Zero-payment streak (h)",
+      "title": "零付款持續 (小時)",
       "gridPos": {
         "x": 18,
         "y": 1,
@@ -261,7 +261,7 @@
     {
       "id": 110,
       "type": "timeseries",
-      "title": "Payment events / min",
+      "title": "付款事件 (每分鐘)",
       "gridPos": {
         "x": 0,
         "y": 5,
@@ -318,7 +318,7 @@
     {
       "id": 2,
       "type": "row",
-      "title": "↩️ Refund",
+      "title": "↩️ 退款",
       "gridPos": {
         "x": 0,
         "y": 11,
@@ -330,7 +330,7 @@
     {
       "id": 200,
       "type": "stat",
-      "title": "Refunds (24h) — booking",
+      "title": "24h 退款 — 預約",
       "gridPos": {
         "x": 0,
         "y": 12,
@@ -385,7 +385,7 @@
     {
       "id": 201,
       "type": "stat",
-      "title": "Refunds (24h) — signup",
+      "title": "24h 退款 — 報名",
       "gridPos": {
         "x": 6,
         "y": 12,
@@ -440,7 +440,7 @@
     {
       "id": 210,
       "type": "timeseries",
-      "title": "Refund rate by kind (5m)",
+      "title": "各類型退款速率 (5 分鐘)",
       "gridPos": {
         "x": 12,
         "y": 12,
@@ -488,7 +488,7 @@
     {
       "id": 220,
       "type": "timeseries",
-      "title": "Refund by reason + result (5m)",
+      "title": "各原因+結果退款 (5 分鐘)",
       "gridPos": {
         "x": 0,
         "y": 16,
@@ -536,7 +536,7 @@
     {
       "id": 3,
       "type": "row",
-      "title": "👥 User acquisition",
+      "title": "👥 新用戶獲取",
       "gridPos": {
         "x": 0,
         "y": 20,
@@ -548,7 +548,7 @@
     {
       "id": 300,
       "type": "stat",
-      "title": "Signups (24h)",
+      "title": "24h 新用戶註冊數",
       "gridPos": {
         "x": 0,
         "y": 21,
@@ -603,7 +603,7 @@
     {
       "id": 301,
       "type": "stat",
-      "title": "Event signups (24h)",
+      "title": "24h 活動報名數",
       "gridPos": {
         "x": 6,
         "y": 21,
@@ -658,7 +658,7 @@
     {
       "id": 302,
       "type": "gauge",
-      "title": "Phone verify success",
+      "title": "手機驗證成功率",
       "gridPos": {
         "x": 12,
         "y": 21,
@@ -717,7 +717,7 @@
     {
       "id": 303,
       "type": "stat",
-      "title": "Credit topups (24h)",
+      "title": "24h Credit 儲值次數",
       "gridPos": {
         "x": 18,
         "y": 21,
@@ -772,7 +772,7 @@
     {
       "id": 310,
       "type": "timeseries",
-      "title": "Signup method split (1h rate)",
+      "title": "註冊方式分布 (1h 速率)",
       "gridPos": {
         "x": 0,
         "y": 25,
@@ -820,7 +820,7 @@
     {
       "id": 311,
       "type": "timeseries",
-      "title": "Credit topup by amount bucket (1h rate)",
+      "title": "儲值金額區間分布 (1h 速率)",
       "gridPos": {
         "x": 12,
         "y": 25,
@@ -868,7 +868,7 @@
     {
       "id": 4,
       "type": "row",
-      "title": "🔌 External API dependencies",
+      "title": "🔌 外部 API 依賴",
       "gridPos": {
         "x": 0,
         "y": 31,
@@ -880,7 +880,7 @@
     {
       "id": 400,
       "type": "timeseries",
-      "title": "NewebPay p95 latency by endpoint (5m)",
+      "title": "NewebPay 各 endpoint p95 延遲 (5 分鐘)",
       "gridPos": {
         "x": 0,
         "y": 32,
@@ -928,7 +928,7 @@
     {
       "id": 401,
       "type": "timeseries",
-      "title": "Hengfu p95 latency by endpoint (5m)",
+      "title": "Hengfu 各 endpoint p95 延遲 (5 分鐘)",
       "gridPos": {
         "x": 12,
         "y": 32,
@@ -976,7 +976,7 @@
     {
       "id": 410,
       "type": "timeseries",
-      "title": "External API error rate by api (5m)",
+      "title": "外部 API 錯誤率 (5 分鐘)",
       "gridPos": {
         "x": 0,
         "y": 40,
@@ -1024,7 +1024,7 @@
     {
       "id": 411,
       "type": "timeseries",
-      "title": "External API call rate by api (5m)",
+      "title": "外部 API 呼叫速率 (5 分鐘)",
       "gridPos": {
         "x": 12,
         "y": 40,
@@ -1072,7 +1072,7 @@
     {
       "id": 5,
       "type": "row",
-      "title": "⏰ Scheduler heartbeat",
+      "title": "⏰ 排程器心跳",
       "gridPos": {
         "x": 0,
         "y": 46,
@@ -1084,7 +1084,7 @@
     {
       "id": 500,
       "type": "bargauge",
-      "title": "Seconds since each job last ran (red if > 1h)",
+      "title": "各 job 距上次執行秒數 (>1h 轉紅)",
       "gridPos": {
         "x": 0,
         "y": 47,
@@ -1146,7 +1146,7 @@
     "list": [
       {
         "name": "product",
-        "label": "Product",
+        "label": "產品",
         "type": "query",
         "datasource": {
           "type": "prometheus",

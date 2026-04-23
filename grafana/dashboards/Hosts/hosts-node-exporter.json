@@ -53,7 +53,7 @@
       },
       "id": 261,
       "panels": [],
-      "title": "Quick CPU / Mem / Disk",
+      "title": "CPU / 記憶體 / 磁碟 速覽",
       "type": "row"
     },
     {
@@ -171,7 +171,7 @@
           "step": 240
         }
       ],
-      "title": "Pressure",
+      "title": "系統壓力指標 (PSI)",
       "type": "bargauge"
     },
     {
@@ -254,7 +254,7 @@
           "step": 240
         }
       ],
-      "title": "CPU Busy",
+      "title": "CPU 忙碌率",
       "type": "gauge"
     },
     {
@@ -337,7 +337,7 @@
           "step": 240
         }
       ],
-      "title": "Sys Load",
+      "title": "系統負載",
       "type": "gauge"
     },
     {
@@ -410,7 +410,7 @@
           "step": 240
         }
       ],
-      "title": "RAM Used",
+      "title": "記憶體使用率",
       "type": "gauge"
     },
     {
@@ -492,7 +492,7 @@
           "step": 240
         }
       ],
-      "title": "SWAP Used",
+      "title": "SWAP 使用率",
       "type": "gauge"
     },
     {
@@ -575,7 +575,7 @@
           "step": 240
         }
       ],
-      "title": "Root FS Used",
+      "title": "根目錄使用率",
       "type": "gauge"
     },
     {
@@ -649,7 +649,7 @@
           "refId": "A"
         }
       ],
-      "title": "CPU Cores",
+      "title": "CPU 核心數",
       "type": "stat"
     },
     {
@@ -728,7 +728,7 @@
           "step": 240
         }
       ],
-      "title": "RAM Total",
+      "title": "記憶體總量",
       "type": "stat"
     },
     {
@@ -807,7 +807,7 @@
           "step": 240
         }
       ],
-      "title": "SWAP Total",
+      "title": "SWAP 總量",
       "type": "stat"
     },
     {
@@ -891,7 +891,7 @@
           "step": 240
         }
       ],
-      "title": "RootFS Total",
+      "title": "根目錄總量",
       "type": "stat"
     },
     {
@@ -970,7 +970,7 @@
           "step": 240
         }
       ],
-      "title": "Uptime",
+      "title": "運行時間",
       "type": "stat"
     },
     {
@@ -983,7 +983,7 @@
       },
       "id": 263,
       "panels": [],
-      "title": "Basic CPU / Mem / Net / Disk",
+      "title": "基本 CPU / 記憶體 / 網路 / 磁碟",
       "type": "row"
     },
     {
@@ -1201,7 +1201,7 @@
           "step": 240
         }
       ],
-      "title": "CPU Basic",
+      "title": "CPU 基本",
       "type": "timeseries"
     },
     {
@@ -1404,7 +1404,7 @@
           "step": 240
         }
       ],
-      "title": "Memory Basic",
+      "title": "記憶體基本",
       "type": "timeseries"
     },
     {
@@ -1519,7 +1519,7 @@
           "step": 240
         }
       ],
-      "title": "Network Traffic Basic",
+      "title": "網路流量基本",
       "type": "timeseries"
     },
     {
@@ -1614,7 +1614,7 @@
           "step": 240
         }
       ],
-      "title": "Disk Space Used Basic",
+      "title": "磁碟空間使用(基本)",
       "type": "timeseries"
     },
     {
@@ -2283,7 +2283,7 @@
               "step": 240
             }
           ],
-          "title": "Memory",
+          "title": "記憶體",
           "type": "timeseries"
         },
         {
@@ -2402,7 +2402,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic",
+          "title": "網路流量",
           "type": "timeseries"
         },
         {
@@ -2521,7 +2521,7 @@
               "step": 240
             }
           ],
-          "title": "Network Saturation",
+          "title": "網路飽和度",
           "type": "timeseries"
         },
         {
@@ -2638,7 +2638,7 @@
               "step": 240
             }
           ],
-          "title": "Disk IOps",
+          "title": "磁碟 IOps",
           "type": "timeseries"
         },
         {
@@ -2757,7 +2757,7 @@
               "step": 240
             }
           ],
-          "title": "Disk Throughput",
+          "title": "磁碟吞吐量",
           "type": "timeseries"
         },
         {
@@ -2876,7 +2876,7 @@
               "step": 240
             }
           ],
-          "title": "Filesystem Space Available",
+          "title": "檔案系統可用空間",
           "type": "timeseries"
         },
         {
@@ -2974,7 +2974,7 @@
               "step": 240
             }
           ],
-          "title": "Filesystem Used",
+          "title": "檔案系統已用",
           "type": "timeseries"
         },
         {
@@ -3073,7 +3073,7 @@
               "step": 240
             }
           ],
-          "title": "Disk I/O Utilization",
+          "title": "磁碟 I/O 使用率",
           "type": "timeseries"
         },
         {
@@ -3244,7 +3244,7 @@
           "type": "timeseries"
         }
       ],
-      "title": "CPU / Memory / Net / Disk",
+      "title": "CPU / 記憶體 / 網路 / 磁碟",
       "type": "row"
     },
     {
@@ -3382,7 +3382,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Committed",
+          "title": "記憶體 Committed",
           "type": "timeseries"
         },
         {
@@ -3507,7 +3507,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Writeback and Dirty",
+          "title": "記憶體 Writeback / Dirty",
           "type": "timeseries"
         },
         {
@@ -3614,7 +3614,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Slab",
+          "title": "記憶體 Slab",
           "type": "timeseries"
         },
         {
@@ -3742,7 +3742,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Shared and Mapped",
+          "title": "記憶體 Shared / Mapped",
           "type": "timeseries"
         },
         {
@@ -3881,7 +3881,7 @@
               "step": 240
             }
           ],
-          "title": "Memory LRU Active / Inactive (%)",
+          "title": "記憶體 LRU Active / Inactive %",
           "type": "timeseries"
         },
         {
@@ -4007,7 +4007,7 @@
               "step": 240
             }
           ],
-          "title": "Memory LRU Active / Inactive Detail",
+          "title": "記憶體 LRU Active / Inactive 詳細",
           "type": "timeseries"
         },
         {
@@ -4126,7 +4126,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Kernel / CPU / IO",
+          "title": "記憶體 Kernel / CPU / IO",
           "type": "timeseries"
         },
         {
@@ -4272,7 +4272,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Vmalloc",
+          "title": "記憶體 Vmalloc",
           "type": "timeseries"
         },
         {
@@ -4379,7 +4379,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Anonymous",
+          "title": "記憶體 Anonymous",
           "type": "timeseries"
         },
         {
@@ -4487,7 +4487,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Unevictable and MLocked",
+          "title": "記憶體 Unevictable / MLocked",
           "type": "timeseries"
         },
         {
@@ -4609,7 +4609,7 @@
               "step": 240
             }
           ],
-          "title": "Memory DirectMap",
+          "title": "記憶體 DirectMap",
           "type": "timeseries"
         },
         {
@@ -4734,11 +4734,11 @@
               "step": 240
             }
           ],
-          "title": "Memory HugePages",
+          "title": "記憶體 HugePages",
           "type": "timeseries"
         }
       ],
-      "title": "Memory Meminfo",
+      "title": "記憶體 Meminfo",
       "type": "row"
     },
     {
@@ -4867,7 +4867,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Pages In / Out",
+          "title": "記憶體頁 In / Out",
           "type": "timeseries"
         },
         {
@@ -4986,7 +4986,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Pages Swap In / Out",
+          "title": "記憶體頁 Swap In / Out",
           "type": "timeseries"
         },
         {
@@ -5140,7 +5140,7 @@
               "step": 240
             }
           ],
-          "title": "Memory Page Faults",
+          "title": "記憶體 Page Faults",
           "type": "timeseries"
         },
         {
@@ -5259,7 +5259,7 @@
           "type": "timeseries"
         }
       ],
-      "title": "Memory Vmstat",
+      "title": "記憶體 Vmstat",
       "type": "row"
     },
     {
@@ -5387,7 +5387,7 @@
               "step": 240
             }
           ],
-          "title": "Time Synchronized Drift",
+          "title": "時間同步漂移",
           "type": "timeseries"
         },
         {
@@ -5485,7 +5485,7 @@
               "step": 240
             }
           ],
-          "title": "Time PLL Adjust",
+          "title": "時間 PLL 調整",
           "type": "timeseries"
         },
         {
@@ -5615,7 +5615,7 @@
               "step": 240
             }
           ],
-          "title": "Time Synchronized Status",
+          "title": "時間同步狀態",
           "type": "timeseries"
         },
         {
@@ -5723,7 +5723,7 @@
               "step": 240
             }
           ],
-          "title": "PPS Frequency / Stability",
+          "title": "PPS 頻率 / 穩定度",
           "type": "timeseries"
         },
         {
@@ -5831,7 +5831,7 @@
               "step": 240
             }
           ],
-          "title": "PPS Time Accuracy",
+          "title": "PPS 時間精確度",
           "type": "timeseries"
         },
         {
@@ -5963,11 +5963,11 @@
               "step": 240
             }
           ],
-          "title": "PPS Sync Events",
+          "title": "PPS 同步事件",
           "type": "timeseries"
         }
       ],
-      "title": "System Timesync",
+      "title": "系統時間同步",
       "type": "row"
     },
     {
@@ -6088,7 +6088,7 @@
               "step": 240
             }
           ],
-          "title": "Processes Status",
+          "title": "進程狀態",
           "type": "timeseries"
         },
         {
@@ -6272,7 +6272,7 @@
               "step": 240
             }
           ],
-          "title": "Processes Detailed States",
+          "title": "進程詳細狀態",
           "type": "timeseries"
         },
         {
@@ -6370,7 +6370,7 @@
               "step": 240
             }
           ],
-          "title": "Processes Forks",
+          "title": "進程 Forks",
           "type": "timeseries"
         },
         {
@@ -6507,7 +6507,7 @@
               "step": 240
             }
           ],
-          "title": "CPU Saturation per Core",
+          "title": "各核 CPU 飽和度",
           "type": "timeseries"
         },
         {
@@ -6646,7 +6646,7 @@
               "step": 240
             }
           ],
-          "title": "PIDs Number and Limit",
+          "title": "PIDs 數量與上限",
           "type": "timeseries"
         },
         {
@@ -6785,11 +6785,11 @@
               "step": 240
             }
           ],
-          "title": "Threads Number and Limit",
+          "title": "Threads 數量與上限",
           "type": "timeseries"
         }
       ],
-      "title": "System Processes",
+      "title": "系統進程",
       "type": "row"
     },
     {
@@ -6906,7 +6906,7 @@
               "step": 240
             }
           ],
-          "title": "Context Switches / Interrupts",
+          "title": "Context Switch / Interrupt",
           "type": "timeseries"
         },
         {
@@ -7061,7 +7061,7 @@
               "step": 240
             }
           ],
-          "title": "System Load",
+          "title": "系統負載",
           "type": "timeseries"
         },
         {
@@ -7246,7 +7246,7 @@
               "step": 240
             }
           ],
-          "title": "CPU Frequency Scaling",
+          "title": "CPU 頻率縮放",
           "type": "timeseries"
         },
         {
@@ -7344,7 +7344,7 @@
               "step": 240
             }
           ],
-          "title": "CPU Schedule Timeslices",
+          "title": "CPU 排程時間片",
           "type": "timeseries"
         },
         {
@@ -7443,7 +7443,7 @@
               "step": 240
             }
           ],
-          "title": "IRQ Detail",
+          "title": "IRQ 詳細",
           "type": "timeseries"
         },
         {
@@ -7584,7 +7584,7 @@
           "type": "timeseries"
         }
       ],
-      "title": "System Misc",
+      "title": "系統雜項",
       "type": "row"
     },
     {
@@ -7750,7 +7750,7 @@
               "step": 240
             }
           ],
-          "title": "Hardware Temperature Monitor",
+          "title": "硬體溫度監控",
           "type": "timeseries"
         },
         {
@@ -7868,7 +7868,7 @@
               "step": 240
             }
           ],
-          "title": "Cooling Device Utilization",
+          "title": "冷卻裝置使用率",
           "type": "timeseries"
         },
         {
@@ -7970,7 +7970,7 @@
               "step": 240
             }
           ],
-          "title": "Power Supply",
+          "title": "電源供應",
           "type": "timeseries"
         },
         {
@@ -8080,11 +8080,11 @@
               "step": 240
             }
           ],
-          "title": "Hardware Fan Speed",
+          "title": "硬體風扇速度",
           "type": "timeseries"
         }
       ],
-      "title": "Hardware Misc",
+      "title": "硬體雜項",
       "type": "row"
     },
     {
@@ -8308,7 +8308,7 @@
               "step": 240
             }
           ],
-          "title": "Systemd Units State",
+          "title": "Systemd Units 狀態",
           "type": "timeseries"
         },
         {
@@ -8407,7 +8407,7 @@
               "step": 240
             }
           ],
-          "title": "Systemd Sockets Current",
+          "title": "Systemd Sockets 目前",
           "type": "timeseries"
         },
         {
@@ -8506,7 +8506,7 @@
               "step": 240
             }
           ],
-          "title": "Systemd Sockets Accepted",
+          "title": "Systemd Sockets 已接受",
           "type": "timeseries"
         },
         {
@@ -8605,7 +8605,7 @@
               "step": 240
             }
           ],
-          "title": "Systemd Sockets Refused",
+          "title": "Systemd Sockets 已拒絕",
           "type": "timeseries"
         }
       ],
@@ -8751,7 +8751,7 @@
               "step": 240
             }
           ],
-          "title": "Disk Read/Write IOps",
+          "title": "磁碟讀寫 IOps",
           "type": "timeseries"
         },
         {
@@ -8887,7 +8887,7 @@
               "step": 240
             }
           ],
-          "title": "Disk Read/Write Data",
+          "title": "磁碟讀寫資料",
           "type": "timeseries"
         },
         {
@@ -9021,7 +9021,7 @@
               "step": 240
             }
           ],
-          "title": "Disk Average Wait Time",
+          "title": "磁碟平均等待時間",
           "type": "timeseries"
         },
         {
@@ -9135,7 +9135,7 @@
               "step": 240
             }
           ],
-          "title": "Average Queue Size",
+          "title": "平均佇列大小",
           "type": "timeseries"
         },
         {
@@ -9267,7 +9267,7 @@
               "step": 240
             }
           ],
-          "title": "Disk R/W Merged",
+          "title": "磁碟讀寫合併",
           "type": "timeseries"
         },
         {
@@ -9399,7 +9399,7 @@
               "step": 240
             }
           ],
-          "title": "Time Spent Doing I/Os",
+          "title": "花在 I/O 的時間",
           "type": "timeseries"
         },
         {
@@ -9530,7 +9530,7 @@
               "step": 240
             }
           ],
-          "title": "Disk Ops Discards / Flush",
+          "title": "磁碟操作 Discards / Flush",
           "type": "timeseries"
         },
         {
@@ -9643,7 +9643,7 @@
               "step": 240
             }
           ],
-          "title": "Disk Sectors Discarded Successfully",
+          "title": "成功捨棄的磁碟 Sector",
           "type": "timeseries"
         },
         {
@@ -9757,11 +9757,11 @@
               "step": 240
             }
           ],
-          "title": "Instantaneous Queue Size",
+          "title": "即時佇列大小",
           "type": "timeseries"
         }
       ],
-      "title": "Storage Disk",
+      "title": "儲存磁碟",
       "type": "row"
     },
     {
@@ -9908,7 +9908,7 @@
               "step": 240
             }
           ],
-          "title": "File Descriptor",
+          "title": "檔案描述子",
           "type": "timeseries"
         },
         {
@@ -10006,7 +10006,7 @@
               "step": 240
             }
           ],
-          "title": "File Nodes Free",
+          "title": "File Nodes 可用",
           "type": "timeseries"
         },
         {
@@ -10115,7 +10115,7 @@
               "step": 240
             }
           ],
-          "title": "Filesystem in ReadOnly / Error",
+          "title": "檔案系統 唯讀 / 錯誤",
           "type": "timeseries"
         },
         {
@@ -10213,11 +10213,11 @@
               "step": 240
             }
           ],
-          "title": "File Nodes Size",
+          "title": "File Nodes 大小",
           "type": "timeseries"
         }
       ],
-      "title": "Storage Filesystem",
+      "title": "儲存檔案系統",
       "type": "row"
     },
     {
@@ -10349,7 +10349,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic by Packets",
+          "title": "網路流量 (封包)",
           "type": "timeseries"
         },
         {
@@ -10469,7 +10469,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic Errors",
+          "title": "網路錯誤",
           "type": "timeseries"
         },
         {
@@ -10589,7 +10589,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic Drop",
+          "title": "網路丟包",
           "type": "timeseries"
         },
         {
@@ -10709,7 +10709,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic Compressed",
+          "title": "網路壓縮流量",
           "type": "timeseries"
         },
         {
@@ -10807,7 +10807,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic Multicast",
+          "title": "網路 Multicast",
           "type": "timeseries"
         },
         {
@@ -10905,7 +10905,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic NoHandler",
+          "title": "網路 NoHandler 錯誤",
           "type": "timeseries"
         },
         {
@@ -11003,7 +11003,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic Frame",
+          "title": "網路 Frame",
           "type": "timeseries"
         },
         {
@@ -11123,7 +11123,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic Fifo",
+          "title": "網路 FIFO",
           "type": "timeseries"
         },
         {
@@ -11234,7 +11234,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic Collision",
+          "title": "網路 Collision",
           "type": "timeseries"
         },
         {
@@ -11332,7 +11332,7 @@
               "step": 240
             }
           ],
-          "title": "Network Traffic Carrier Errors",
+          "title": "網路 Carrier 錯誤",
           "type": "timeseries"
         },
         {
@@ -11674,7 +11674,7 @@
               "refId": "B"
             }
           ],
-          "title": "Network Operational Status",
+          "title": "網路運作狀態",
           "type": "timeseries"
         },
         {
@@ -11748,7 +11748,7 @@
               "step": 240
             }
           ],
-          "title": "Speed",
+          "title": "速度",
           "type": "bargauge"
         },
         {
@@ -11825,7 +11825,7 @@
           "type": "bargauge"
         }
       ],
-      "title": "Network Traffic",
+      "title": "網路流量",
       "type": "row"
     },
     {
@@ -12175,7 +12175,7 @@
               "step": 240
             }
           ],
-          "title": "Sockstat Used",
+          "title": "Sockstat 已用",
           "type": "timeseries"
         },
         {
@@ -12403,7 +12403,7 @@
               "refId": "C"
             }
           ],
-          "title": "Sockstat Memory Size",
+          "title": "Sockstat 記憶體大小",
           "type": "timeseries"
         },
         {
@@ -12513,7 +12513,7 @@
               "step": 240
             }
           ],
-          "title": "Sockstat Average Socket Memory",
+          "title": "Sockstat 平均 Socket 記憶體",
           "type": "timeseries"
         },
         {
@@ -12623,7 +12623,7 @@
               "step": 240
             }
           ],
-          "title": "TCP/UDP Kernel Buffer Memory Pages",
+          "title": "TCP/UDP Kernel Buffer 記憶體頁",
           "type": "timeseries"
         },
         {
@@ -12745,7 +12745,7 @@
               "step": 240
             }
           ],
-          "title": "Softnet Packets",
+          "title": "Softnet 封包",
           "type": "timeseries"
         },
         {
@@ -12848,7 +12848,7 @@
               "step": 240
             }
           ],
-          "title": "Softnet Out of Quota",
+          "title": "Softnet 超出配額",
           "type": "timeseries"
         },
         {
@@ -12981,7 +12981,7 @@
           "type": "timeseries"
         }
       ],
-      "title": "Network Sockstat",
+      "title": "網路 Sockstat",
       "type": "row"
     },
     {
@@ -13650,7 +13650,7 @@
               "refId": "I"
             }
           ],
-          "title": "TCP Errors",
+          "title": "TCP 錯誤",
           "type": "timeseries"
         },
         {
@@ -13790,7 +13790,7 @@
               "step": 240
             }
           ],
-          "title": "UDP Errors",
+          "title": "UDP 錯誤",
           "type": "timeseries"
         },
         {
@@ -13888,7 +13888,7 @@
               "step": 240
             }
           ],
-          "title": "ICMP Errors",
+          "title": "ICMP 錯誤",
           "type": "timeseries"
         },
         {
@@ -14161,7 +14161,7 @@
               "step": 240
             }
           ],
-          "title": "TCP Connections",
+          "title": "TCP 連線",
           "type": "timeseries"
         },
         {
@@ -14269,7 +14269,7 @@
               "step": 240
             }
           ],
-          "title": "UDP Queue",
+          "title": "UDP 佇列",
           "type": "timeseries"
         },
         {
@@ -14769,11 +14769,11 @@
               "step": 240
             }
           ],
-          "title": "TCP Socket Queue",
+          "title": "TCP Socket 佇列",
           "type": "timeseries"
         }
       ],
-      "title": "Network Netstat",
+      "title": "網路 Netstat",
       "type": "row"
     },
     {
@@ -14885,7 +14885,7 @@
               "step": 240
             }
           ],
-          "title": "Node Exporter Scrape Time",
+          "title": "Node Exporter Scrape 時間",
           "type": "timeseries"
         },
         {
@@ -14983,7 +14983,7 @@
               "step": 240
             }
           ],
-          "title": "Exporter Process CPU Usage",
+          "title": "Exporter 進程 CPU 使用",
           "type": "timeseries"
         },
         {
@@ -15144,7 +15144,7 @@
               "step": 240
             }
           ],
-          "title": "Exporter Processes Memory",
+          "title": "Exporter 進程記憶體",
           "type": "timeseries"
         },
         {
@@ -15305,7 +15305,7 @@
               "step": 240
             }
           ],
-          "title": "Exporter File Descriptor Usage",
+          "title": "Exporter 檔案描述子使用",
           "type": "timeseries"
         },
         {
@@ -15414,7 +15414,7 @@
     "list": [
       {
         "name": "product",
-        "label": "Product",
+        "label": "產品",
         "type": "query",
         "datasource": {
           "type": "prometheus",
@@ -15463,7 +15463,7 @@
         },
         "definition": "label_values(node_uname_info{product=\"$product\",job=\"$job\"}, nodename)",
         "includeAll": false,
-        "label": "Nodename",
+        "label": "節點名稱",
         "name": "nodename",
         "options": [],
         "query": {
@@ -15483,7 +15483,7 @@
         },
         "definition": "label_values(node_uname_info{product=\"$product\",job=\"$job\",nodename=\"$nodename\"}, instance)",
         "includeAll": false,
-        "label": "Instance",
+        "label": "實例",
         "name": "node",
         "options": [],
         "query": {
@@ -15503,7 +15503,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Hosts — Node exporter",
+  "title": "主機 — Node Exporter",
   "uid": "hosts-node-exporter",
   "weekStart": "",
   "gnetId": 1860

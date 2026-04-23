@@ -1,6 +1,6 @@
 {
   "uid": "skyeye-stack-health",
-  "title": "SkyEye — Stack health",
+  "title": "SkyEye — 監控棧健康",
   "tags": [
     "layer:meta",
     "skyeye",
@@ -17,7 +17,7 @@
     {
       "id": 1,
       "type": "row",
-      "title": "🟢 Stack components",
+      "title": "🟢 監控棧元件",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -29,7 +29,7 @@
     {
       "id": 10,
       "type": "table",
-      "title": "All scrape targets (up/down)",
+      "title": "所有 scrape 目標 (up/down)",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -117,7 +117,7 @@
     {
       "id": 11,
       "type": "stat",
-      "title": "Targets UP",
+      "title": "上線目標數",
       "gridPos": {
         "x": 12,
         "y": 1,
@@ -171,7 +171,7 @@
     {
       "id": 12,
       "type": "stat",
-      "title": "Targets DOWN",
+      "title": "離線目標數",
       "gridPos": {
         "x": 16,
         "y": 1,
@@ -229,7 +229,7 @@
     {
       "id": 13,
       "type": "stat",
-      "title": "Rule eval errors (last 1h)",
+      "title": "規則評估錯誤 (過去 1 小時)",
       "gridPos": {
         "x": 20,
         "y": 1,
@@ -299,7 +299,7 @@
     {
       "id": 20,
       "type": "timeseries",
-      "title": "TSDB head series (memory pressure proxy)",
+      "title": "TSDB head series (記憶體壓力指標)",
       "gridPos": {
         "x": 0,
         "y": 10,
@@ -347,7 +347,7 @@
     {
       "id": 21,
       "type": "timeseries",
-      "title": "Samples ingested/sec",
+      "title": "Samples 接收速率 (每秒)",
       "gridPos": {
         "x": 12,
         "y": 10,
@@ -404,7 +404,7 @@
     {
       "id": 22,
       "type": "timeseries",
-      "title": "Rule eval duration p95 (slow = problem)",
+      "title": "規則評估時間 p95 (慢=問題)",
       "gridPos": {
         "x": 0,
         "y": 17,
@@ -452,7 +452,7 @@
     {
       "id": 23,
       "type": "timeseries",
-      "title": "Scrape duration p95 per job",
+      "title": "各 job scrape 時間 p95",
       "gridPos": {
         "x": 12,
         "y": 17,
@@ -512,7 +512,7 @@
     {
       "id": 30,
       "type": "timeseries",
-      "title": "Lines received/sec",
+      "title": "接收行數/秒",
       "gridPos": {
         "x": 0,
         "y": 24,
@@ -560,7 +560,7 @@
     {
       "id": 31,
       "type": "timeseries",
-      "title": "Bytes received/sec",
+      "title": "接收位元組/秒",
       "gridPos": {
         "x": 12,
         "y": 24,
@@ -608,7 +608,7 @@
     {
       "id": 32,
       "type": "stat",
-      "title": "Active streams",
+      "title": "活動中 streams",
       "gridPos": {
         "x": 0,
         "y": 31,
@@ -662,7 +662,7 @@
     {
       "id": 33,
       "type": "stat",
-      "title": "Chunks in memory",
+      "title": "記憶體內 chunks",
       "gridPos": {
         "x": 6,
         "y": 31,
@@ -716,7 +716,7 @@
     {
       "id": 34,
       "type": "stat",
-      "title": "Dropped chunks (1h)",
+      "title": "過去 1 小時丟棄 chunks",
       "gridPos": {
         "x": 12,
         "y": 31,
@@ -774,7 +774,7 @@
     {
       "id": 35,
       "type": "stat",
-      "title": "Push request errors (5m)",
+      "title": "Push 請求錯誤 (5 分鐘)",
       "gridPos": {
         "x": 18,
         "y": 31,
@@ -848,7 +848,7 @@
     {
       "id": 40,
       "type": "timeseries",
-      "title": "Notifications/min by integration",
+      "title": "各整合通知速率 (每分鐘)",
       "gridPos": {
         "x": 0,
         "y": 36,
@@ -896,7 +896,7 @@
     {
       "id": 41,
       "type": "timeseries",
-      "title": "Notifications FAILED/min by integration",
+      "title": "各整合失敗通知 (每分鐘)",
       "gridPos": {
         "x": 12,
         "y": 36,
@@ -944,7 +944,7 @@
     {
       "id": 42,
       "type": "stat",
-      "title": "Active alerts",
+      "title": "現用告警",
       "gridPos": {
         "x": 0,
         "y": 43,
@@ -998,7 +998,7 @@
     {
       "id": 43,
       "type": "stat",
-      "title": "Silences active",
+      "title": "啟用中靜音",
       "gridPos": {
         "x": 6,
         "y": 43,
@@ -1052,7 +1052,7 @@
     {
       "id": 44,
       "type": "stat",
-      "title": "AM dispatcher groups",
+      "title": "AM dispatcher group 數",
       "gridPos": {
         "x": 12,
         "y": 43,
@@ -1106,7 +1106,7 @@
     {
       "id": 45,
       "type": "stat",
-      "title": "Notifications sent (24h)",
+      "title": "24h 發送通知數",
       "gridPos": {
         "x": 18,
         "y": 43,
@@ -1173,7 +1173,7 @@
     {
       "id": 50,
       "type": "timeseries",
-      "title": "Grafana HTTP rate/sec",
+      "title": "Grafana HTTP 速率 (每秒)",
       "gridPos": {
         "x": 0,
         "y": 48,
@@ -1221,7 +1221,7 @@
     {
       "id": 51,
       "type": "timeseries",
-      "title": "Blackbox probes/sec success vs fail",
+      "title": "Blackbox probe 成功 vs 失敗",
       "gridPos": {
         "x": 12,
         "y": 48,
@@ -1278,7 +1278,7 @@
     {
       "id": 52,
       "type": "stat",
-      "title": "Probe targets total",
+      "title": "Probe 目標總數",
       "gridPos": {
         "x": 0,
         "y": 54,
@@ -1332,7 +1332,7 @@
     {
       "id": 53,
       "type": "stat",
-      "title": "TLS certs expiring in 30 days",
+      "title": "30 天內過期的 TLS 憑證",
       "gridPos": {
         "x": 6,
         "y": 54,
@@ -1390,7 +1390,7 @@
     {
       "id": 54,
       "type": "stat",
-      "title": "Ongoing blackbox errors",
+      "title": "進行中的 blackbox 錯誤",
       "gridPos": {
         "x": 12,
         "y": 54,
