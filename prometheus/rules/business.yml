@@ -3,20 +3,26 @@ groups:
     interval: 1m
     rules:
       - alert: ZeroPaymentHalfDay
-        # Fires if the backend recorded no successful payments for the past
-        # 12 hours AND we're currently in business hours. 1h was too aggressive
-        # for PPClub's traffic pattern (long quiet spells are normal).
+        # Fires only when BOTH:
+        #   - in business hours (Asia/Taipei 09:00-22:00 == UTC 01:00-14:00)
+        #   - 0 successful payments in the last 12h
+        #   - AND >0 payment-create attempts in the last 12h
+        # Without the "attempts > 0" clause, alert fires during genuinely
+        # quiet periods (new product, off-season) and becomes noise.
+        # With it, we only page when users ARE trying to pay but NONE is
+        # succeeding — a concrete business problem worth waking someone.
         expr: |
           (hour() >= 1 and hour() <= 14)
           and
-          sum(increase(ppc_payment_success_total[12h])) == 0
-        # hour() is UTC; Asia/Taipei 09:00-22:00 == UTC 01:00-14:00
+          (sum(increase(ppc_payment_success_total[12h])) OR on() vector(0)) == 0
+          and
+          sum(increase(ppc_payment_created_total[12h])) > 0
         for: 15m
         labels:
           severity: P1
           product: ppclub
         annotations:
-          summary: "PPClub: zero successful payments in last 12hr during business hours"
+          summary: "PPClub: {{ with query \"sum(increase(ppc_payment_created_total[12h]))\" }}{{ . | first | value }}{{ end }} payment attempts in last 12hr but 0 succeeded during business hours"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/payment-zero.md"
 
       - alert: RefundSurge
