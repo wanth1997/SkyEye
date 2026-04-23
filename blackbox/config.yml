@@ -1,0 +1,54 @@
+# Blackbox exporter modules. Referenced from prometheus.yml scrape jobs
+# via the `module` query param.
+#
+# Docs: https://github.com/prometheus/blackbox_exporter/blob/master/CONFIGURATION.md
+
+modules:
+  # Default HTTP probe: follows redirects, expects 2xx/3xx. Accepts TLS.
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: []       # default: 2xx
+      method: GET
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      tls_config:
+        insecure_skip_verify: false
+      # Body is empty by default; headers get sensible defaults.
+
+  # Probe a POST endpoint that expects a JSON body even when called empty
+  # (e.g. NewebPay QueryTradeInfo — returns a structured error for bad
+  # payload, but TCP + TLS + app response reaching us is enough signal).
+  http_post_any_response:
+    prober: http
+    timeout: 10s
+    http:
+      method: POST
+      valid_status_codes: [200, 400, 401, 422]   # "got a response from the app"
+      preferred_ip_protocol: ip4
+
+  # Simple TCP connect probe (no HTTP). Useful when the endpoint doesn't
+  # speak HTTP at all.
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: ip4
+
+  # HTTP probe that tolerates TLS errors. Use for endpoints we don't control
+  # (vendors with self-signed / expired / misconfigured certs) where we
+  # still want to know "is it reachable at all". Cert freshness is tracked
+  # separately by probe_ssl_earliest_cert_expiry.
+  http_2xx_insecure:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+      tls_config:
+        insecure_skip_verify: true
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]

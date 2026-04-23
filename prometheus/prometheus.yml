@@ -22,5 +22,59 @@ scrape_configs:
     static_configs:
       - targets: ['alertmanager:9093']
 
+  # External dependency HTTP probes. The blackbox exporter itself lives
+  # locally; each `target` below is the URL we want probed.
+  # Trick: relabel so `target` (the probed URL) becomes a label, and
+  # `__address__` points at the blackbox exporter instead.
+  # Strict TLS probe — for endpoints we expect to keep cert hygiene.
+  - job_name: blackbox
+    metrics_path: /probe
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - https://core.newebpay.com/API/QueryTradeInfo
+          - https://accounts.google.com/o/oauth2/v2/auth
+        labels:
+          probe_kind: external-api
+
+      - targets:
+          - https://ppclub.tw/api/health
+        labels:
+          probe_kind: self
+          product: ppclub
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: target
+      - source_labels: [__address__]
+        target_label: __param_target
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # Insecure TLS probe — vendors we don't control where we've accepted
+  # cert-validation gaps for integration reasons. Still probes
+  # reachability; cert freshness is a separate alert via
+  # probe_ssl_earliest_cert_expiry.
+  - job_name: blackbox-insecure
+    metrics_path: /probe
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    params:
+      module: [http_2xx_insecure]
+    static_configs:
+      - targets:
+          - https://server.hengfu-i.com/
+        labels:
+          probe_kind: external-api
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: target
+      - source_labels: [__address__]
+        target_label: __param_target
+      - target_label: __address__
+        replacement: blackbox:9115
+
   # All application metrics arrive via remote_write from Alloy agents.
   # Agents set external_labels {product, server_id}, so no per-target config here.

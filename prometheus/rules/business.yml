@@ -29,7 +29,8 @@ groups:
           summary: "PPClub: refund rate > 3x 7-day average"
 
       - alert: ExternalApiDown
-        expr: probe_success{job="blackbox"} == 0
+        # Match both strict and insecure TLS blackbox jobs
+        expr: probe_success{job=~"blackbox.*"} == 0
         for: 5m
         labels:
           severity: P1
@@ -38,9 +39,28 @@ groups:
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/external-api-down.md"
 
       - alert: ExternalApiSlow
-        expr: probe_duration_seconds{job="blackbox"} > 5
+        expr: probe_duration_seconds{job=~"blackbox.*"} > 5
         for: 10m
         labels:
           severity: P2
         annotations:
           summary: "External API {{ $labels.target }} probe > 5s for 10min"
+
+      - alert: TlsCertExpiringSoon
+        # Days left on the soonest-to-expire cert the probe observed.
+        # P2 when < 14 days, P1 when already expired (negative).
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+        for: 10m
+        labels:
+          severity: P2
+        annotations:
+          summary: "TLS cert for {{ $labels.target }} expires in {{ $value | humanize }} days"
+
+      - alert: TlsCertExpired
+        expr: (probe_ssl_earliest_cert_expiry - time()) < 0
+        for: 5m
+        labels:
+          severity: P1
+        annotations:
+          summary: "TLS cert for {{ $labels.target }} has EXPIRED ({{ $value | humanizeDuration }} ago)"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/external-api-down.md"
