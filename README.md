@@ -1,129 +1,137 @@
 # SkyEye
 
-Self-hosted monitoring stack for wanbrain products (PPClub, enyoung, …).
+Self-hosted monitoring stack for wanbrain products. Collects metrics + logs from every product's host via Grafana Alloy + Cloudflare Tunnel, alerts to Telegram + Gmail, stores cold data in S3. Zero public ports.
 
-Central machine (this repo) collects metrics + logs pushed from every product's Grafana Alloy agent via Cloudflare Tunnel. Alerts go to Telegram + Gmail. See [`monitoring-plan-v2.md`](./monitoring-plan-v2.md) for the full design rationale.
+**Design doc**: [`monitoring-plan-v2.md`](./monitoring-plan-v2.md)
+**Operations**: [`docs/operations.md`](./docs/operations.md)
+**New product onboarding**: [`docs/onboarding-new-product.md`](./docs/onboarding-new-product.md)
 
-## Stack
+## Deployed state
 
-| Component | Image | Role |
-|---|---|---|
-| Prometheus | `prom/prometheus:v2.54.1` | TSDB + alert rule engine |
-| Alertmanager | `prom/alertmanager:v0.27.0` | Alert routing → Telegram + Email |
-| Loki | `grafana/loki:3.1.1` | Log index + chunks → S3 |
-| Grafana | `grafana/grafana:11.2.0` | Dashboards + Explore UI |
-| cloudflared | `cloudflare/cloudflared:2024.10.0` | Zero-trust ingress (no public ports) |
+```
+PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
+  alloy → journald → Loki push URL              Loki (S3 chunks)
+        → node exporter → Prom push URL   ━━▶   Prometheus (TSDB + rules)
+        → /metrics (FastAPI) → same CF edge     Alertmanager → Telegram + Gmail
+        → ppc_* business counters               Grafana (CF Access + Google SSO)
+                                                Blackbox (external probes)
+  caddy.service                                 cloudflared tunnel
+  ppclub-backend.service (uvicorn)
+```
 
-All services bind only to `127.0.0.1` — the public surface is Cloudflare Tunnel.
+### What's observed right now
+- **Host layer**: CPU / RAM / disk / network / load (PPClub + monitoring-prod itself)
+- **App layer** (PPClub backend): HTTP req rate / 4xx / 5xx / p50-p99 latency per route
+- **Business layer** (PPClub): payment created / success / refund / event signup / user signup / phone verify / credit topup / external-API (NewebPay, Hengfu) p99 / scheduler heartbeats / unhandled exceptions
+- **Log layer**: PII-scrubbed journald (ppclub-backend + caddy) → central Loki
+- **External deps**: blackbox probes on NewebPay, Google OAuth, ppclub.tw, Hengfu (insecure TLS)
 
-## Layout
+### Alert rules active
+18 Prometheus rules across 4 groups:
+- `system.yml` — CPU, RAM, disk, OOM, systemd units
+- `app.yml` — BackendDown, 5xx rates, latency p99, unhandled exception surge
+- `business.yml` — ZeroPaymentHalfDay, RefundSurge, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
+- `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, DailyHeartbeat
+
+Severity → routing:
+- **P1** → 🚨 Telegram (sound) + Gmail backup (24/7)
+- **P2** → ⚠️ Telegram (silent) (work hours Asia/Taipei 09:00-21:00)
+- **P3** → Email daily digest
+
+## Directory map
 
 ```
 SkyEye/
-├── docker-compose.yml            # stack definition
-├── .env.example                  # → copy to .env
+├── README.md                            this file
+├── monitoring-plan-v2.md                design doc (2026-04-22 rewrite)
+├── docker-compose.yml                   the stack (5 services)
+├── .env.example                         GF_ADMIN_PW — the only env var
+│
 ├── alertmanager/
-│   ├── alertmanager.yml          # routes + receivers (Telegram A+C scheme, email)
-│   └── secrets/                  # tg_token, smtp_pass (gitignored)
+│   ├── alertmanager.yml                 routes + receivers (P1 loud / P2 silent / P3 digest)
+│   └── secrets/                         tg_token, smtp_pass (gitignored, 0644)
+│
 ├── prometheus/
-│   ├── prometheus.yml            # scrape + remote_write receiver
-│   └── rules/                    # system / app / business / deadman
-├── loki/
-│   └── loki-config.yml           # S3 backend, 30-day retention
+│   ├── prometheus.yml                   remote-write receiver + scrape + blackbox
+│   └── rules/                           system / app / business / deadman (18 rules)
+│
+├── loki/loki-config.yml                 S3 backend, delete API enabled
+│
+├── blackbox/config.yml                  http_2xx + http_2xx_insecure modules
+│
 ├── grafana/
-│   ├── provisioning/             # datasources + dashboard loader
-│   └── dashboards/               # dashboard JSON (filled in Phase 2/3)
+│   ├── provisioning/                    datasources (pinned UIDs) + dashboard loader
+│   └── dashboards/
+│       ├── Overview/                    Overview — All products
+│       ├── Hosts/                       Hosts — Node exporter (from grafana.com 1860)
+│       └── PPClub/                      backend-overview, business
+│
 ├── cloudflared/
-│   ├── config.yml                # ingress rules
-│   ├── credentials.json          # tunnel secret (gitignored)
-│   └── README.md                 # tunnel creation SOP
-├── infra/iam/
-│   ├── bootstrap.sh              # one-time AWS setup (IAM + S3 + VPC endpoint)
+│   ├── config.yml                       tunnel ingress (grafana / prom-push / loki-push)
+│   ├── credentials.json                 gitignored
+│   └── README.md                        tunnel creation SOP
+│
+├── agents/alloy/                        run on every product host
+│   ├── setup.sh                         apt install + render config + restart
+│   ├── config-logs.alloy.tmpl           journald → PII scrub → central Loki (Phase 2A)
+│   ├── config-metrics.alloy.tmpl        node_exporter → central Prom (Phase 2B)
+│   ├── config-app.alloy.tmpl            app /metrics scrape (Phase 2C)
+│   └── README.md                        env vars, verify, troubleshoot
+│
+├── infra/iam/                           one-time AWS bootstrap
+│   ├── bootstrap.sh                     IAM role + instance profile + S3 buckets + VPC endpoint
 │   ├── trust-policy.json
 │   ├── s3-policy.json
-│   ├── loki-lifecycle.json
-│   └── snapshots-lifecycle.json
+│   └── {loki,snapshots}-lifecycle.json
+│
 ├── scripts/
-│   └── bootstrap-monitoring-ec2.sh  # install docker + aws cli on the host
-├── runbooks/                     # incident response (Phase 3)
+│   ├── bootstrap-monitoring-ec2.sh      Docker + AWS CLI install
+│   ├── backup-prometheus.sh             TSDB snapshot → S3 (cron)
+│   └── install-prometheus-backup-cron.sh
+│
+├── runbooks/                            per-alert response guides
+│   ├── _template.md
+│   ├── backend-down.md
+│   ├── high-5xx.md
+│   ├── disk-full.md
+│   ├── payment-zero.md
+│   └── external-api-down.md
+│
 └── docs/
+    ├── operations.md                    day-2 ops: cadence, rotation, recovery
+    ├── onboarding-new-product.md        30-min checklist for adding a new service
+    ├── grafana-conventions.md           folder taxonomy, naming, UID, tags
+    ├── phase-2c-ppclub-changes.md       FastAPI /metrics code patch spec
+    ├── phase-2d-ppclub-business-counters.md   business Counter hook points
+    └── code-patterns/
+        └── python-fastapi.md            Layer 1 (HTTP) + Layer 2 (business) patterns
 ```
 
-## Getting started (Phase 1A)
+## Daily operation
 
-Prerequisites: Phase 0 of [monitoring-plan-v2.md §5](./monitoring-plan-v2.md) done — Telegram bot, Gmail SMTP App Password, Cloudflare tunnel token, Access service token.
+See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest version:
 
-### 1. AWS infrastructure (from a machine with AWS credentials)
+- **Morning habit**: check Gmail for the overnight P3 digest. If it arrived, the alert pipeline is alive.
+- **When paged (Telegram 🚨)**: click the Runbook link in the message.
+- **Dashboards**: https://grafana.wanbrain.com → Overview folder (daily), PPClub folder (deep dive), Hosts folder (troubleshoot).
 
-```bash
-cd infra/iam
-./bootstrap.sh
-```
+## Change workflow
 
-This creates:
-- IAM role `monitoring-prod-role` + instance profile
-- S3 buckets `skyeye-loki-chunks`, `skyeye-prometheus-snapshots` (encrypted, lifecycle, PAB)
-- VPC S3 Gateway Endpoint
-- Attaches the instance profile to EC2 `i-0ae4722dc931e26a1`
+- Everything is in git. Config changes → edit file → `docker compose up -d --force-recreate <service>` (or `curl -X POST localhost:<port>/-/reload` for Prom/AM live reload).
+- Dashboards: edit JSON in `grafana/dashboards/<folder>/<uid>.json`; Grafana picks up via provisioning within 60 s.
+- Alloy agents: on the target host, `git pull` + `sudo -E bash agents/alloy/setup.sh`.
 
-### 2. Host setup (on the monitoring-prod EC2)
+## Phase history
 
-```bash
-cd /home/ubuntu/SkyEye
-bash scripts/bootstrap-monitoring-ec2.sh
-# log out + back in to pick up docker group
-```
+| Phase | What it added |
+|---|---|
+| 1 | Central stack up (Prom / Loki / Grafana / AM / cloudflared). Telegram A+C + Gmail SMTP. CF Access SSO. S3 backing store for logs. |
+| 2A | Alloy on PPClub — journald + PII scrub → central Loki |
+| 2B | Alloy node_exporter → central Prom |
+| 2C | FastAPI `/metrics` (instrumentator) → central Prom |
+| 2D | Business counters: payment / refund / signup / external API / scheduler / exceptions |
+| 2E | Grafana dashboards (Overview / Hosts / PPClub × 2) |
+| 3 | Runbooks (5) + blackbox probes + TSDB S3 snapshot cron |
 
-### 3. Secrets
-
-```bash
-# .env (only one variable needed — docker-compose reads this automatically)
-cp .env.example .env
-openssl rand -base64 32 | tr -d '+/=' | head -c 32 > /tmp/pw
-echo "GF_ADMIN_PW=$(cat /tmp/pw)" > .env && rm /tmp/pw
-
-# Alertmanager secret files (see alertmanager/secrets/README.md)
-#   alertmanager/secrets/tg_token     # Telegram bot token
-#   alertmanager/secrets/smtp_pass    # Gmail app password
-```
-
-### 4. Cloudflare tunnel
-
-See [`cloudflared/README.md`](./cloudflared/README.md). Output: `cloudflared/credentials.json` (gitignored).
-
-### 5. Start
-
-```bash
-docker compose up -d
-docker compose ps        # all 5 services should be "running"
-docker compose logs -f alertmanager
-```
-
-## Verification checklist (Phase 1 exit)
-
-- [ ] `aws s3 ls` from the EC2 works without access keys (IAM role in effect)
-- [ ] `curl https://grafana.wanbrain.com` → redirected to Cloudflare Access login
-- [ ] After Google SSO → Grafana main page loads without showing Grafana's own login form
-- [ ] `docker compose exec prometheus wget -qO- http://alertmanager:9093/-/ready` → `OK`
-- [ ] Test alert lands in Telegram within 10s (P1 audible, P2 silent):
-  ```bash
-  curl -s -H 'Content-Type: application/json' -d '[{
-    "labels":{"alertname":"TestP1","severity":"P1","product":"test"},
-    "annotations":{"summary":"manual test"}
-  }]' http://127.0.0.1:9093/api/v2/alerts
-  ```
-- [ ] S3 has `index_*` objects after Loki ingests its first log line
-- [ ] Daily heartbeat email arrives next morning (proves Gmail SMTP path)
-
-## Day-to-day
-
-- **Reload rules without restart**: `curl -X POST http://127.0.0.1:9090/-/reload`
-- **Validate rule syntax**: `docker run --rm -v $PWD/prometheus:/p prom/prometheus:v2.54.1 promtool check rules /p/rules/*.yml`
-- **Check pending alerts**: `curl -s http://127.0.0.1:9093/api/v2/alerts | jq`
-- **Export a dashboard**: UI → Share → Export → Save JSON → commit to `grafana/dashboards/`
-
-## See also
-
-- [monitoring-plan-v2.md](./monitoring-plan-v2.md) — full design doc
-- [cloudflared/README.md](./cloudflared/README.md) — tunnel setup
-- [alertmanager/secrets/README.md](./alertmanager/secrets/README.md) — secret file handling
+See `git log` for commit-level history. Incidents the system has already caught (and resolved) in its short life:
+- **2026-04-23**: Hengfu LE cert expired (their end); 32-min window of expired cert being served; their team fixed after their own monitoring alerted them.
