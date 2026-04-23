@@ -22,6 +22,21 @@ scrape_configs:
     static_configs:
       - targets: ['alertmanager:9093']
 
+  # Loki self-metrics — for SkyEye stack-health dashboard.
+  - job_name: loki
+    static_configs:
+      - targets: ['loki:3100']
+
+  # Grafana self-metrics (Grafana exposes Prometheus format at /metrics).
+  - job_name: grafana
+    static_configs:
+      - targets: ['grafana:3000']
+
+  # Blackbox exporter self-metrics (distinct from the probe results).
+  - job_name: blackbox-exporter
+    static_configs:
+      - targets: ['blackbox:9115']
+
   # External dependency HTTP probes. The blackbox exporter itself lives
   # locally; each `target` below is the URL we want probed.
   # Trick: relabel so `target` (the probed URL) becomes a label, and
