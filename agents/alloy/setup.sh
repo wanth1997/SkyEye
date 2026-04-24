@@ -81,12 +81,43 @@ fi
 echo "==> Rendering $ALLOY_CONFIG"
 mkdir -p "$(dirname "$ALLOY_CONFIG")"
 
+# Build the product-relabel rules block. Two modes:
+#   JOURNAL_PRODUCT_MAP unset  → single-tenant: all units → $PRODUCT
+#   JOURNAL_PRODUCT_MAP set    → multi-tenant: parse 'regex=product;regex=product'
+#
+# Format example for shared host:
+#   export JOURNAL_PRODUCT_MAP='ppclub-backend\.service|caddy\.service=ppclub;enyoung-server\.service=enyoung'
+PRODUCT_RELABEL_RULES=""
+if [ -n "${JOURNAL_PRODUCT_MAP:-}" ]; then
+  echo "==> JOURNAL_PRODUCT_MAP set — multi-tenant per-unit product labels"
+  IFS=';' read -ra PAIRS <<< "$JOURNAL_PRODUCT_MAP"
+  for pair in "${PAIRS[@]}"; do
+    pair="${pair# }"   # trim leading space
+    unit_regex="${pair%=*}"
+    product_val="${pair##*=}"
+    PRODUCT_RELABEL_RULES+="
+  rule {
+    source_labels = [\"__journal__systemd_unit\"]
+    regex         = \"${unit_regex}\"
+    target_label  = \"product\"
+    replacement   = \"${product_val}\"
+  }"
+  done
+else
+  PRODUCT_RELABEL_RULES="
+  rule {
+    source_labels = [\"__journal__systemd_unit\"]
+    target_label  = \"product\"
+    replacement   = \"${PRODUCT}\"
+  }"
+fi
+
 # Only listed variables get substituted — unlisted $vars (including Alloy
 # regex capture refs like $1) stay intact.
-ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET'
+ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET $PRODUCT_RELABEL_RULES'
 export PRODUCT SERVER_ID JOURNAL_MATCHES LOKI_PUSH_URL \
        CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET \
-       PROM_PUSH_URL APP_METRICS_TARGET
+       PROM_PUSH_URL APP_METRICS_TARGET PRODUCT_RELABEL_RULES
 
 # Always: logs section (Phase 2A)
 envsubst "$ENVSUBST_VARS" < config-logs.alloy.tmpl > "$ALLOY_CONFIG"
