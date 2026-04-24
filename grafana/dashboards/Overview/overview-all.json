@@ -19,34 +19,18 @@
       "id": 1,
       "type": "row",
       "title": "🟢 狀態總覽",
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 24,
-        "h": 1
-      },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
       "collapsed": false
     },
     {
       "id": 10,
       "type": "stat",
       "title": "被監測產品數",
-      "gridPos": {
-        "x": 0,
-        "y": 1,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
+      "gridPos": { "x": 0, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
+          "datasource": { "type": "loki", "uid": "loki" },
           "expr": "count(sum by (product) (count_over_time({product=~\".+\"}[1h])))",
           "queryType": "instant",
           "refId": "A",
@@ -54,13 +38,7 @@
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto",
         "colorMode": "background",
         "graphMode": "none",
@@ -69,15 +47,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
           "noValue": "0"
         },
         "overrides": []
@@ -88,35 +58,18 @@
       "id": 11,
       "type": "stat",
       "title": "離線產品數",
-      "gridPos": {
-        "x": 6,
-        "y": 1,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 6, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "(count(count by (product) (up{product!=\"\"} == 0)) OR on() vector(0))",
           "refId": "A",
           "instant": true
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto",
         "colorMode": "background",
         "graphMode": "none",
@@ -128,14 +81,8 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
             ]
           }
         },
@@ -146,35 +93,18 @@
       "id": 12,
       "type": "stat",
       "title": "現用告警(High/Medium)",
-      "gridPos": {
-        "x": 12,
-        "y": 1,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 12, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "sum(ALERTS{alertstate=\"firing\",severity=~\"High|Medium\"}) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto",
         "colorMode": "background",
         "graphMode": "none",
@@ -186,18 +116,9 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 3
-              }
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
             ]
           },
           "noValue": "0"
@@ -209,35 +130,18 @@
       "id": 13,
       "type": "stat",
       "title": "24 小時內寄出 Email",
-      "gridPos": {
-        "x": 18,
-        "y": 1,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 18, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "sum(increase(alertmanager_notifications_total{integration=\"email\"}[24h])) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
         "textMode": "auto",
         "colorMode": "background",
         "graphMode": "none",
@@ -249,14 +153,8 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
             ]
           },
           "decimals": 0,
@@ -264,51 +162,505 @@
         },
         "overrides": []
       },
-      "description": "increase(alertmanager_notifications_total{integration=\"email\"}[24h]). Should be >= 1 per day — the DailyHeartbeat digest alone guarantees that. 0 for 24h+ means the Prom → AM → Gmail SMTP chain is broken. (Note: the metric doesn't expose per-receiver counts, so this is a coarse liveness probe; the real verification is still the email in your inbox.)"
+      "description": "increase(alertmanager_notifications_total{integration=\"email\"}[24h]). Should be >= 1 per day — the DailyHeartbeat digest alone guarantees that. 0 for 24h+ means the Prom → AM → Gmail SMTP chain is broken."
     },
+
+    {
+      "id": 5,
+      "type": "row",
+      "title": "🚦 各產品健康度 — 一眼看",
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+    {
+      "id": 50,
+      "type": "table",
+      "title": "各產品 Traffic Light — 每列一個 product，紅/黃/綠立判",
+      "description": "Up=Alloy/app metrics 是否流通；Req/s=HTTP 流量；5xx%=server error 比率(5m window)；p95=延遲 95 百分位；CPU/RAM/Disk=該產品所在 host。沒有 /metrics 的 product(例如 enyoung)會在這裡看不到 — 它們只出現在上方「被監測產品數」的 Loki 計數裡。",
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (product, server_id) (up{job=~\".+-backend\"})",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (product) (rate(http_requests_total[5m]))",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 * (sum by (product) (rate(http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum by (product) (rate(http_requests_total[5m])), 0.0001))",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "1000 * histogram_quantile(0.95, sum by (product, le) (rate(http_request_duration_seconds_bucket[5m])))",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "E",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 - (avg by (product) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "F",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "(1 - avg by (product) (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "G",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "(1 - avg by (product) (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})) * 100",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": { "byField": "product", "mode": "outer" }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "service": true
+            },
+            "indexByName": {
+              "product": 0,
+              "server_id": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5,
+              "Value #E": 6,
+              "Value #F": 7,
+              "Value #G": 8
+            },
+            "renameByName": {
+              "product": "Product",
+              "server_id": "Server",
+              "Value #A": "Up",
+              "Value #B": "Req/s",
+              "Value #C": "5xx %",
+              "Value #D": "p95 (ms)",
+              "Value #E": "CPU %",
+              "Value #F": "RAM %",
+              "Value #G": "Disk %"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": { "show": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center" },
+          "noValue": "—"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Up" },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-background", "mode": "basic" }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "1": { "text": "✅", "color": "green", "index": 0 } } },
+                  { "type": "value", "options": { "0": { "text": "❌", "color": "red", "index": 1 } } }
+                ]
+              },
+              { "id": "custom.width", "value": 80 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Req/s" },
+            "properties": [
+              { "id": "unit", "value": "reqps" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "5xx %" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "decimals", "value": 2 },
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-background", "mode": "basic" }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 1 },
+                    { "color": "red", "value": 5 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p95 (ms)" },
+            "properties": [
+              { "id": "unit", "value": "ms" },
+              { "id": "decimals", "value": 0 },
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-background", "mode": "basic" }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 500 },
+                    { "color": "red", "value": 1500 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "CPU %" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "decimals", "value": 1 },
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-background", "mode": "basic" }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 70 },
+                    { "color": "red", "value": 90 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "RAM %" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "decimals", "value": 1 },
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-background", "mode": "basic" }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 75 },
+                    { "color": "red", "value": 90 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Disk %" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "decimals", "value": 1 },
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-background", "mode": "basic" }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 70 },
+                    { "color": "red", "value": 85 }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    {
+      "id": 6,
+      "type": "row",
+      "title": "🛡️ 基礎建設（監控本身的健康）",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+    {
+      "id": 60,
+      "type": "stat",
+      "title": "Prometheus",
+      "gridPos": { "x": 0, "y": 15, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up{job=\"prometheus\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 1 } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "noValue": "?"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 61,
+      "type": "stat",
+      "title": "Loki",
+      "gridPos": { "x": 4, "y": 15, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up{job=\"loki\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 1 } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "noValue": "?"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 62,
+      "type": "stat",
+      "title": "Grafana",
+      "gridPos": { "x": 8, "y": 15, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up{job=\"grafana\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 1 } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "noValue": "?"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 63,
+      "type": "stat",
+      "title": "Alertmanager",
+      "gridPos": { "x": 12, "y": 15, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up{job=\"alertmanager\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 1 } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "noValue": "?"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 64,
+      "type": "stat",
+      "title": "Blackbox",
+      "gridPos": { "x": 16, "y": 15, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up{job=\"blackbox-exporter\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 1 } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "noValue": "?"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 65,
+      "type": "stat",
+      "title": "Ingest 樣本/秒",
+      "description": "rate(prometheus_tsdb_head_samples_appended_total[5m]). Covers both local scrapes (self-monitoring) and remote_write from Alloy agents. If this drops to near-zero, the ingest pipeline is broken.",
+      "gridPos": { "x": 20, "y": 15, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(prometheus_tsdb_head_samples_appended_total[5m]))",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "green", "value": 200 }
+            ]
+          },
+          "noValue": "0"
+        },
+        "overrides": []
+      }
+    },
+
     {
       "id": 2,
       "type": "row",
-      "title": "🖥️ 資源 — $product",
-      "gridPos": {
-        "x": 0,
-        "y": 5,
-        "w": 24,
-        "h": 1
-      },
+      "title": "🖥️ 資源 — $product (切換上方變數)",
+      "gridPos": { "x": 0, "y": 19, "w": 24, "h": 1 },
       "collapsed": false
     },
     {
       "id": 20,
       "type": "gauge",
       "title": "CPU 使用率 %",
-      "gridPos": {
-        "x": 0,
-        "y": 6,
-        "w": 8,
-        "h": 6
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 0, "y": 20, "w": 8, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "100 - (avg by (product) (irate(node_cpu_seconds_total{product=\"$product\",mode=\"idle\"}[5m])) * 100)",
           "refId": "A",
           "instant": true
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"] },
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "orientation": "auto"
@@ -321,18 +673,9 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 90
-              }
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 90 }
             ]
           },
           "noValue": "0"
@@ -344,33 +687,18 @@
       "id": 21,
       "type": "gauge",
       "title": "RAM 使用率 %",
-      "gridPos": {
-        "x": 8,
-        "y": 6,
-        "w": 8,
-        "h": 6
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 8, "y": 20, "w": 8, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "(1 - (node_memory_MemAvailable_bytes{product=\"$product\"} / node_memory_MemTotal_bytes{product=\"$product\"})) * 100",
           "refId": "A",
           "instant": true
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"] },
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "orientation": "auto"
@@ -383,18 +711,9 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 75
-              },
-              {
-                "color": "red",
-                "value": 90
-              }
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 75 },
+              { "color": "red", "value": 90 }
             ]
           }
         },
@@ -405,33 +724,18 @@
       "id": 22,
       "type": "gauge",
       "title": "根目錄使用率 %",
-      "gridPos": {
-        "x": 16,
-        "y": 6,
-        "w": 8,
-        "h": 6
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 16, "y": 20, "w": 8, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "(1 - node_filesystem_avail_bytes{product=\"$product\",mountpoint=\"/\"} / node_filesystem_size_bytes{product=\"$product\",mountpoint=\"/\"}) * 100",
           "refId": "A",
           "instant": true
         }
       ],
       "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
+        "reduceOptions": { "calcs": ["lastNotNull"] },
         "showThresholdLabels": false,
         "showThresholdMarkers": true,
         "orientation": "auto"
@@ -444,18 +748,9 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 85
-              }
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 85 }
             ]
           }
         },
@@ -466,57 +761,31 @@
       "id": 3,
       "type": "row",
       "title": "📈 趨勢",
-      "gridPos": {
-        "x": 0,
-        "y": 12,
-        "w": 24,
-        "h": 1
-      },
+      "gridPos": { "x": 0, "y": 26, "w": 24, "h": 1 },
       "collapsed": false
     },
     {
       "id": 30,
       "type": "timeseries",
       "title": "各產品 CPU %",
-      "gridPos": {
-        "x": 0,
-        "y": 13,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 0, "y": 27, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "100 - (avg by (product) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
           "refId": "A",
           "legendFormat": "{{product}}"
         }
       ],
       "options": {
-        "tooltip": {
-          "mode": "multi"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        }
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
       },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity"
-          },
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "gradientMode": "opacity" },
           "noValue": "0"
         },
         "overrides": []
@@ -526,45 +795,24 @@
       "id": 31,
       "type": "timeseries",
       "title": "各產品 Log 速率 (行/秒)",
-      "gridPos": {
-        "x": 12,
-        "y": 13,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
+      "gridPos": { "x": 12, "y": 27, "w": 12, "h": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
       "targets": [
         {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
+          "datasource": { "type": "loki", "uid": "loki" },
           "expr": "sum by (product) (rate({product=~\".+\"}[1m]))",
           "refId": "A",
           "legendFormat": "{{product}}"
         }
       ],
       "options": {
-        "tooltip": {
-          "mode": "multi"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        }
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "gradientMode": "opacity"
-          },
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "gradientMode": "opacity" },
           "noValue": "0"
         },
         "overrides": []
@@ -574,35 +822,19 @@
       "id": 4,
       "type": "row",
       "title": "🚨 告警 — 只含 High / Medium(已濾掉 heartbeat 類)",
-      "gridPos": {
-        "x": 0,
-        "y": 21,
-        "w": 24,
-        "h": 1
-      },
+      "gridPos": { "x": 0, "y": 35, "w": 24, "h": 1 },
       "collapsed": false
     },
     {
       "id": 40,
       "type": "table",
       "title": "🚨 現用告警 — High / Medium (需處理)",
-      "gridPos": {
-        "x": 0,
-        "y": 22,
-        "w": 24,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 0, "y": 36, "w": 24, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "description": "Firing alerts routed to Telegram / Email. This is what you should fix.",
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "ALERTS{alertstate=\"firing\",severity=~\"High|Medium\"}",
           "refId": "A",
           "format": "table",
@@ -631,32 +863,16 @@
           }
         }
       ],
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } },
       "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "left"
-          }
-        },
+        "defaults": { "custom": { "align": "left" } },
         "overrides": [
           {
-            "matcher": {
-              "id": "byName",
-              "options": "Severity"
-            },
+            "matcher": { "id": "byName", "options": "Severity" },
             "properties": [
               {
                 "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "basic"
-                }
+                "value": { "type": "color-background", "mode": "basic" }
               },
               {
                 "id": "mappings",
@@ -664,18 +880,9 @@
                   {
                     "type": "value",
                     "options": {
-                      "High": {
-                        "color": "red",
-                        "index": 0
-                      },
-                      "Medium": {
-                        "color": "yellow",
-                        "index": 1
-                      },
-                      "Low": {
-                        "color": "blue",
-                        "index": 2
-                      }
+                      "High": { "color": "red", "index": 0 },
+                      "Medium": { "color": "yellow", "index": 1 },
+                      "Low": { "color": "blue", "index": 2 }
                     }
                   }
                 ]
@@ -689,23 +896,12 @@
       "id": 41,
       "type": "table",
       "title": "ℹ️ 資訊性 — Low / heartbeat (正常都會有)",
-      "gridPos": {
-        "x": 0,
-        "y": 30,
-        "w": 24,
-        "h": 6
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "gridPos": { "x": 0, "y": 44, "w": 24, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "description": "Low alerts like DailyHeartbeat (vector(1)) — always firing on purpose as an end-to-end liveness probe of the alert pipeline.",
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
           "expr": "ALERTS{alertstate=\"firing\",severity=~\"Low\"}",
           "refId": "A",
           "format": "table",
@@ -734,32 +930,16 @@
           }
         }
       ],
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false
-        }
-      },
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } },
       "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "left"
-          }
-        },
+        "defaults": { "custom": { "align": "left" } },
         "overrides": [
           {
-            "matcher": {
-              "id": "byName",
-              "options": "Severity"
-            },
+            "matcher": { "id": "byName", "options": "Severity" },
             "properties": [
               {
                 "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "basic"
-                }
+                "value": { "type": "color-background", "mode": "basic" }
               },
               {
                 "id": "mappings",
@@ -767,18 +947,9 @@
                   {
                     "type": "value",
                     "options": {
-                      "High": {
-                        "color": "red",
-                        "index": 0
-                      },
-                      "Medium": {
-                        "color": "yellow",
-                        "index": 1
-                      },
-                      "Low": {
-                        "color": "blue",
-                        "index": 2
-                      }
+                      "High": { "color": "red", "index": 0 },
+                      "Medium": { "color": "yellow", "index": 1 },
+                      "Low": { "color": "blue", "index": 2 }
                     }
                   }
                 ]
@@ -795,10 +966,7 @@
         "name": "product",
         "label": "產品",
         "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "prometheus"
-        },
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
         "query": {
           "query": "label_values(up{product!=\"\"}, product)",
           "refId": "StandardVariableQuery"
@@ -816,7 +984,5 @@
       }
     ]
   },
-  "annotations": {
-    "list": []
-  }
+  "annotations": { "list": [] }
 }
