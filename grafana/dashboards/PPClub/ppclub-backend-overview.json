@@ -164,7 +164,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(http_requests_total{product=\"$product\",status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total{product=\"$product\"}[5m])), 0.001)",
+          "expr": "(sum(rate(http_requests_total{product=\"$product\",status=~\"5..\"}[5m])) or on() vector(0)) / clamp_min(sum(rate(http_requests_total{product=\"$product\"}[5m])), 0.001)",
           "refId": "A",
           "instant": true
         }
@@ -202,7 +202,8 @@
               }
             ]
           },
-          "decimals": 3
+          "decimals": 3,
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -265,7 +266,8 @@
               }
             ]
           },
-          "decimals": 3
+          "decimals": 3,
+          "noValue": "N/A"
         },
         "overrides": []
       }
