@@ -118,7 +118,7 @@ if [ -n "${JOURNAL_PRODUCT_MAP:-}" ]; then
     JOURNAL_SOURCES+="
 loki.source.journal \"${product_val}\" {
   matches    = \"${matches_str}\"
-  max_age    = \"12h\"
+  max_age    = \"5m\"
   forward_to = [loki.process.scrub_pii.receiver]
   labels     = {
     product   = \"${product_val}\",
@@ -133,7 +133,7 @@ else
   JOURNAL_SOURCES="
 loki.source.journal \"system\" {
   matches    = \"${JOURNAL_MATCHES}\"
-  max_age    = \"12h\"
+  max_age    = \"5m\"
   forward_to = [loki.process.scrub_pii.receiver]
   labels     = {
     product   = \"${PRODUCT}\",
