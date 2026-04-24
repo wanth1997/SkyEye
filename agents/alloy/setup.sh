@@ -81,43 +81,75 @@ fi
 echo "==> Rendering $ALLOY_CONFIG"
 mkdir -p "$(dirname "$ALLOY_CONFIG")"
 
-# Build the product-relabel rules block. Two modes:
-#   JOURNAL_PRODUCT_MAP unset  → single-tenant: all units → $PRODUCT
-#   JOURNAL_PRODUCT_MAP set    → multi-tenant: parse 'regex=product;regex=product'
+# Build JOURNAL_SOURCES — one loki.source.journal block per product.
+#   JOURNAL_PRODUCT_MAP unset → single source covering all JOURNAL_MATCHES,
+#                                tagged product=$PRODUCT.
+#   JOURNAL_PRODUCT_MAP set   → parse 'units_spec=product;units_spec=product'
+#                                and emit one source per product. Each source's
+#                                matches filter is built from units_spec (the
+#                                part before the `=`), which supports | as a
+#                                unit separator (e.g. "a.service|b.service").
+#                                Backslash-escapes in units_spec are stripped
+#                                (so \.service is treated as .service).
 #
-# Format example for shared host:
-#   export JOURNAL_PRODUCT_MAP='ppclub-backend\.service|caddy\.service=ppclub;enyoung-server\.service=enyoung'
-PRODUCT_RELABEL_RULES=""
+# Example for a shared host:
+#   export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung'
+JOURNAL_SOURCES=""
 if [ -n "${JOURNAL_PRODUCT_MAP:-}" ]; then
-  echo "==> JOURNAL_PRODUCT_MAP set — multi-tenant per-unit product labels"
+  echo "==> JOURNAL_PRODUCT_MAP set — multi-tenant: one journal source per product"
   IFS=';' read -ra PAIRS <<< "$JOURNAL_PRODUCT_MAP"
   for pair in "${PAIRS[@]}"; do
-    pair="${pair# }"   # trim leading space
-    unit_regex="${pair%=*}"
-    product_val="${pair##*=}"
-    PRODUCT_RELABEL_RULES+="
-  rule {
-    source_labels = [\"__journal__systemd_unit\"]
-    regex         = \"${unit_regex}\"
-    target_label  = \"product\"
-    replacement   = \"${product_val}\"
-  }"
+    pair="${pair# }"
+    units_spec="${pair%=*}"        # e.g. "a.service|b.service"
+    product_val="${pair##*=}"      # e.g. "ppclub"
+
+    # Strip any backslash escapes left over from regex-style syntax
+    units_spec_clean="${units_spec//\\/}"
+
+    # Split on | and build the journalctl matches string:
+    #   "_SYSTEMD_UNIT=a.service _SYSTEMD_UNIT=b.service"
+    IFS='|' read -ra UNITS <<< "$units_spec_clean"
+    matches_str=""
+    for u in "${UNITS[@]}"; do
+      matches_str+=" _SYSTEMD_UNIT=${u}"
+    done
+    matches_str="${matches_str# }"
+
+    JOURNAL_SOURCES+="
+loki.source.journal \"${product_val}\" {
+  matches    = \"${matches_str}\"
+  max_age    = \"12h\"
+  forward_to = [loki.process.scrub_pii.receiver]
+  labels     = {
+    product   = \"${product_val}\",
+    server_id = \"${SERVER_ID}\",
+    job       = \"journald\",
+  }
+}
+"
   done
 else
-  PRODUCT_RELABEL_RULES="
-  rule {
-    source_labels = [\"__journal__systemd_unit\"]
-    target_label  = \"product\"
-    replacement   = \"${PRODUCT}\"
-  }"
+  # Single-tenant: one source covering JOURNAL_MATCHES, tagged $PRODUCT
+  JOURNAL_SOURCES="
+loki.source.journal \"system\" {
+  matches    = \"${JOURNAL_MATCHES}\"
+  max_age    = \"12h\"
+  forward_to = [loki.process.scrub_pii.receiver]
+  labels     = {
+    product   = \"${PRODUCT}\",
+    server_id = \"${SERVER_ID}\",
+    job       = \"journald\",
+  }
+}
+"
 fi
 
 # Only listed variables get substituted — unlisted $vars (including Alloy
 # regex capture refs like $1) stay intact.
-ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET $PRODUCT_RELABEL_RULES'
+ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET $JOURNAL_SOURCES'
 export PRODUCT SERVER_ID JOURNAL_MATCHES LOKI_PUSH_URL \
        CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET \
-       PROM_PUSH_URL APP_METRICS_TARGET PRODUCT_RELABEL_RULES
+       PROM_PUSH_URL APP_METRICS_TARGET JOURNAL_SOURCES
 
 # Always: logs section (Phase 2A)
 envsubst "$ENVSUBST_VARS" < config-logs.alloy.tmpl > "$ALLOY_CONFIG"
