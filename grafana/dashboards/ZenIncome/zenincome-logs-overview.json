@@ -75,7 +75,8 @@
               }
             ]
           },
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -138,7 +139,8 @@
               }
             ]
           },
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -197,7 +199,8 @@
               }
             ]
           },
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -255,7 +258,8 @@
               }
             ]
           },
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -310,7 +314,8 @@
               }
             ]
           },
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -389,7 +394,8 @@
             "fillOpacity": 10,
             "gradientMode": "opacity",
             "showPoints": "never"
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -437,7 +443,8 @@
             "fillOpacity": 10,
             "gradientMode": "opacity",
             "showPoints": "never"
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -497,7 +504,8 @@
             "fillOpacity": 10,
             "gradientMode": "opacity",
             "showPoints": "never"
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -572,7 +580,8 @@
             "fillOpacity": 10,
             "gradientMode": "opacity",
             "showPoints": "never"
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -620,7 +629,8 @@
             "fillOpacity": 10,
             "gradientMode": "opacity",
             "showPoints": "never"
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -677,7 +687,8 @@
             "fillOpacity": 10,
             "gradientMode": "opacity",
             "showPoints": "never"
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }

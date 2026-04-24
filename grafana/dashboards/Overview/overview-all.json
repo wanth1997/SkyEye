@@ -77,7 +77,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -198,7 +199,8 @@
                 "value": 3
               }
             ]
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -257,7 +259,8 @@
               }
             ]
           },
-          "decimals": 0
+          "decimals": 0,
+          "noValue": "0"
         },
         "overrides": []
       },
@@ -331,7 +334,8 @@
                 "value": 90
               }
             ]
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -512,7 +516,8 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "gradientMode": "opacity"
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
@@ -559,7 +564,8 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "gradientMode": "opacity"
-          }
+          },
+          "noValue": "0"
         },
         "overrides": []
       }
