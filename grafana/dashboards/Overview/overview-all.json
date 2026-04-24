@@ -30,7 +30,7 @@
     {
       "id": 10,
       "type": "stat",
-      "title": "上線產品數",
+      "title": "被監測產品數",
       "gridPos": {
         "x": 0,
         "y": 1,
@@ -38,16 +38,17 @@
         "h": 4
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "count(count by (product) (up{product!=\"\"} == 1))",
+          "expr": "count(sum by (product) (count_over_time({product=~\".+\"}[1h])))",
+          "queryType": "instant",
           "refId": "A",
           "instant": true
         }
@@ -79,7 +80,8 @@
           }
         },
         "overrides": []
-      }
+      },
+      "description": "Distinct products with log activity in the last hour. Uses Loki (not Prom `up`) so products that haven't instrumented /metrics still count."
     },
     {
       "id": 11,
