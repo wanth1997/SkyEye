@@ -6,7 +6,7 @@ SkyEye's Alloy agent. ~5 lines of code. No business logic change.
 ## Scope
 
 - **Target service**: `zenincome-api.service` (the main bot; not the web one)
-- **Listen on**: `127.0.0.1:9100` (localhost only — Alloy scrapes it over the local loopback)
+- **Listen on**: `127.0.0.1:2112` (localhost only — Alloy scrapes it over the local loopback)
 - **Exposed**: Go runtime (`go_*`) + process (`process_*`) metrics
 - **Phase 2B upgrade**: Layer 2 (HTTP middleware) and Layer 3 (business
   counters) come later in separate patches — see
@@ -18,7 +18,7 @@ SkyEye's Alloy agent. ~5 lines of code. No business logic change.
   gap (< 2 s) where the bot isn't running. Not urgent, but pick a moment
   when you're OK with a sub-second gap in the WebSocket loop.
 - Port 9100 must be free on trading01. Check: `sudo ss -tlnp | grep :9100`
-- Firewall / SG: bind `127.0.0.1:9100` means NO external access — Alloy
+- Firewall / SG: bind `127.0.0.1:2112` means NO external access — Alloy
   on the same host scrapes via loopback. No AWS SG / iptables change needed.
 
 ## Step 1: add the dependency
@@ -70,7 +70,7 @@ In `main()`, **before** the main business loop / blocking call, add:
 func main() {
     // ... existing initialization (config load, connection, etc) ...
 
-    startMetricsServer("127.0.0.1:9100")   // ← NEW
+    startMetricsServer("127.0.0.1:2112")   // ← NEW
 
     // ... existing business loop (blocking) ...
 }
@@ -97,7 +97,7 @@ systemctl is-active zenincome-api.service
 ## Step 4: verify `/metrics` responds locally
 
 ```bash
-curl -sf http://127.0.0.1:9100/metrics | head -20
+curl -sf http://127.0.0.1:2112/metrics | head -20
 # Expect lines like:
 # # HELP go_gc_duration_seconds A summary of the pause duration ...
 # # TYPE go_gc_duration_seconds summary
@@ -107,7 +107,7 @@ curl -sf http://127.0.0.1:9100/metrics | head -20
 
 If you see Prom exposition format (lines starting with `# HELP` and metric name=value pairs), you're done on the bot side.
 
-If curl fails (connection refused): the `startMetricsServer()` call didn't execute. Check `journalctl -u zenincome-api --since=1m | grep metrics` — you should see `metrics server listening on 127.0.0.1:9100`.
+If curl fails (connection refused): the `startMetricsServer()` call didn't execute. Check `journalctl -u zenincome-api --since=1m | grep metrics` — you should see `metrics server listening on 127.0.0.1:2112`.
 
 If curl returns the bot's business HTML/JSON instead: your app's main router caught `/metrics` before the metrics mux could. Either move the `startMetricsServer()` call up in main(), or use a distinct port.
 
@@ -125,14 +125,14 @@ export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
 export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
 
 # NEW — add this one line
-export APP_METRICS_TARGET=localhost:9100
+export APP_METRICS_TARGET=localhost:2112
 
 # CF creds unchanged
 
 sudo -E bash agents/alloy/setup.sh
 ```
 
-setup.sh will print `==> APP_METRICS_TARGET set (localhost:9100) — appending app scrape section`.
+setup.sh will print `==> APP_METRICS_TARGET set (localhost:2112) — appending app scrape section`.
 
 ## Step 6: verify central Prometheus picked it up
 
