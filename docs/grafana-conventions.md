@@ -94,5 +94,6 @@ TODO (low priority): add a pre-commit hook that runs `jq` against every dashboar
 | PPClub | PPClub — Backend overview | `ppclub-backend-overview` | Built in-house (replaces grafana.com 18739; queries adapted to our `product` / `status` label shape) |
 | PPClub | PPClub — Business | `ppclub-business` | Built in-house — payment / refund / external API / scheduler heartbeats |
 | SkyEye | SkyEye — Stack health | `skyeye-stack-health` | Built in-house — meta-monitoring: Prom TSDB / Loki ingest / AM notifications / Grafana HTTP / blackbox |
+| enyoung | enyoung — 日誌總覽 | `enyoung-logs-overview` | Log-derived observability: LogQL regexp parser extracts method/status/duration from Go chi access log. Stand-in until enyoung exposes `/metrics`. |
 
 Add a row here each time a new dashboard is committed.
