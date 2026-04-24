@@ -82,8 +82,12 @@ Placement: start it AFTER logging / config is ready (so the goroutine's log.Prin
 
 ```bash
 cd /home/ubuntu/go/src/ZenIncome
-go build -o bin/zenincome-api ./cmd/api  # or whatever your build command is
-# (if systemd unit runs `go run` directly, no build needed)
+
+# Use absolute go path — /usr/local/go/bin/go isn't on ubuntu user's PATH by default
+# cmd/server/main.go is the entry point that systemd runs (bin/server).
+# The service is named zenincome-api.service for historical reasons; binary
+# is bin/server. Don't try to reconcile — it's fine.
+/usr/local/go/bin/go build -o bin/server ./cmd/server
 
 sudo systemctl restart zenincome-api.service
 sleep 2
