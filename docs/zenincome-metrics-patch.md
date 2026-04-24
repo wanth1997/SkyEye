@@ -6,7 +6,7 @@ SkyEye's Alloy agent. ~5 lines of code. No business logic change.
 ## Scope
 
 - **Target service**: `zenincome-api.service` (the main bot; not the web one)
-- **Listen on**: `127.0.0.1:2112` (localhost only — Alloy scrapes it over the local loopback)
+- **Listen on**: `127.0.0.1:2112` (localhost only — Alloy scrapes via loopback). Port 2112 is the `prometheus/client_golang` canonical default; avoids collision with node_exporter's 9100 on hosts that might later host a full node_exporter process.
 - **Exposed**: Go runtime (`go_*`) + process (`process_*`) metrics
 - **Phase 2B upgrade**: Layer 2 (HTTP middleware) and Layer 3 (business
   counters) come later in separate patches — see
@@ -17,7 +17,7 @@ SkyEye's Alloy agent. ~5 lines of code. No business logic change.
 - Downtime during `systemctl restart zenincome-api.service`: the brief
   gap (< 2 s) where the bot isn't running. Not urgent, but pick a moment
   when you're OK with a sub-second gap in the WebSocket loop.
-- Port 9100 must be free on trading01. Check: `sudo ss -tlnp | grep :9100`
+- Port 2112 must be free on the target host. Check: `sudo ss -tlnp | grep :2112`
 - Firewall / SG: bind `127.0.0.1:2112` means NO external access — Alloy
   on the same host scrapes via loopback. No AWS SG / iptables change needed.
 
