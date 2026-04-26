@@ -2,27 +2,46 @@ groups:
   - name: business
     interval: 1m
     rules:
-      - alert: ZeroPaymentHalfDay
-        # Fires only when BOTH:
-        #   - in business hours (Asia/Taipei 09:00-22:00 == UTC 01:00-14:00)
-        #   - 0 successful payments in the last 12h
-        #   - AND >0 payment-create attempts in the last 12h
-        # Without the "attempts > 0" clause, alert fires during genuinely
-        # quiet periods (new product, off-season) and becomes noise.
-        # With it, we only page when users ARE trying to pay but NONE is
-        # succeeding — a concrete business problem worth waking someone.
+      - alert: PaymentSuccessRateLow
+        # Replaces the old ZeroPaymentHalfDay (12h zero-success) rule, which
+        # produced false positives because PPClub has 5 payment-success paths
+        # that the original ppc_payment_success_total instrumentation missed:
+        #   - reconciler (NotifyURL miss recovered by 30s scheduler poll)
+        #   - resurrect  (late-payment after auto-cancel)
+        #   - pay-credit (儲值金 用戶餘額付款)
+        # Those paths now also call payment_success.inc() (PPClub commit
+        # adding payment_success.inc to 6 confirm sites), so the metric
+        # finally tracks reality.
+        #
+        # New design: ratio-based, with a minimum-traffic floor:
+        #   - Only evaluates during Taipei business hours (09:00-23:59 = UTC 01-15)
+        #   - Requires ≥5 NewebPay-side OK creates over the last 6h
+        #     (filters lone-user-typo noise; PPClub's natural traffic gives
+        #      5+ in 6h on any normal business day)
+        #   - Fires when success-rate < 30% over 6h
+        #   - 30m for: dampens VACC slow-transfer / user-retry race
+        # 6h window matches PPClub's natural traffic cycle (peak 17-23,
+        # quiet 02-08), so a 0-payment quiet hour never trips this on its own.
         expr: |
-          (hour() >= 1 and hour() <= 14)
+          (hour() >= 1 and hour() <= 15)
           and
-          (sum(increase(ppc_payment_success_total[12h])) OR on() vector(0)) == 0
+          sum(increase(ppc_payment_created_total{status="ok"}[6h])) >= 5
           and
-          sum(increase(ppc_payment_created_total[12h])) > 0
-        for: 15m
+          (
+            sum(increase(ppc_payment_success_total[6h]))
+            /
+            sum(increase(ppc_payment_created_total{status="ok"}[6h]))
+          ) < 0.3
+        for: 30m
         labels:
           severity: High
           product: ppclub
         annotations:
-          summary: "PPClub: {{ with query \"sum(increase(ppc_payment_created_total[12h]))\" }}{{ . | first | value }}{{ end }} payment attempts in last 12hr but 0 succeeded during business hours"
+          summary: "PPClub: payment success-rate < 30% over last 6h"
+          description: |
+            Attempts (status=ok creates): {{ with query "sum(increase(ppc_payment_created_total{status=\"ok\"}[6h]))" }}{{ . | first | value }}{{ end }}
+            Successes:                    {{ with query "sum(increase(ppc_payment_success_total[6h]))" }}{{ . | first | value }}{{ end }}
+            Success rate:                 {{ with query "100 * sum(increase(ppc_payment_success_total[6h])) / sum(increase(ppc_payment_created_total{status=\"ok\"}[6h]))" }}{{ . | first | value | humanize }}%{{ end }}
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/payment-zero.md"
 
       - alert: RefundSurge
