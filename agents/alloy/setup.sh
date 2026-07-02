@@ -18,6 +18,7 @@
 #   LOKI_PUSH_URL               e.g. https://loki-push.wanbrain.com/loki/api/v1/push
 #   CF_ACCESS_CLIENT_ID         (prompt if unset)
 #   CF_ACCESS_CLIENT_SECRET     (prompt if unset, hidden input)
+#   APP_METRICS_BEARER_TOKEN    optional; bearer token for protected app metrics
 #
 # Supports: Ubuntu / Debian (apt); other distros need manual install.
 
@@ -51,6 +52,20 @@ if [ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
 fi
 require_env CF_ACCESS_CLIENT_ID
 require_env CF_ACCESS_CLIENT_SECRET
+
+APP_METRICS_AUTHORIZATION=""
+if [ -n "${APP_METRICS_BEARER_TOKEN:-}" ]; then
+  case "$APP_METRICS_BEARER_TOKEN" in
+    *$'\n'*|*\"*)
+      echo "ERROR: APP_METRICS_BEARER_TOKEN must not contain newlines or double quotes" >&2
+      exit 2
+      ;;
+  esac
+  APP_METRICS_AUTHORIZATION="  authorization {
+    type        = \"Bearer\"
+    credentials = \"${APP_METRICS_BEARER_TOKEN}\"
+  }"
+fi
 
 # ───────────────────────────── 2. Root check ───────────────────────────────
 
@@ -146,10 +161,10 @@ fi
 
 # Only listed variables get substituted — unlisted $vars (including Alloy
 # regex capture refs like $1) stay intact.
-ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET $JOURNAL_SOURCES'
+ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET $APP_METRICS_AUTHORIZATION $JOURNAL_SOURCES'
 export PRODUCT SERVER_ID JOURNAL_MATCHES LOKI_PUSH_URL \
        CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET \
-       PROM_PUSH_URL APP_METRICS_TARGET JOURNAL_SOURCES
+       PROM_PUSH_URL APP_METRICS_TARGET APP_METRICS_AUTHORIZATION JOURNAL_SOURCES
 
 # Always: logs section (Phase 2A)
 envsubst "$ENVSUBST_VARS" < config-logs.alloy.tmpl > "$ALLOY_CONFIG"

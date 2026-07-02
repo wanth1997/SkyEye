@@ -8,7 +8,7 @@ This directory contains the one-shot installer for **Grafana Alloy** — a singl
 |---|---|---|
 | **2A** (current) | Always | systemd journal (selected units), PII-scrubbed, → central Loki |
 | 2B | `PROM_PUSH_URL` set | node_exporter (CPU/RAM/disk/net) → central Prometheus |
-| 2C | `APP_SCRAPE_TARGET` set | App `/metrics` scrape → central Prometheus |
+| 2C | `APP_METRICS_TARGET` set | App `/metrics` scrape → central Prometheus |
 
 Phase 2A is log-only — no code changes on the host, low risk.
 
@@ -162,6 +162,15 @@ sudo -E bash agents/alloy/setup.sh
 ```
 
 setup.sh appends `config-app.alloy.tmpl` to the config, adding a `prometheus.scrape "app"` block that forwards to the same `prometheus.remote_write.central` used by node metrics.
+
+If the app protects `/metrics` with a bearer token, export the same token before
+running setup:
+
+```bash
+export APP_METRICS_BEARER_TOKEN='<paste app metrics token>'
+sudo -E bash agents/alloy/setup.sh
+unset APP_METRICS_BEARER_TOKEN
+```
 
 ### Verify
 

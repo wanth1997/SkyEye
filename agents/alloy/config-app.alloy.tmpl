@@ -17,6 +17,7 @@ prometheus.scrape "app" {
   scrape_timeout  = "10s"
   job_name        = "${PRODUCT}-backend"
   metrics_path    = "/metrics"
+${APP_METRICS_AUTHORIZATION}
   // If the app is slow on startup or reloads, avoid immediately flagging down
   honor_labels    = false
 }
