@@ -2,6 +2,10 @@
 
 This directory contains the one-shot installer for **Grafana Alloy** — a single agent binary that collects logs and metrics from a host and pushes them to the central SkyEye monitoring stack via Cloudflare Tunnel.
 
+For tnauqquant on macOS, use the dedicated parameterized agent under
+`agents/alloy/trading/`. It tails raw log files and runs a read-only launchd
+probe; it does not use the Linux journald installer documented below.
+
 ## What it does
 
 | Phase | Enabled by | Collected |

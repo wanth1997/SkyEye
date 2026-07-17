@@ -164,7 +164,7 @@ SkyEye 提供 `agents/alloy/trading/deployment.env.example`，新 server agent �
 | `TQ_RUN_MANIFEST` | `/Users/tinghsu/projects/tnauqquant/run-state/mexc-toobit-btc/current.json` | Production contract；POC 缺少時輸出 identity unavailable |
 | `TQ_DONE_MARKER` | `/Users/tinghsu/projects/tnauqquant/run-state/mexc-toobit-btc/current.done.json` | Production contract |
 | `TQ_POC_RUN_EXPECTED` | `1` | 僅供 development heuristic；production 從 manifest/state machine 導出 |
-| `TQ_TEXTFILE_DIR` | `/opt/homebrew/var/lib/alloy/textfile` | Probe atomic output directory；Intel Mac 由 `brew --prefix` 導出 |
+| `TQ_TEXTFILE_DIR` | `/opt/homebrew/var/lib/alloy/trading-textfile` | Probe atomic output directory；Intel Mac 由 `brew --prefix` 導出 |
 | `LOKI_PUSH_URL` | `https://loki-push.wanbrain.com/loki/api/v1/push` | 既有 ingress |
 | `PROM_PUSH_URL` | `https://prom-push.wanbrain.com/api/v1/write` | 既有 ingress |
 | `CF_ACCESS_CLIENT_ID` | 僅存在 secret env | Trading host 專用 service token |

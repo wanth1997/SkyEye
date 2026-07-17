@@ -1,0 +1,93 @@
+# Trading monitoring agent for macOS
+
+This directory installs two source-host components:
+
+- Grafana Alloy tails tnauqquant `*.raw.log` files, scrubs sensitive text, and pushes logs/metrics through Cloudflare Access.
+- A 15-second launchd probe reads process/config/run state and writes `tnauqquant.prom` for Alloy's textfile collector.
+
+Neither component starts, stops, signals, or attaches to the trading process.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `config-macos.alloy.tmpl` | Logfmt pipeline, source-side scrub, Loki push and Prometheus remote write |
+| `deployment.env.example` | Complete host-specific deployment contract without real secrets |
+| `probe.sh` | Read-only process/manifest/marker/log probe |
+| `setup-macos.sh` | Render, validate, install and optionally start Alloy + launchd |
+| `com.wanbrain.skyeye-trading-probe.plist.tmpl` | 15-second user launchd job |
+
+## Development Mac install
+
+1. Copy and edit the environment file:
+
+   ```bash
+   brew_prefix="$(brew --prefix)"
+   install -m 600 agents/alloy/trading/deployment.env.example \
+     "$brew_prefix/etc/alloy/config.env"
+   ```
+
+2. Replace every `/Users/operator/...` path and both Cloudflare placeholders. Keep `TQ_SERVER_ID=tnauqquant-dev-mac` and `TQ_ENVIRONMENT=development`.
+
+3. Render without changing services:
+
+   ```bash
+   render_dir="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-trading-render.XXXXXX")"
+   agents/alloy/trading/setup-macos.sh \
+     --env-file "$(brew --prefix)/etc/alloy/config.env" \
+     --render-only "$render_dir"
+   plutil -lint "$render_dir/com.wanbrain.skyeye-trading-probe.plist"
+   alloy validate "$render_dir/config.alloy"
+   ```
+
+4. Install and start after the render validates:
+
+   ```bash
+   agents/alloy/trading/setup-macos.sh
+   brew services list | grep alloy
+   launchctl print "gui/$(id -u)/com.wanbrain.skyeye-trading-probe"
+   ```
+
+## Secret and access requirements
+
+- `config.env` must remain mode `0600` and outside Git.
+- Use a service token dedicated to this host and restricted to the Loki/Prometheus push Access applications.
+- Verify the Grafana Cloudflare email allowlist before pushing Trading PNL or raw errors.
+- The Alloy template reads secrets at runtime with `sys.env`; it never renders them into `config.alloy` or the launchd plist.
+
+## New server handoff
+
+The new server agent changes environment values only:
+
+- `TQ_ENVIRONMENT=production`
+- `TQ_SERVER_ID=tnauqquant-prod-1`
+- canonical `TQ_REPO_ROOT`, executable, config, log glob and run-state paths
+- `TQ_INSTANCE_ID` matching the Trading config
+- one capture-group `TQ_REPO_ROOT_REGEX` matching the canonical root
+- a production-host-specific Cloudflare service token
+
+Central labels, dashboard queries and rules must not be changed to accommodate a different filesystem path.
+
+Before installation, return the non-secret handoff report from section 4.4 of `docs/trading-monitoring-development-plan.md`. Never include Cloudflare or exchange credentials.
+
+## Troubleshooting
+
+```bash
+tail -n 100 "$(brew --prefix)/var/log/alloy/trading-probe.err.log"
+launchctl print "gui/$(id -u)/com.wanbrain.skyeye-trading-probe"
+brew services info grafana/grafana/alloy
+curl -fsS http://127.0.0.1:12345/-/ready
+```
+
+The probe output must contain no PID, path or run ID labels:
+
+```bash
+sed -n '1,240p' "$(brew --prefix)/var/lib/alloy/trading-textfile/tnauqquant.prom"
+```
+
+Official references:
+
+- [Install Alloy on macOS](https://grafana.com/docs/alloy/latest/set-up/install/macos/)
+- [Configure Alloy on macOS](https://grafana.com/docs/alloy/latest/configure/macos/)
+- [`loki.source.file`](https://grafana.com/docs/alloy/latest/reference/components/loki/loki.source.file/)
+- [`loki.process`](https://grafana.com/docs/alloy/latest/reference/components/loki/loki.process/)
