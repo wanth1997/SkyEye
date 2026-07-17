@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "run_id": "20260717_024506_mexc_toobit_btc_config",
+  "strategy": "mexc-toobit-btc",
+  "instance_id": "mexc-toobit-btc-initiator-hedge",
+  "pid": 12345,
+  "config_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "reason": "max_cycles_complete",
+  "phase": "max_cycles_complete",
+  "completed_at": "2026-07-17T16:20:00Z",
+  "long_btc": 0,
+  "short_btc": 0,
+  "net_btc": 0,
+  "dust_tolerance_btc": 0
+}
