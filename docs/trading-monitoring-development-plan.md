@@ -1,6 +1,6 @@
 # Trading Monitoring Development and Server Onboarding Plan
 
-> **狀態：** Draft for owner review
+> **狀態：** Core decisions approved; implementation pending
 >
 > **日期：** 2026-07-17
 >
@@ -27,6 +27,16 @@
 ---
 
 ## 1. Executive Decision
+
+### 1.0 Approved owner decisions
+
+| Decision | Approved choice |
+|---|---|
+| Production launch mode | `scripts/tq live run --human` + tmux + foreground + no auto-restart |
+| Primary Grafana PNL | 最新 `stable=true` 的 `real_pnl_usdt`；cash/rebate/risk PNL 作輔助 |
+| Target identity | 暫時使用 `tnauqquant-dev-mac`；production 使用 `tnauqquant-prod-1`；production 驗收後 retire development target |
+| Trading repo changes | 接受最小 runtime contract 修改，由獨立 tnauqquant agent 實作；不得修改策略、下單或 PNL 計算 |
+| Grafana access | Trading PNL 與 raw error logs 只允許明確核准的 operator email 存取 |
 
 ### 1.1 是否只需要修改 SkyEye？
 
@@ -195,7 +205,7 @@ Handoff report 不得包含 Cloudflare client secret、exchange credentials、wa
 
 ### 4.5 Access review
 
-Trading logs 進入中央端以前，SkyEye operator 必須從 Cloudflare Zero Trust 實際設定確認 Grafana email allowlist，不能只依賴 repo README。現在 Grafana 對自動建立的使用者指派 Admin，且 Loki 是單一 tenant；如果 allowlist 不只包含明確核准的 operator，必須先完成 org/datasource access isolation。單靠 Grafana folder permission 不能隔離同一 Loki datasource 的 raw logs。
+Trading logs 進入中央端以前，SkyEye operator 必須從 Cloudflare Zero Trust 實際設定確認 Grafana email allowlist，不能只依賴 repo README。Owner 已決定只有明確核准的 operator email 可以存取 Trading PNL 與 raw error logs。現在 Grafana 對自動建立的使用者指派 Admin，且 Loki 是單一 tenant；如果 allowlist 含有其他使用者，必須先完成 org/datasource access isolation。單靠 Grafana folder permission 不能隔離同一 Loki datasource 的 raw logs。
 
 Development 與 production trading host 分別使用可獨立撤銷的 service token。Token 只允許 `prom-push` 與 `loki-push` Access applications，不授權 Grafana UI 或其他產品 endpoints。
 
@@ -296,7 +306,7 @@ Trading repo 應由實際 quant process atomic write：
   "config_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
   "log_path": "/srv/tnauqquant/logs/live-runs/20260717_024506_mexc_toobit_btc_config.raw.log",
   "done_marker_path": "/srv/tnauqquant/run-state/mexc-toobit-btc/current.done.json",
-  "expected_state": "running"
+  "state": "running"
 }
 ```
 
@@ -525,6 +535,8 @@ README.md
 
 ### 9.2 Trading Track — 交由另一個 tnauqquant agent 實作
 
+可直接貼給該 agent 的完整獨立規格：[`trading-runtime-contract-agent-spec.md`](./trading-runtime-contract-agent-spec.md)。
+
 **Modify:**
 
 ```text
@@ -539,7 +551,7 @@ engine/engine_test.go
 1. Launcher 產生 `run_id`、canonical log path、manifest path 與 done marker path。
 2. Quant process 寫 actual PID/start time 與 config hash，不從 shell pipeline 猜 PID。
 3. Marker 寫入必須 atomic，且包含 run binding fields。
-4. Safe completion 更新 expected state；risk halt 保留 critical state，不假設 process 已退出。
+4. Manifest 保持 immutable `state=running`；safe/critical outcome 由 bound marker 表達，SkyEye probe 依 marker precedence 導出 `run_expected`。
 5. 新 run 遇到未 archive 的舊 marker 時 fail closed，要求 operator 明確處理。
 6. 保留 `tq live run --human` 的 signal/preflight 行為。
 7. 不在此工作順便改 JSON logging 或實作完整 `/metrics`。
@@ -559,17 +571,18 @@ SkyEye probe tests 以這兩份 schema fixture 驗證。兩個 repo 對 `schema_
 
 ## 10. Implementation Roadmap
 
-### Task 1: Approve contract and dashboard semantics
+### Task 1: Approved contract and dashboard semantics
 
 **Owner gate:** SkyEye owner
 
-- [ ] 確認 production runtime 是 `tq live run --human` + tmux + no auto-restart。
-- [ ] 確認 dashboard primary PNL 使用 `real_pnl_usdt`。
-- [ ] 確認 development target ID 使用 `tnauqquant-dev-mac`，production target ID 使用 `tnauqquant-prod-1`。
-- [ ] 確認 production migration 接受 Trading repo 的 runtime contract 改動。
-- [ ] 從 Cloudflare Zero Trust 實際確認 Grafana email allowlist；若有非核准使用者，先完成 datasource access isolation。
+- [x] 確認 production runtime 是 `tq live run --human` + tmux + no auto-restart。
+- [x] 確認 dashboard primary PNL 使用最新 `stable=true` 的 `real_pnl_usdt`。
+- [x] 確認 development target ID 使用 `tnauqquant-dev-mac`，production target ID 使用 `tnauqquant-prod-1`。
+- [x] 確認 production migration 接受 Trading repo 的最小 runtime contract 改動。
+- [x] 確認 Trading PNL 與 raw error logs 僅限明確核准的 operator email。
+- [ ] SkyEye operator 從 Cloudflare Zero Trust 實際確認 live allowlist；若有非核准使用者，先完成 datasource access isolation。
 
-**Deliverable:** 本文件由 Draft 改為 Approved；之後才開始程式實作。
+**Deliverable:** Core decisions 已核准；完成 live Cloudflare allowlist verification 後才 ingest Trading data。
 
 ### Task 2: Build deterministic fixtures and macOS probe tests
 

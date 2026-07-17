@@ -52,3 +52,4 @@ find grafana/dashboards -name '*.json' -exec jq empty {} +
 - `docs/onboarding-new-product.md` — 一般產品 onboarding 流程
 - `docs/grafana-conventions.md` — dashboard 命名與 provisioning 規則
 - `docs/trading-monitoring-development-plan.md` — Trading monitoring 設計、跨 server contract 與開發計畫
+- `docs/trading-runtime-contract-agent-spec.md` — 可直接交給 tnauqquant agent 的 runtime contract 規格

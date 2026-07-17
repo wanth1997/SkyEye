@@ -26,10 +26,11 @@
 - Loki 使用單一 `fake` tenant，以低 cardinality labels 區隔產品；高 cardinality 欄位只在 query time parse。
 - Trading 第一版以 log-derived PNL、外部 process probe 與 error logs 為核心；authoritative position/risk metrics 留給後續原生 `/metrics`。
 - Development POC 可先只改 SkyEye；production-safe migration 仍要求 Trading repo 提供 run manifest 與可驗證 done marker。
+- Owner 已核准：TQ human foreground launch、`real_pnl_usdt` primary PNL、development/production target IDs、Trading runtime contract 修改，以及 operator-only Grafana access。
 
 ## 待辦 / 下一步
 
-- 審核 `docs/trading-monitoring-development-plan.md`。
+- 審核 `docs/trading-monitoring-development-plan.md` 與可轉交 Trading agent 的 `docs/trading-runtime-contract-agent-spec.md`。
 - 實作 macOS Alloy、trading probe、dashboard、shadow alert rules 與 canary tests。
 - 由 Trading repo owner 實作 runtime contract，完成後在新 server 套用 deployment contract。
 - 驗證 Cloudflare allowlist、為 trading host 建立可獨立撤銷的 service token，再開放 production paging。
