@@ -1,88 +1,111 @@
-# `High5xxRate` / `Critical5xxRate`
+# 5xx and payment creation failures
+
+Rules: `High5xxRate`, `Critical5xxRate`, `PaymentCreate5xxWarning`,
+`PaymentCreate5xxCritical`, `PaymentOrderGenerationFailure`.
 
 ## Symptoms
 
+- General 5xx rules: an application is returning an elevated proportion of 5xx responses.
+- Payment create rules: `/api/v2/payments/topup` or `/api/v2/payments/create`
+  returned repeated 5xx responses even if overall traffic is healthy.
+- Order generation rule: the service rejected a tenant outside the supported
+  range or exhausted its bounded uniqueness retries.
+
+## Triage in Grafana
+
 ```promql
-# Medium — 5% over 5 minutes
-sum by (product) (rate(http_requests_total{status=~"5.."}[5m]))
-  / sum by (product) (rate(http_requests_total[5m])) > 0.05
+# Payment failures by product and endpoint
+sum by (product, handler, status) (
+  increase(http_requests_total{
+    method="POST",
+    status=~"5..",
+    handler=~"/api/v2/payments/(topup|create)"
+  }[10m])
+)
 
-# High — 10% over 2 minutes
-# (same numerator/denominator, threshold 0.10)
+# Order-number failures and collision retries
+sum by (product, kind, result) (
+  increase(ppc_payment_order_generation_total[15m])
+)
+
+# Top 5xx routes
+topk(10, sum by (product, handler, status) (
+  increase(http_requests_total{status=~"5.."}[10m])
+))
+
+# Exceptions and external dependencies
+sum by (product, path, exc_type) (
+  increase(ppc_unhandled_exception_total[10m])
+)
+sum by (product, api, result) (
+  increase(ppc_external_api_duration_seconds_count{result=~"error|timeout"}[10m])
+)
 ```
 
-- Upstream apps return a surge of 5xx responses
-- Users see error pages; Caddy may log `context canceled` for upstream reads
+In Loki:
 
-## Likely causes
-
-1. Database unreachable / too slow (SQLite lock contention, migration running)
-2. External dependency (NewebPay, Hengfu, Google OAuth) timing out → handler raises → 500
-3. New deploy introduced a regression (code bug, dependency mismatch)
-4. Resource exhaustion — uvicorn workers saturated, RAM pressure causing swap
-5. An untemplated path (crawler hitting a route that doesn't exist and hits default 500 instead of 404) — check whether offenders concentrate on one handler
-
-## Immediate actions
-
-From central Grafana (Explore):
-
-```
-# Top offenders — which route
-topk(5, sum by (handler, status) (rate(http_requests_total{product="ppclub",status=~"5.."}[5m])))
-
-# Are exceptions being raised
-sum by (path, exc_type) (rate(ppc_unhandled_exception_total{product="ppclub"}[5m]))
-
-# External dep correlation
-sum by (api) (rate(ppc_external_api_duration_seconds_count{product="ppclub",result=~"error|timeout"}[5m]))
-
-# Check if it started right after a change
-# (overlay PPClub deploy annotations in Grafana)
-```
-
-From central Loki:
-
-```
-{product="ppclub"} |= "500 Internal Server Error" | logfmt  # 過濾看 handler
+```logql
+{product="ppclub"} |= "500 Internal Server Error"
 {product="ppclub"} |= "Traceback"
 ```
 
-SSH to PPClub EC2:
+## LinkCourt production checks
 
 ```bash
-# Recent exceptions
-sudo journalctl -u ppclub-backend.service --since="15m ago" | grep -iE 'traceback|error|exception' | tail -50
+# Health, active release, and recent application errors
+curl -fsS http://127.0.0.1:8090/api/health
+readlink -f /opt/apps/linkcourt/current
+sudo journalctl -u linkcourt.service --since="15 min ago" \
+  | grep -iE 'traceback|error|exception|payment_order' | tail -100
 
-# Is DB responsive
-time sqlite3 /home/ubuntu/PPClub/backend/ppc.db 'SELECT COUNT(*) FROM bookings;'
-# If > 1s, suspect lock contention
-
-# Is uvicorn saturated
-ps auxf | grep uvicorn
-# RSS and %CPU per worker
-
-# If a specific handler is the culprit, see if it correlates with external API
-rate(ppc_external_api_duration_seconds_count{api=<X>,result="error"}[5m])
+# Runtime and database health
+systemctl --no-pager --full status linkcourt.service
+sudo -u postgres psql -d ppclub_prod -c 'SELECT 1;'
 ```
 
-Emergency stop-the-bleeding:
+Do not print payment credentials, bank transfer data, or complete order numbers
+into chat or incident notes.
 
-- If a specific route is the entire 5xx mass, add a temporary Caddy match that returns 503 before hitting backend — lets the rest of the app breathe
-- If DB is locked and nobody's been writing for 5+ min: `sudo fuser -v /home/ubuntu/PPClub/backend/ppc.db`, kill the stuck writer, restart `ppclub-backend.service`
-- If recent deploy caused this: `git revert HEAD && systemctl restart ppclub-backend.service`
+## Classify before recovery
+
+1. `capacity_error`: a tenant id cannot fit the external gateway envelope.
+   Stop provisioning that tenant; do not bypass the guard or length limit.
+2. `exhausted`: all uniqueness retries collided. Preserve existing rows and
+   investigate the table constraint and random source before retrying.
+3. Payment endpoint 5xx with no order-generation failure: inspect the traceback,
+   gateway capability/credentials, database availability, and provider status.
+4. If a pending order row exists, preserve it. Never rewrite historical order
+   numbers. If no row was created, the user may safely start a new request after
+   the root cause is fixed; manual-transfer reconciliation remains manual.
+5. If a new LinkCourt release caused the incident, use the documented release
+   rollback procedure. Do not run an ad-hoc `git revert` in the live release.
 
 ## Verify recovery
 
-```
-sum by (product) (rate(http_requests_total{status=~"5.."}[5m]))
-  / sum by (product) (rate(http_requests_total[5m])) < 0.01
+```promql
+sum by (product, handler) (
+  increase(http_requests_total{
+    method="POST",
+    status=~"5..",
+    handler=~"/api/v2/payments/(topup|create)"
+  }[10m])
+) == 0
+
+sum by (product, kind, result) (
+  increase(ppc_payment_order_generation_total{
+    result=~"capacity_error|exhausted"
+  }[10m])
+) == 0
 ```
 
-Watch for 5-10 min after recovery before considering stable — alerts have a 5-min `for` clause.
+Confirm the application health endpoint remains healthy and watch the relevant
+rule for at least one full evaluation window. Production payment smoke tests
+must be read-only unless an operator explicitly authorizes a real transaction.
 
 ## Post-incident
 
-- Save a `ppc_unhandled_exception_total` breakdown from the incident window
-- Capture a full traceback for each unique `exc_type` observed
-- If DB lock: investigate what held the lock (batch job? new feature? SQLite WAL checkpoint gone stale?)
-- Consider adding a circuit breaker around the offending external call (rather than letting it take down the whole handler)
+- Record affected product, endpoint, time window, release, and aggregate counts.
+- Preserve one sanitized traceback per unique failure.
+- Add a regression test for the exact boundary that escaped detection.
+- After shadow canary validation, promote the rule through a reviewed change by
+  removing `notification_mode: shadow`; do not edit Alertmanager live.

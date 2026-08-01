@@ -9,12 +9,14 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 - **No prose essays.** A runbook that takes 10 minutes to skim is worse than no runbook. Keep under 200 lines.
 - **Link to data**, don't repeat it. The plan lives in `monitoring-plan-v2.md`; architecture diagrams in `docs/`. Runbooks are the emergency kit, not the manual.
 
-## Inventory (2026-04-23)
+## Inventory (2026-08-01)
 
 | Rule | Runbook | Severity |
 |---|---|---|
 | `BackendDown` | [backend-down.md](./backend-down.md) | High |
 | `High5xxRate` / `Critical5xxRate` | [high-5xx.md](./high-5xx.md) | Medium / High |
+| `PaymentCreate5xxWarning` / `PaymentCreate5xxCritical` | [high-5xx.md](./high-5xx.md) | Medium / High (shadow) |
+| `PaymentOrderGenerationFailure` | [high-5xx.md](./high-5xx.md) | High (shadow) |
 | `HostDiskLow` / `HostDiskCritical` | [disk-full.md](./disk-full.md) | Medium / High |
 | `HostHighCPU` | [high-cpu.md](./high-cpu.md) | Medium |
 | `HostOOM` | [oom.md](./oom.md) | High |

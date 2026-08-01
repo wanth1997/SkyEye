@@ -35,6 +35,69 @@ groups:
           summary: "{{ $labels.product }} 5xx rate > 10% for 2min"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md"
 
+      # Payment creation is low-volume, so ratio alerts can miss a complete
+      # outage. Count failures on the two user-facing POST endpoints directly.
+      - alert: PaymentCreate5xxWarning
+        expr: |
+          (
+            sum by (product, handler) (
+              increase(http_requests_total{
+                method="POST",
+                status=~"5..",
+                handler=~"/api/v2/payments/(topup|create)"
+              }[10m])
+            ) >= 2
+          )
+          and
+          (
+            sum by (product, handler) (
+              increase(http_requests_total{
+                method="POST",
+                status=~"5..",
+                handler=~"/api/v2/payments/(topup|create)"
+              }[10m])
+            ) < 5
+          )
+        for: 5m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.product }} {{ $labels.handler }} returned 2-4 payment 5xx responses in 10min"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md"
+
+      - alert: PaymentCreate5xxCritical
+        expr: |
+          sum by (product, handler) (
+            increase(http_requests_total{
+              method="POST",
+              status=~"5..",
+              handler=~"/api/v2/payments/(topup|create)"
+            }[10m])
+          ) >= 5
+        for: 0m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.product }} {{ $labels.handler }} returned at least 5 payment 5xx responses in 10min"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md"
+
+      - alert: PaymentOrderGenerationFailure
+        expr: |
+          sum by (product, kind, result) (
+            increase(ppc_payment_order_generation_total{
+              result=~"capacity_error|exhausted"
+            }[5m])
+          ) > 0
+        for: 0m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.product }} {{ $labels.kind }} payment order generation failed: {{ $labels.result }}"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md"
+
       - alert: LatencyP99High
         expr: |
           histogram_quantile(

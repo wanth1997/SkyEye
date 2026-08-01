@@ -1,0 +1,88 @@
+rule_files:
+  - ../app.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: payment create warning fires after a sustained low-volume failure burst
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/payments/topup",method="POST",status="500"}'
+        values: '0 0 0 0 0 0 0 0 0 0 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: PaymentCreate5xxWarning
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: PaymentCreate5xxWarning
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              product: ppclub
+              handler: /api/v2/payments/topup
+            exp_annotations:
+              summary: 'ppclub /api/v2/payments/topup returned 2-4 payment 5xx responses in 10min'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md'
+
+  - name: payment create warning ignores isolated and critical bursts
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/payments/topup",method="POST",status="500"}'
+        values: '0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1'
+      - series: 'http_requests_total{product="linkcourt",handler="/api/v2/payments/create",method="POST",status="503"}'
+        values: '0 0 0 0 0 0 0 0 0 0 5 5 5 5 5 5 5 5 5 5'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: PaymentCreate5xxWarning
+        exp_alerts: []
+
+  - name: payment create critical fires immediately at five failures
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/payments/topup",method="POST",status="500"}'
+        values: '0 0 0 0 0 0 0 0 0 0 5 5'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PaymentCreate5xxCritical
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              notification_mode: shadow
+              product: ppclub
+              handler: /api/v2/payments/topup
+            exp_annotations:
+              summary: 'ppclub /api/v2/payments/topup returned at least 5 payment 5xx responses in 10min'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md'
+
+  - name: payment order generation capacity and exhaustion failures fire immediately
+    interval: 1m
+    input_series:
+      - series: 'ppc_payment_order_generation_total{product="ppclub",kind="booking",result="capacity_error"}'
+        values: '0 1 1'
+      - series: 'ppc_payment_order_generation_total{product="ppclub",kind="topup",result="exhausted"}'
+        values: '0 1 1'
+      - series: 'ppc_payment_order_generation_total{product="ppclub",kind="topup",result="collision_retry"}'
+        values: '0 3 3'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: PaymentOrderGenerationFailure
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              notification_mode: shadow
+              product: ppclub
+              kind: booking
+              result: capacity_error
+            exp_annotations:
+              summary: 'ppclub booking payment order generation failed: capacity_error'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md'
+          - exp_labels:
+              severity: High
+              notification_mode: shadow
+              product: ppclub
+              kind: topup
+              result: exhausted
+            exp_annotations:
+              summary: 'ppclub topup payment order generation failed: exhausted'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/high-5xx.md'
