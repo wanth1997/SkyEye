@@ -27,12 +27,11 @@
       "type": "stat",
       "title": "被監測產品數",
       "gridPos": { "x": 0, "y": 1, "w": 6, "h": 4 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
-          "datasource": { "type": "loki", "uid": "loki" },
-          "expr": "count(sum by (product) (count_over_time({product=~\".+\"}[1h])))",
-          "queryType": "instant",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "count(group by (product) (up{product!=\"\"}))",
           "refId": "A",
           "instant": true
         }
@@ -52,7 +51,7 @@
         },
         "overrides": []
       },
-      "description": "Distinct products with log activity in the last hour. Uses Loki (not Prom `up`) so products that haven't instrumented /metrics still count."
+      "description": "Distinct products with at least one Prometheus `up` series (any value). Uses Prom (not Loki count_over_time) so quiet products with sparse journal output still count — Alloy agents' node-exporter heartbeat is 15s. Phase 2A log-only products would not appear here; we currently have none."
     },
     {
       "id": 11,
@@ -129,13 +128,13 @@
     {
       "id": 13,
       "type": "stat",
-      "title": "24 小時內寄出 Email",
+      "title": "24h Telegram 通知",
       "gridPos": { "x": 18, "y": 1, "w": 6, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(increase(alertmanager_notifications_total{integration=\"email\"}[24h])) OR on() vector(0)",
+          "expr": "sum(increase(alertmanager_notifications_total{integration=\"telegram\"}[24h])) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
@@ -162,7 +161,7 @@
         },
         "overrides": []
       },
-      "description": "increase(alertmanager_notifications_total{integration=\"email\"}[24h]). Should be >= 1 per day — the DailyHeartbeat digest alone guarantees that. 0 for 24h+ means the Prom → AM → Gmail SMTP chain is broken."
+      "description": "increase(alertmanager_notifications_total{integration=\"telegram\"}[24h]). Should be >= 1 per day — the DailyHeartbeat (Low) silent push alone guarantees that. 0 for 24h+ means the Prom → AM → Telegram chain is broken."
     },
 
     {

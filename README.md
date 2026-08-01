@@ -30,7 +30,7 @@ PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
 18 Prometheus rules across 4 groups:
 - `system.yml` — CPU, RAM, disk, OOM, systemd units
 - `app.yml` — BackendDown, 5xx rates, latency p99, unhandled exception surge
-- `business.yml` — ZeroPaymentHalfDay, RefundSurge, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
+- `business.yml` — ZeroPaymentHalfDay, RefundVolumeHigh, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
 - `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, DailyHeartbeat
 
 Severity → routing:

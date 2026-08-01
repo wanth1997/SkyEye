@@ -1,14 +1,9 @@
 global:
   resolve_timeout: 5m
-  smtp_smarthost: smtp.gmail.com:587
-  smtp_from: wanth1997@gmail.com
-  smtp_auth_username: wanth1997@gmail.com
-  smtp_auth_password_file: /etc/alertmanager/secrets/smtp_pass
-  smtp_require_tls: true
 
 route:
   receiver: telegram-medium
-  group_by: [alertname, product, severity]
+  group_by: [alertname, product, environment, server_id, strategy, severity]
   group_wait: 10s
   group_interval: 5m
   repeat_interval: 4h
@@ -28,10 +23,15 @@ route:
       active_time_intervals: [work-hours]
       continue: false
     - matchers: [severity="Low"]
-      receiver: low-digest
+      receiver: telegram-low
       group_interval: 24h
       repeat_interval: 24h
       continue: false
+
+inhibit_rules:
+  - source_matchers: [alertname="TradingCriticalSafetyState"]
+    target_matchers: [alertname=~"TradingCritical(Log|Warn)Event"]
+    equal: [product, environment, server_id, strategy]
 
 time_intervals:
   - name: work-hours
@@ -57,9 +57,6 @@ receivers:
           {{- end }}
           {{ if .CommonAnnotations.runbook_url }}
           📖 <a href="{{ .CommonAnnotations.runbook_url }}">Runbook</a>{{ end }}
-    email_configs:
-      - to: wanth1997@gmail.com
-        send_resolved: true
 
   - name: telegram-medium
     telegram_configs:
@@ -77,9 +74,16 @@ receivers:
           {{ if .CommonAnnotations.runbook_url }}
           📖 <a href="{{ .CommonAnnotations.runbook_url }}">Runbook</a>{{ end }}
 
-  - name: low-digest
-    email_configs:
-      - to: wanth1997@gmail.com
+  # DailyHeartbeat 走這裡 — silent push、24h 一次。訊息留在 chat 證明 AM→Telegram pipeline 還活著。
+  - name: telegram-low
+    telegram_configs:
+      - bot_token_file: /etc/alertmanager/secrets/tg_token
+        chat_id: -1003712147883
+        parse_mode: HTML
+        disable_notifications: true
         send_resolved: false
-        headers:
-          Subject: '[SkyEye Low] {{ .GroupLabels.alertname }}'
+        message: |-
+          <b>ℹ️ Low — {{ .GroupLabels.alertname }}</b>
+          {{ range .Alerts }}
+          • {{ .Annotations.summary }}
+          {{- end }}

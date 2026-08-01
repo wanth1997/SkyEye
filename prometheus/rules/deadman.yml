@@ -27,8 +27,9 @@ groups:
           summary: "Prometheus TSDB head has not advanced in 5min — ingestion stopped"
 
       # Always-firing heartbeat — proves the entire alert pipeline (rules →
-      # alertmanager → SMTP → Gmail) is alive. Routed to Low email digest.
-      # If the daily digest stops arriving, investigate.
+      # alertmanager → Telegram) is alive. Routed via Low → telegram-low (silent
+      # push, 24h repeat). If the daily silent message stops arriving in the
+      # Telegram chat, investigate.
       - alert: DailyHeartbeat
         expr: vector(1)
         for: 0s

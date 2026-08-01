@@ -1,0 +1,12 @@
+groups:
+  - name: trading-target-inventory
+    interval: 1m
+    rules:
+      - record: tnauqquant_target_info
+        expr: vector(1)
+        labels:
+          product: tnauqquant
+          environment: development
+          server_id: tnauqquant-dev-mac
+          strategy: mexc-toobit-btc
+          notification_mode: shadow

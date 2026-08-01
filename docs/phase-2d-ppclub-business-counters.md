@@ -455,7 +455,7 @@ sum(ppc_signup_total{product="ppclub"})
 time() - ppc_scheduled_job_last_run_timestamp{product="ppclub"}
 
 # Business rules become live
-ALERTS{alertname=~"ZeroPayment1Hour|RefundSurge|ExternalApiDown"}
+ALERTS{alertname=~"ZeroPayment1Hour|RefundVolumeHigh|ExternalApiDown"}
 ```
 
 ## Rollback

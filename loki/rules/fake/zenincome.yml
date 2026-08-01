@@ -1,0 +1,25 @@
+groups:
+  - name: zenincome-logs
+    interval: 1m
+    rules:
+      # A1 — catch-all：follower 持續吐 ERROR 表示 offer 產不出來，業務停擺
+      - alert: ZenIncomeOfferGenerationStuck
+        expr: |
+          sum(count_over_time({product="zenincome"} |= "[ERROR]" |= "follower.go" [10m])) > 5
+        for: 10m
+        labels:
+          severity: High
+          product: zenincome
+        annotations:
+          summary: "ZenIncome follower 10min 內 > 5 個 ERROR — 大概率業務停擺"
+
+      # A4 — 精準根因：digest invalid / apikey invalid 直接點出 Bitfinex auth 問題
+      - alert: ZenIncomeBitfinexAuthFail
+        expr: |
+          sum(count_over_time({product="zenincome"} |~ `digest invalid|apikey: invalid` [15m])) > 3
+        for: 5m
+        labels:
+          severity: High
+          product: zenincome
+        annotations:
+          summary: "ZenIncome Bitfinex API key 失效 (digest/apikey invalid) — 用 scripts/zenincome/probe-bitfinex.sh 診斷"

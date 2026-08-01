@@ -1,0 +1,22 @@
+groups:
+    - name: tnauqquant-trading-errors
+      interval: 30s
+      rules:
+        - alert: TradingCriticalLogEvent
+          expr: |-
+            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="development", server_id="tnauqquant-dev-mac", strategy="mexc-toobit-btc", level=~"ERROR|FATAL"}[1m])) > 0)
+          labels:
+            notification_mode: shadow
+            severity: High
+          annotations:
+            runbook_url: https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md
+            summary: '{{ $labels.server_id }} {{ $labels.strategy }} emitted ERROR/FATAL logs'
+        - alert: TradingCriticalWarnEvent
+          expr: |-
+            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="development", server_id="tnauqquant-dev-mac", strategy="mexc-toobit-btc", level="WARN"} | logfmt | msg=~"emergency_exit|unhedged_exposure"[1m])) > 0)
+          labels:
+            notification_mode: shadow
+            severity: High
+          annotations:
+            runbook_url: https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md
+            summary: '{{ $labels.server_id }} {{ $labels.strategy }} emitted an allowlisted critical WARN'

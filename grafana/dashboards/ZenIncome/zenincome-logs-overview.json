@@ -863,7 +863,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{product=\"zenincome\"} |~ \"\\[(ERROR|WARN)\\]\"",
+          "expr": "{product=\"zenincome\"} |~ `\\[(ERROR|WARN)\\]`",
           "refId": "A"
         }
       ],
