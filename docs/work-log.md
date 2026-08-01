@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-08-01 17:57 — 付款建立與編號失敗 shadow 告警
+
+**改動摘要：** 新增低流量付款建立 5xx 與付款編號容量／重試耗盡告警，以 shadow routing 先行觀察，並補齊可執行的規則測試與 production runbook。
+
+**修改的檔案：**
+- `prometheus/rules/app.yml` — 新增付款端點 warning/critical 與編號產生失敗規則
+- `prometheus/rules/tests/payment-order-alerts.test.yml` — 固定 1、2–4、5 次錯誤及 capacity/exhausted 邊界
+- `alertmanager/alertmanager.yml` — 新增優先匹配的 shadow-null route，避免未 canary 的新告警直接通知
+- `runbooks/high-5xx.md` — 更新為現行 LinkCourt systemd、PostgreSQL 與 release 架構的排障流程
+- `runbooks/README.md` — 登錄三條新告警及 shadow 狀態
+- `docs/work-log.md` — 記錄本次監控改動
+
+**原因/備註：** `promtool check rules`、`promtool test rules` 與 `amtool check-config` 均以 production 同版本容器驗證通過。告警部署後只評估、不通知；需完成 production canary review 後另案移除 `notification_mode: shadow`。
+
+---
+
 ## 2026-07-17 14:27 — 核准核心決策並新增 Trading agent spec
 
 **改動摘要：** 記錄 owner 對 launch mode、primary PNL、target IDs、Trading repo 修改與 operator-only access 的選擇，並新增可直接交給 tnauqquant agent 的 self-contained runtime contract implementation spec。

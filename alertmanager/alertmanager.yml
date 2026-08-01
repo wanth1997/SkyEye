@@ -13,6 +13,11 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    # New rules enter shadow mode first: Prometheus evaluates and exposes them,
+    # but Alertmanager does not notify until the canary review promotes them.
+    - matchers: [notification_mode="shadow"]
+      receiver: shadow-null
+      continue: false
     - matchers: [severity="High"]
       receiver: telegram-high
       group_wait: 0s
@@ -35,6 +40,8 @@ time_intervals:
         location: Asia/Taipei
 
 receivers:
+  - name: shadow-null
+
   - name: telegram-high
     telegram_configs:
       - bot_token_file: /etc/alertmanager/secrets/tg_token
