@@ -830,7 +830,7 @@
       "title": "🚨 現用告警 — High / Medium (需處理)",
       "gridPos": { "x": 0, "y": 36, "w": 24, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "description": "Firing alerts routed to Telegram / Email. This is what you should fix.",
+      "description": "Firing alerts routed to Telegram. This is what you should fix.",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },

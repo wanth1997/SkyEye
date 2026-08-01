@@ -1,6 +1,6 @@
 # SkyEye runbooks
 
-Each file here matches one Prometheus alert rule. The rule's `runbook_url` annotation points here; when the alert fires, the Telegram / email message links straight to the file.
+Each file here matches one Prometheus alert rule. The rule's `runbook_url` annotation points here; when the alert fires, the Telegram message links straight to the file.
 
 ## Style
 
@@ -20,7 +20,7 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 | `HostDiskLow` / `HostDiskCritical` | [disk-full.md](./disk-full.md) | Medium / High |
 | `HostHighCPU` | [high-cpu.md](./high-cpu.md) | Medium |
 | `HostOOM` | [oom.md](./oom.md) | High |
-| `ZeroPaymentHalfDay` | [payment-zero.md](./payment-zero.md) | High |
+| `PaymentSuccessRateLow` | [payment-zero.md](./payment-zero.md) | High |
 | `ExternalApiDown` / `TlsCertExpired` | [external-api-down.md](./external-api-down.md) | High |
 | `SchedulerNoHeartbeat` | [scheduler-dead.md](./scheduler-dead.md) | High |
 

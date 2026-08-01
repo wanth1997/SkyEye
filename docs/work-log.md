@@ -15,6 +15,23 @@
 ---
 -->
 
+## 2026-08-01 19:45 — 保存 live monitoring 設定並整合付款 shadow 告警
+
+**改動摘要：** 將 production checkout 內 21 個既有 live-only 修改做成可追溯快照，合併到含付款失敗告警的最新 master，保留 Trading／ZenIncome runtime 設定與付款 shadow routing。
+
+**修改的檔案：**
+- `alertmanager/alertmanager.yml` — 保留 production Telegram、Trading inhibit 與 shadow-null routing
+- `prometheus/rules/` — 納管 production 的 business、deadman 與 Trading rules，並保留付款建立／編號失敗規則
+- `loki/rules/fake/` — 納管既有 Trading 與 ZenIncome ruler rules
+- `grafana/dashboards/` — 納管 production 現行 Overview、Trading 與 ZenIncome dashboard
+- `README.md`、`docs/operations.md`、`runbooks/` — 將現行通知操作說明由已停用的 Gmail 修正為 Telegram
+- `docs/project-brief.md` — 更新 Trading、ZenIncome 與付款告警現況
+- `docs/work-log.md` — 合併既有 production migration 紀錄並記錄本次保存工作
+
+**原因/備註：** 先以 production `ba83c3a` 為基準逐檔 SHA-256 保存，再三方整合 `origin/master`。`docker compose config`、Prometheus 7 個 rule files、付款 rule tests、Alertmanager、dashboard JSON、shell/YAML 靜態檢查均通過；Loki runtime API 顯示 4 條既有 ruler alerts health 皆為 `ok`。
+
+---
+
 ## 2026-08-01 17:57 — 付款建立與編號失敗 shadow 告警
 
 **改動摘要：** 新增低流量付款建立 5xx 與付款編號容量／重試耗盡告警，以 shadow routing 先行觀察，並補齊可執行的規則測試與 production runbook。
