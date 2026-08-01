@@ -1,6 +1,6 @@
 # SkyEye
 
-Self-hosted monitoring stack for wanbrain products. Collects metrics + logs from every product's host via Grafana Alloy + Cloudflare Tunnel, alerts to Telegram + Gmail, stores cold data in S3. Zero public ports.
+Self-hosted monitoring stack for wanbrain products. Collects metrics + logs from every product's host via Grafana Alloy + Cloudflare Tunnel, alerts to Telegram, stores cold data in S3. Zero public ports.
 
 **Design doc**: [`monitoring-plan-v2.md`](./monitoring-plan-v2.md)
 **Operations**: [`docs/operations.md`](./docs/operations.md)
@@ -12,7 +12,7 @@ Self-hosted monitoring stack for wanbrain products. Collects metrics + logs from
 PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
   alloy → journald → Loki push URL              Loki (S3 chunks)
         → node exporter → Prom push URL   ━━▶   Prometheus (TSDB + rules)
-        → /metrics (FastAPI) → same CF edge     Alertmanager → Telegram + Gmail
+        → /metrics (FastAPI) → same CF edge     Alertmanager → Telegram
         → ppc_* business counters               Grafana (CF Access + Google SSO)
                                                 Blackbox (external probes)
   caddy.service                                 cloudflared tunnel
@@ -27,16 +27,19 @@ PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
 - **External deps**: blackbox probes on NewebPay, Google OAuth, ppclub.tw, Hengfu (insecure TLS)
 
 ### Alert rules active
-18 Prometheus rules across 4 groups:
+39 Prometheus rules across 7 files:
 - `system.yml` — CPU, RAM, disk, OOM, systemd units
-- `app.yml` — BackendDown, 5xx rates, latency p99, unhandled exception surge
-- `business.yml` — ZeroPaymentHalfDay, RefundSurge, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
+- `app.yml` — BackendDown, 5xx rates, latency p99, unhandled exception surge, payment failure shadow alerts
+- `business.yml` — PaymentSuccessRateLow, RefundVolumeHigh, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
 - `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, DailyHeartbeat
+- `stack-health.yml` — SkyEye components, resource pressure, rule evaluation health
+- `trading-targets.yml` / `trading.yml` — development Trading target inventory and shadow alerts
 
 Severity → routing:
-- **High** → 🚨 Telegram (sound) + Gmail backup (24/7)
+- **High** → 🚨 Telegram (sound) (24/7)
 - **Medium** → ⚠️ Telegram (silent) (work hours Asia/Taipei 09:00-21:00)
-- **Low** → Email daily digest
+- **Low** → ℹ️ Telegram (silent, 24h repeat)
+- **Shadow** → evaluated and visible, but routed to `shadow-null` with no notification
 
 ## Directory map
 
@@ -44,16 +47,16 @@ Severity → routing:
 SkyEye/
 ├── README.md                            this file
 ├── monitoring-plan-v2.md                design doc (2026-04-22 rewrite)
-├── docker-compose.yml                   the stack (5 services)
+├── docker-compose.yml                   the stack (6 services)
 ├── .env.example                         GF_ADMIN_PW — the only env var
 │
 ├── alertmanager/
-│   ├── alertmanager.yml                 routes + receivers (High loud / Medium silent / Low digest)
-│   └── secrets/                         tg_token, smtp_pass (gitignored, 0644)
+│   ├── alertmanager.yml                 routes + receivers (High loud / Medium + Low silent / Shadow null)
+│   └── secrets/                         tg_token (gitignored, 0644)
 │
 ├── prometheus/
 │   ├── prometheus.yml                   remote-write receiver + scrape + blackbox
-│   └── rules/                           system / app / business / deadman (18 rules)
+│   └── rules/                           system / app / business / deadman / stack / trading (39 rules)
 │
 ├── loki/loki-config.yml                 S3 backend, delete API enabled
 │
@@ -111,7 +114,7 @@ SkyEye/
 
 See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest version:
 
-- **Morning habit**: check Gmail for the overnight Low digest. If it arrived, the alert pipeline is alive.
+- **Morning habit**: check the Telegram group for the silent `DailyHeartbeat`. If it arrived, the alert pipeline is alive.
 - **When paged (Telegram 🚨)**: click the Runbook link in the message.
 - **Dashboards**: https://grafana.wanbrain.com → Overview folder (daily), PPClub folder (deep dive), Hosts folder (troubleshoot).
 

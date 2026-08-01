@@ -6,11 +6,11 @@ Day-2 reference: what to do when, by whom, and how often. If you're reading this
 
 Morning check (9:00-10:00 Taipei):
 
-1. **Gmail inbox** — expect one `[SkyEye Low] DailyHeartbeat` email per 24 h. If absent for 2+ days, the alert pipeline has a problem somewhere (Prom ↔ AM ↔ Gmail). Investigate even if Grafana looks fine.
+1. **Telegram group** — expect one silent `DailyHeartbeat` message per 24 h. If absent for 2+ days, the alert pipeline has a problem somewhere (Prom ↔ AM ↔ Telegram). Investigate even if Grafana looks fine.
 2. **Grafana Overview** (https://grafana.wanbrain.com) — 30-second glance:
    - `Active alerts (High/Medium)` = 0 — green
    - `Products UP` == product count — nothing has fallen off
-   - `Emails sent (last 24h)` ≥ 1 — pipeline lived through the night
+   - `24h Telegram 通知` ≥ 1 — pipeline lived through the night
 3. **Scroll Telegram group** — anything overnight you may have slept through.
 
 If all three are fine, you're done. Total: under 2 minutes.
@@ -36,7 +36,6 @@ If all three are fine, you're done. Total: under 2 minutes.
 
 1. **Secret rotation** (see "Rotating secrets" below):
    - Telegram bot token
-   - Gmail App Password
    - CF Access Service Token
    - Grafana admin password (unless strictly via SSO)
 2. **Image bumps** — update pinned versions in `docker-compose.yml`, rebuild, verify.
@@ -62,7 +61,7 @@ If all three are fine, you're done. Total: under 2 minutes.
 
 ### SkyEye itself stops paging (no alerts, no heartbeat)
 
-Symptom: no Gmail for 2+ mornings, `Emails sent (last 24h)` reads 0.
+Symptom: no silent `DailyHeartbeat` in Telegram for 2+ mornings, `24h Telegram 通知` reads 0.
 
 1. **UptimeRobot** — check your dashboard (https://uptimerobot.com). If ppclub.tw is still being probed, your monitoring stack is silent but the external probe is alive.
 2. **SSH monitoring-prod**:
@@ -131,12 +130,6 @@ sudo docker compose restart alertmanager
 
 Old token is instantly invalidated. Save new token to 1Password.
 
-### Gmail App Password
-
-1. Revoke old: https://myaccount.google.com/apppasswords → remove the existing `SkyEye Alertmanager` entry.
-2. Generate new, same name.
-3. Write to `alertmanager/secrets/smtp_pass`, restart AM.
-
 ### CF Access Service Token (`skyeye-agent-push`)
 
 This is the token every Alloy agent uses. Rotating it means every product host needs its agent config re-rendered.
@@ -192,7 +185,7 @@ New product added = $0 incremental (agent runs on the product's own host).
 ## FAQ
 
 **Q: Why are there Low alerts that are always firing?**
-A: `DailyHeartbeat` is a `vector(1)` rule — intentional. Its daily email digest is proof the full Prom→AM→Gmail path is alive. If you stop getting the Low email, something's broken.
+A: `DailyHeartbeat` is a `vector(1)` rule — intentional. Its daily silent Telegram message proves the full Prom→AM→Telegram path is alive. If it stops arriving, something's broken.
 
 **Q: Why does the scrape `job` label say `integrations/unix` instead of `node-exporter`?**
 A: Alloy's `prometheus.exporter.unix` integration sets its own job name. Our rules don't filter by `job` so it doesn't matter.

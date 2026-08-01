@@ -44,17 +44,15 @@ groups:
             Success rate:                 {{ with query "100 * sum(increase(ppc_payment_success_total[6h])) / sum(increase(ppc_payment_created_total{status=\"ok\"}[6h]))" }}{{ . | first | value | humanize }}%{{ end }}
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/payment-zero.md"
 
-      - alert: RefundSurge
+      - alert: RefundVolumeHigh
         expr: |
-          sum(increase(ppc_refund_total[1h]))
-          >
-          3 * avg_over_time(sum(increase(ppc_refund_total[1h]))[7d:1h])
+          sum(increase(ppc_refund_total{product="ppclub", result="ok"}[24h])) >= 20
         for: 10m
         labels:
           severity: Low
           product: ppclub
         annotations:
-          summary: "PPClub: refund rate > 3x 7-day average"
+          summary: "PPClub: successful refunds >= 20 in last 24h"
 
       - alert: ExternalApiDown
         # Match both strict and insecure TLS blackbox jobs

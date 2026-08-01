@@ -1,0 +1,157 @@
+groups:
+  - name: tnauqquant-trading
+    interval: 30s
+    rules:
+      - alert: TradingDuplicateProcess
+        expr: |
+          tnauqquant_process_count{
+            product="tnauqquant",
+            environment="development",
+            server_id="tnauqquant-dev-mac",
+            strategy="mexc-toobit-btc"
+          } > 1
+        for: 30s
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} has duplicate trading processes"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-process-down.md"
+
+      - alert: TradingUnexpectedProcess
+        expr: |
+          (
+            tnauqquant_run_expected{
+              product="tnauqquant",
+              environment="development",
+              server_id="tnauqquant-dev-mac",
+              strategy="mexc-toobit-btc"
+            } == 0
+            and on (product, environment, server_id, strategy)
+            tnauqquant_process_count{
+              product="tnauqquant",
+              environment="development",
+              server_id="tnauqquant-dev-mac",
+              strategy="mexc-toobit-btc"
+            } > 0
+          )
+          unless on (product, environment, server_id, strategy)
+          tnauqquant_done_marker{
+            product="tnauqquant",
+            environment="development",
+            server_id="tnauqquant-dev-mac",
+            strategy="mexc-toobit-btc",
+            reason=~"risk_halt|max_cycles_drain_failed|unknown"
+          } == 1
+        for: 2m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} process exists while the run is not expected"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-process-down.md"
+
+      - alert: TradingProcessDown
+        expr: |
+          (
+            tnauqquant_run_expected{
+              product="tnauqquant",
+              environment="development",
+              server_id="tnauqquant-dev-mac",
+              strategy="mexc-toobit-btc"
+            } == 1
+            and on (product, environment, server_id, strategy)
+            tnauqquant_process_count{
+              product="tnauqquant",
+              environment="development",
+              server_id="tnauqquant-dev-mac",
+              strategy="mexc-toobit-btc"
+            } == 0
+          )
+          unless on (product, environment, server_id, strategy)
+          (
+            tnauqquant_runtime_contract_available{
+              product="tnauqquant",
+              environment="development",
+              server_id="tnauqquant-dev-mac",
+              strategy="mexc-toobit-btc"
+            } == 1
+            and on (product, environment, server_id, strategy)
+            min by (product, environment, server_id, strategy) (
+              {
+                __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)",
+                product="tnauqquant",
+                environment="development",
+                server_id="tnauqquant-dev-mac",
+                strategy="mexc-toobit-btc"
+              }
+            ) == 0
+          )
+        for: 2m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} trading process is down"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-process-down.md"
+
+      - alert: TradingCriticalSafetyState
+        expr: |
+          tnauqquant_done_marker{
+            product="tnauqquant",
+            environment="development",
+            server_id="tnauqquant-dev-mac",
+            strategy="mexc-toobit-btc",
+            reason=~"risk_halt|max_cycles_drain_failed|unknown"
+          } == 1
+        for: 0m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} terminal state is {{ $labels.reason }}"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md"
+
+      - alert: TradingRunBindingInvalid
+        expr: |
+          tnauqquant_runtime_contract_available{
+            product="tnauqquant",
+            environment="development",
+            server_id="tnauqquant-dev-mac",
+            strategy="mexc-toobit-btc"
+          } == 1
+          and on (product, environment, server_id, strategy)
+          min by (product, environment, server_id, strategy) (
+            {
+              __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)",
+              product="tnauqquant",
+              environment="development",
+              server_id="tnauqquant-dev-mac",
+              strategy="mexc-toobit-btc"
+            }
+          ) == 0
+        for: 1m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} run binding is invalid"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md"
+
+      - alert: TradingTelemetryMissing
+        expr: |
+          absent_over_time(
+            tnauqquant_probe_timestamp_seconds{
+              product="tnauqquant",
+              environment="development",
+              server_id="tnauqquant-dev-mac",
+              strategy="mexc-toobit-btc"
+            }[3m]
+          )
+        for: 0m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} telemetry is missing"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md"

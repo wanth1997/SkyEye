@@ -3,6 +3,9 @@
 > 2026-04-22 修訂。承接 [monitoring-plan.md](./monitoring-plan.md) 的方向，依據當前實機現況、舊 Guardian 架構、PPClub code 盤點重寫。
 > Repo 名稱：**`SkyEye`**（即本 repo；實作時把監控相關檔案直接加到本 repo 根目錄）。
 
+> ⚠️ **2026-05-05 偏移現實**：原計畫 Telegram + Email 雙通道告警；實際運行後 Gmail SMTP 認證失效（Gmail App Password 被撤銷或 2FA 設定變更），改為**全 Telegram**單通道。本文件中提到 email 作為告警 channel / digest / backup 的章節（§5、§13.2、§13.3）為歷史脈絡，**現行實作以 `alertmanager/alertmanager.yml` 為準**。
+> 本文件中提到 email 是 PII（log 內的用戶資料）那部分（§7、§14 PII scrub）跟告警通道無關，仍然有效並被 Alloy 持續執行。
+
 ---
 
 ## 0. 從 v1 的差異摘要

@@ -15,6 +15,23 @@
 ---
 -->
 
+## 2026-08-01 19:45 — 保存 live monitoring 設定並整合付款 shadow 告警
+
+**改動摘要：** 將 production checkout 內 21 個既有 live-only 修改做成可追溯快照，合併到含付款失敗告警的最新 master，保留 Trading／ZenIncome runtime 設定與付款 shadow routing。
+
+**修改的檔案：**
+- `alertmanager/alertmanager.yml` — 保留 production Telegram、Trading inhibit 與 shadow-null routing
+- `prometheus/rules/` — 納管 production 的 business、deadman 與 Trading rules，並保留付款建立／編號失敗規則
+- `loki/rules/fake/` — 納管既有 Trading 與 ZenIncome ruler rules
+- `grafana/dashboards/` — 納管 production 現行 Overview、Trading 與 ZenIncome dashboard
+- `README.md`、`docs/operations.md`、`runbooks/` — 將現行通知操作說明由已停用的 Gmail 修正為 Telegram
+- `docs/project-brief.md` — 更新 Trading、ZenIncome 與付款告警現況
+- `docs/work-log.md` — 合併既有 production migration 紀錄並記錄本次保存工作
+
+**原因/備註：** 先以 production `ba83c3a` 為基準逐檔 SHA-256 保存，再三方整合 `origin/master`。`docker compose config`、Prometheus 7 個 rule files、付款 rule tests、Alertmanager、dashboard JSON、shell/YAML 靜態檢查均通過；Loki runtime API 顯示 4 條既有 ruler alerts health 皆為 `ok`。
+
+---
+
 ## 2026-08-01 17:57 — 付款建立與編號失敗 shadow 告警
 
 **改動摘要：** 新增低流量付款建立 5xx 與付款編號容量／重試耗盡告警，以 shadow routing 先行觀察，並補齊可執行的規則測試與 production runbook。
@@ -60,3 +77,114 @@
 **原因/備註：** 本輪只建立與整理文件，未實作或部署任何監控程式。
 
 ---
+
+## 2026-05-16 - PROD01 to PROD02 monitoring migration
+
+### Summary
+
+Migrated PPClub production monitoring from the old production host
+(`PROD01`, previously seen in SkyEye as `server_id="ppclub-prod"`) to the new
+production host (`server_id="PROD02"`).
+
+This was an agent-side migration only. The central SkyEye stack
+(Prometheus, Loki, Grafana, Alertmanager, Cloudflared) was not moved or
+reconfigured.
+
+### PROD02 setup
+
+The Alloy agent was installed and started on PROD02 using the existing SkyEye
+agent installer.
+
+Effective PROD02 labels and sources:
+
+- Metrics `product="ppclub"`, `server_id="PROD02"`.
+- Host metrics via Alloy unix exporter.
+- App metrics from `localhost:8090/metrics`.
+- Journald logs:
+  - `ppclub-backend.service` and `caddy.service` mapped to `product="ppclub"`.
+  - `enyoung-menu.service` mapped to `product="enyoung"`.
+
+PROD02 local validation reported:
+
+- `alloy.service` active and running since `2026-05-15 18:35:09 UTC`.
+- `http://localhost:8090/metrics` returned HTTP 200.
+- `ppclub-backend.service` and `caddy.service` had recent logs.
+- `enyoung-menu.service` existed and was active, but had no recent logs; this
+  explained why central Loki had no fresh `product="enyoung"` entries from
+  PROD02 during validation.
+- Prometheus remote write had `failed=0`, `pending=0`; historical retry count
+  did not increase during a 30 second comparison.
+- Loki pushes continued to return HTTP 204 and sent-entry counters increased.
+
+### Central verification
+
+Central Prometheus and Loki were queried from the SkyEye host.
+
+Prometheus showed only PROD02 as active for the PPClub production path:
+
+```promql
+count by (product, server_id, job, instance) (
+  up{server_id=~"PROD01|ppclub-prod|PROD02"}
+)
+```
+
+Result at `2026-05-16 08:31:57 UTC`:
+
+- `product="ppclub"`, `server_id="PROD02"`, `job="integrations/unix"`,
+  `instance="ip-172-31-11-182"`: `1`
+- `product="ppclub"`, `server_id="PROD02"`, `job="ppclub-backend"`,
+  `instance="localhost:8090"`: `1`
+
+No active `up` series remained for `server_id="PROD01"` or
+`server_id="ppclub-prod"`.
+
+Loki verification:
+
+```logql
+count_over_time({server_id="PROD02"}[10m])
+```
+
+Result at `2026-05-16 08:31:57 UTC`:
+
+- `job="journald"`, `product="ppclub"`, `server_id="PROD02"`: 418 log lines.
+
+Checks for old host labels:
+
+```logql
+count_over_time({server_id="PROD01"}[30m])
+count_over_time({server_id="ppclub-prod"}[30m])
+```
+
+Both returned no recent entries during final validation.
+
+Alert verification:
+
+```promql
+ALERTS{alertstate="firing"}
+```
+
+Only the intentional `DailyHeartbeat` low-severity alert was firing. No PROD02
+migration-related alerts were active.
+
+### PROD01 retirement
+
+After PROD02 was verified as the active monitoring source, Alloy was stopped
+and disabled on PROD01:
+
+```bash
+sudo systemctl stop alloy
+sudo systemctl disable alloy
+```
+
+The operator then uninstalled Alloy from PROD01. Old Prometheus and Loki data
+was not manually deleted; it will age out under the normal 30 day retention.
+
+### Notes
+
+- `server_id="ppclub-prod"` may still appear in label value lists until
+  retention expires. This is historical data and does not mean PROD01 is still
+  sending metrics or logs.
+- `server_id="PROD02"` is now the production host identity for PPClub host and
+  app metrics.
+- If `enyoung-menu.service` begins producing logs on PROD02, they should appear
+  under `product="enyoung"`, `server_id="PROD02"`.

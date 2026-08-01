@@ -12,7 +12,7 @@ groups:
         # SkyEye — Stack health dashboard. The actual "you can't get
         # alerts" signal comes from external monitoring (UptimeRobot,
         # etc). Keep this rule anyway — it's diagnostically useful after
-        # the fact and triggers the DailyHeartbeat email to stop.
+        # the fact and causes the DailyHeartbeat Telegram message to stop.
         expr: up{job="alertmanager"} == 0
         for: 5m
         labels:

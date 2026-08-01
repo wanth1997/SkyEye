@@ -40,6 +40,9 @@ services:
     volumes:
       - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
+      # Bind-mount overlays the named volume for the rules subtree only;
+      # ruler reads from /loki/rules/<tenant>/*.yml. tenant=fake (auth_enabled=false).
+      - ./loki/rules:/loki/rules:ro
     command: -config.file=/etc/loki/local-config.yaml
     ports:
       - "127.0.0.1:3100:3100"
