@@ -1,0 +1,11 @@
+time=2026-07-17T02:45:06.000+08:00 level=INFO msg=build_info go_version=go1.24.4 goexchange_version=v0.1.33 vcs_revision=0123456789abcdef vcs_modified=false
+time=2026-07-17T02:45:07.000+08:00 level=INFO msg=equity_snapshot equity_usdt=10000.00 long_btc=0.1000 short_btc=0.1000 net_btc=0
+time=2026-07-17T02:46:00.000+08:00 level=INFO msg=pnl_status equity_start=10000 equity_now=9990 rebate_usdt=2 cash_pnl_usdt=-10 real_pnl_usdt=-8 risk_pnl_usdt=-8 cycles_completed=0 stable=false risk_stopped=false
+time=2026-07-17T02:50:00.000+08:00 level=INFO msg=pnl_status equity_start=10000 equity_now=9988 rebate_usdt=5 cash_pnl_usdt=-12 real_pnl_usdt=-7 risk_pnl_usdt=-7 cycles_completed=1 stable=true risk_stopped=false
+time=2026-07-17T02:55:00.000+08:00 level=INFO msg=pnl_status equity_start=10000 equity_now=10004 rebate_usdt=8 cash_pnl_usdt=4 real_pnl_usdt=12 risk_pnl_usdt=12 cycles_completed=2 stable=true risk_stopped=false
+time=2026-07-17T02:55:00.000+08:00 level=WARN msg=risk_rejected_entry reason=exposure_limit order_id=fake-order-001 client_action_id=fake-action-001
+time=2026-07-17T02:56:00.000+08:00 level=WARN msg=emergency_exit reason=fixture_canary repo_root=[REPO_ROOT] contact=[EMAIL]
+time=2026-07-17T03:00:00.000+08:00 level=ERROR msg=entry_tactic_failed tactic=taker_ioc fire_ms=244.968 err="fixture exchange: PlaceOrder [HTTP 400]: Balance insufficient"
+time=2026-07-17T03:00:00.100+08:00 level=ERROR msg=entry_tactic_failed tactic=taker_ioc fire_ms=142.852 err="fixture exchange: PlaceOrder [HTTP 400]: Balance insufficient"
+time=2026-07-17T03:00:00.200+08:00 level=ERROR msg=entry_tactic_failed tactic=taker_ioc fire_ms=150.555 err="fixture exchange: PlaceOrder [HTTP 400]: Balance insufficient"
+this deterministic malformed fixture line has no structured fields

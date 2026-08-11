@@ -156,13 +156,15 @@ SkyEye 提供 `agents/alloy/trading/deployment.env.example`，新 server agent �
 | `TQ_ENVIRONMENT` | `development` | development 或 production |
 | `TQ_SERVER_ID` | `tnauqquant-dev-mac` | target inventory key |
 | `TQ_STRATEGY` | `mexc-toobit-btc` | monitoring slug |
+| `TQ_INSTANCE_ID` | `mexc-toobit-btc-initiator-hedge` | config `instance_id` 的明確預期值；不得由 strategy slug 猜測 |
 | `TQ_REPO_ROOT` | `/Users/tinghsu/projects/tnauqquant` | 唯一 server-specific repo root |
+| `TQ_EXECUTABLE` | `/Users/tinghsu/projects/tnauqquant/quant` | `scripts/tq` 實際啟動的 quant binary |
 | `TQ_CONFIG_PATH` | `/Users/tinghsu/projects/tnauqquant/config/mexc_toobit_btc_config.yaml` | canonical config identity |
 | `TQ_RAW_LOG_GLOB` | `/Users/tinghsu/projects/tnauqquant/logs/live-runs/*.raw.log` | Alloy local-only absolute glob |
 | `TQ_RUN_MANIFEST` | `/Users/tinghsu/projects/tnauqquant/run-state/mexc-toobit-btc/current.json` | Production contract；POC 缺少時輸出 identity unavailable |
 | `TQ_DONE_MARKER` | `/Users/tinghsu/projects/tnauqquant/run-state/mexc-toobit-btc/current.done.json` | Production contract |
 | `TQ_POC_RUN_EXPECTED` | `1` | 僅供 development heuristic；production 從 manifest/state machine 導出 |
-| `TQ_TEXTFILE_DIR` | `/opt/homebrew/var/lib/alloy/textfile` | Probe atomic output directory；Intel Mac 由 `brew --prefix` 導出 |
+| `TQ_TEXTFILE_DIR` | `/opt/homebrew/var/lib/alloy/trading-textfile` | Probe atomic output directory；Intel Mac 由 `brew --prefix` 導出 |
 | `LOKI_PUSH_URL` | `https://loki-push.wanbrain.com/loki/api/v1/push` | 既有 ingress |
 | `PROM_PUSH_URL` | `https://prom-push.wanbrain.com/api/v1/write` | 既有 ingress |
 | `CF_ACCESS_CLIENT_ID` | 僅存在 secret env | Trading host 專用 service token |

@@ -6,7 +6,7 @@ groups:
         expr: vector(1)
         labels:
           product: tnauqquant
-          environment: development
-          server_id: tnauqquant-dev-mac
-          strategy: mexc-toobit-btc
+          environment: production
+          server_id: tnauqquant-prod-1
+          strategy: toobit-mexc-btc
           notification_mode: shadow

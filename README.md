@@ -33,7 +33,7 @@ PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
 - `business.yml` — PaymentSuccessRateLow, RefundVolumeHigh, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
 - `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, DailyHeartbeat
 - `stack-health.yml` — SkyEye components, resource pressure, rule evaluation health
-- `trading-targets.yml` / `trading.yml` — development Trading target inventory and shadow alerts
+- `trading-targets.yml` / `trading.yml` — production Trading target inventory and shadow alerts
 
 Severity → routing:
 - **High** → 🚨 Telegram (sound) (24/7)

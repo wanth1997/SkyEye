@@ -1,0 +1,156 @@
+// SkyEye tnauqquant monitoring for macOS.
+// Secrets and server-specific values are read from Homebrew Alloy config.env.
+
+loki.source.file "trading_raw" {
+  targets = [
+    {
+      __path__    = sys.env("TQ_RAW_LOG_GLOB"),
+      product     = sys.env("TQ_PRODUCT"),
+      environment = sys.env("TQ_ENVIRONMENT"),
+      server_id   = sys.env("TQ_SERVER_ID"),
+      strategy    = sys.env("TQ_STRATEGY"),
+    },
+  ]
+
+  tail_from_end           = false
+  on_positions_file_error = "restart_from_end"
+  forward_to              = [loki.process.trading.receiver]
+
+  file_match {
+    enabled           = true
+    sync_period       = "10s"
+    ignore_older_than = "24h"
+  }
+}
+
+loki.process "trading" {
+  forward_to = [loki.write.central.receiver]
+
+  stage.logfmt {
+    mapping = {
+      time               = "",
+      level              = "",
+      msg                = "",
+      stable             = "",
+      cycle_completed    = "",
+      cycle_id           = "",
+      real_pnl_usdt      = "",
+      cash_pnl_usdt      = "",
+      rebate_usdt        = "",
+      risk_pnl_usdt      = "",
+      cycles_completed   = "",
+      cycles_completed_today = "",
+      process_latency_ms = "",
+    }
+  }
+
+  stage.timestamp {
+    source                        = "time"
+    format                        = "RFC3339Nano"
+    action_on_failure             = "skip"
+    action_on_duplicate_timestamp = "fudge"
+  }
+
+  // Keep the original path only long enough to derive a basename run_id.
+  stage.regex {
+    source     = "filename"
+    expression = "^.*/(?P<run_id>[^/]+)\\.raw\\.log$"
+  }
+
+  stage.labels {
+    values = {
+      level  = "",
+      run_id = "",
+    }
+  }
+
+  // Scrub on the source host before the line can reach Loki.
+  stage.replace {
+    expression = sys.env("TQ_REPO_ROOT_REGEX")
+    replace    = "[REPO_ROOT]"
+  }
+
+  stage.replace {
+    expression = "([A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,})"
+    replace    = "[EMAIL]"
+  }
+
+  stage.replace {
+    expression = "(?i)authorization[=:][[:space:]]*([^[:space:]]+)"
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = "(?i)token=([^[:space:]]+)"
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = "(?i)(order_id|client_action_id)=([^[:space:]]+)"
+    replace    = "[ORDER_REF]"
+  }
+
+  stage.label_drop {
+    values = ["filename"]
+  }
+
+  // This is the complete cardinality budget for trading log streams.
+  stage.label_keep {
+    values = ["product", "environment", "server_id", "strategy", "run_id", "level"]
+  }
+}
+
+loki.write "central" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+    headers = {
+      "CF-Access-Client-Id"     = sys.env("CF_ACCESS_CLIENT_ID"),
+      "CF-Access-Client-Secret" = sys.env("CF_ACCESS_CLIENT_SECRET"),
+    }
+  }
+}
+
+prometheus.exporter.unix "trading_textfile" {
+  set_collectors = ["textfile"]
+
+  textfile {
+    directory = sys.env("TQ_TEXTFILE_DIR")
+  }
+}
+
+prometheus.scrape "trading_probe" {
+  targets         = prometheus.exporter.unix.trading_textfile.targets
+  forward_to      = [prometheus.remote_write.central.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  job_name        = "tnauqquant-trading-probe"
+}
+
+prometheus.remote_write "central" {
+  endpoint {
+    url = sys.env("PROM_PUSH_URL")
+    headers = {
+      "CF-Access-Client-Id"     = sys.env("CF_ACCESS_CLIENT_ID"),
+      "CF-Access-Client-Secret" = sys.env("CF_ACCESS_CLIENT_SECRET"),
+    }
+
+    queue_config {
+      max_samples_per_send = 2000
+      batch_send_deadline  = "5s"
+      min_backoff          = "500ms"
+      max_backoff          = "30s"
+    }
+  }
+
+  external_labels = {
+    product     = sys.env("TQ_PRODUCT"),
+    environment = sys.env("TQ_ENVIRONMENT"),
+    server_id   = sys.env("TQ_SERVER_ID"),
+    strategy    = sys.env("TQ_STRATEGY"),
+  }
+}
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}

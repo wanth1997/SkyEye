@@ -1,6 +1,6 @@
 # TNAUQQuant new server monitoring handoff
 
-This is the self-contained, non-secret contract for the agent onboarding the future Trading Mac. It applies after the development target is accepted in Grafana.
+This is the self-contained, non-secret contract for the production Trading Mac.
 
 ## Fixed identities
 
@@ -9,7 +9,7 @@ This is the self-contained, non-secret contract for the agent onboarding the fut
 | `product` | `tnauqquant` |
 | `environment` | `production` |
 | `server_id` | `tnauqquant-prod-1` |
-| `strategy` | `mexc-toobit-btc` |
+| `strategy` | `toobit-mexc-btc` |
 | launch mode | `scripts/tq live run --human <config>` inside operator tmux |
 | auto-restart | disabled |
 | primary PNL | latest `stable=true` `real_pnl_usdt` |
@@ -20,8 +20,8 @@ Paths are intentionally not fixed. A different username or repo root changes onl
 ## Prerequisites
 
 - Trading checkout contains merge `fd317b51c3b617a8bf9b9f04e692649a45acf4c4` or a descendant.
-- The untracked Trading `.env` sets `TQ_STRATEGY=mexc-toobit-btc`.
-- The canonical Trading launcher creates `run-state/mexc-toobit-btc/current.json` and `current.done.json` using schema v1.
+- The untracked Trading `.env` sets `TQ_STRATEGY=toobit-mexc-btc`.
+- The canonical Trading launcher creates `run-state/toobit-mexc-btc/current.json` and `current.done.json` using schema v1.
 - A host-specific Cloudflare service token is authorized only for `prom-push` and `loki-push`; do not include it in the report or Git.
 - The SkyEye operator has registered `tnauqquant-prod-1` centrally in shadow mode.
 
@@ -50,20 +50,23 @@ Copy `agents/alloy/trading/deployment.env.example` to `$(brew --prefix)/etc/allo
 ```text
 TQ_ENVIRONMENT=production
 TQ_SERVER_ID=tnauqquant-prod-1
-TQ_REPO_ROOT=<canonical absolute path>
-TQ_REPO_ROOT_REGEX=(<RE2-escaped canonical root>)
-TQ_EXECUTABLE=<repo>/quant
-TQ_CONFIG_PATH=<canonical live config>
-TQ_RAW_LOG_GLOB=<repo>/logs/live-runs/*.raw.log
-TQ_RUN_MANIFEST=<repo>/run-state/mexc-toobit-btc/current.json
-TQ_DONE_MARKER=<repo>/run-state/mexc-toobit-btc/current.done.json
-TQ_INSTANCE_ID=<exact stable config instance_id>
-TQ_SIDECAR_SESSION=<managed tmux session>
-TQ_SIDECAR_IDENTITY_FILE=<managed identity artifact>
-TQ_SIDECAR_HEALTH_URL=<loopback health endpoint>
+TQ_STRATEGY=toobit-mexc-btc
+TQ_REPO_ROOT=/Users/wan/projects/tnauqquant
+TQ_REPO_ROOT_REGEX=(/Users/wan/projects/tnauqquant)
+TQ_EXECUTABLE=/Users/wan/projects/tnauqquant/quant
+TQ_CONFIG_PATH=/Users/wan/projects/tnauqquant/config/toobit-mexc.conf
+TQ_RAW_LOG_GLOB=/Users/wan/projects/tnauqquant/logs/live-runs/*.raw.log
+TQ_RUN_MANIFEST=/Users/wan/projects/tnauqquant/run-state/toobit-mexc-btc/current.json
+TQ_DONE_MARKER=/Users/wan/projects/tnauqquant/run-state/toobit-mexc-btc/current.done.json
+TQ_INSTANCE_ID=mexc-toobit-btc-initiator-hedge
+TQ_SIDECAR_SESSION=goexchange-sidecar
+TQ_SIDECAR_IDENTITY_FILE=/Users/wan/projects/tnauqquant/logs/sidecar-runtime.identity
+TQ_SIDECAR_HEALTH_URL=http://127.0.0.1:3457/health
+TQ_REQUIRE_RUNTIME_CONTRACT=1
+TQ_TIMEZONE=Asia/Taipei
 ```
 
-Keep `TQ_POC_RUN_EXPECTED=1` as a fallback. The manifest/marker contract becomes authoritative when present.
+Keep `TQ_POC_RUN_EXPECTED=1` only as the expected-state default. Production requires the manifest/marker contract and never selects a current run by log mtime.
 
 ## Installation and validation
 
