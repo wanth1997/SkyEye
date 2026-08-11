@@ -32,11 +32,14 @@ loki.process "trading" {
       level              = "",
       msg                = "",
       stable             = "",
+      cycle_completed    = "",
+      cycle_id           = "",
       real_pnl_usdt      = "",
       cash_pnl_usdt      = "",
       rebate_usdt        = "",
       risk_pnl_usdt      = "",
       cycles_completed   = "",
+      cycles_completed_today = "",
       process_latency_ms = "",
     }
   }
@@ -80,6 +83,11 @@ loki.process "trading" {
   stage.replace {
     expression = "(?i)token=([^[:space:]]+)"
     replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = "(?i)(order_id|client_action_id)=([^[:space:]]+)"
+    replace    = "[ORDER_REF]"
   }
 
   stage.label_drop {

@@ -107,6 +107,8 @@ for required_name in \
   TQ_RUN_MANIFEST \
   TQ_DONE_MARKER \
   TQ_POC_RUN_EXPECTED \
+  TQ_REQUIRE_RUNTIME_CONTRACT \
+  TQ_TIMEZONE \
   TQ_TEXTFILE_DIR \
   LOKI_PUSH_URL \
   PROM_PUSH_URL \
@@ -120,6 +122,9 @@ done
   die "TQ_ENVIRONMENT must be development or production"
 [[ "$TQ_POC_RUN_EXPECTED" == "0" || "$TQ_POC_RUN_EXPECTED" == "1" ]] || \
   die "TQ_POC_RUN_EXPECTED must be 0 or 1"
+[[ "$TQ_REQUIRE_RUNTIME_CONTRACT" == "0" || "$TQ_REQUIRE_RUNTIME_CONTRACT" == "1" ]] || \
+  die "TQ_REQUIRE_RUNTIME_CONTRACT must be 0 or 1"
+[[ "$TQ_TIMEZONE" =~ ^[A-Za-z0-9_+./-]+$ ]] || die "invalid TQ_TIMEZONE"
 [[ "$TQ_REPO_ROOT" == /* ]] || die "TQ_REPO_ROOT must be absolute"
 [[ "$TQ_CONFIG_PATH" == /* ]] || die "TQ_CONFIG_PATH must be absolute"
 [[ "$TQ_RAW_LOG_GLOB" == /* ]] || die "TQ_RAW_LOG_GLOB must be absolute"

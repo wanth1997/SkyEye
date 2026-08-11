@@ -15,6 +15,7 @@ FAKE_REPO="$TEST_ROOT/tnauqquant"
 CONFIG_REL="config/mexc_toobit_btc_config.yaml"
 CONFIG_PATH="$FAKE_REPO/$CONFIG_REL"
 LOG_PATH="$FAKE_REPO/logs/live-runs/20260717_024506_mexc_toobit_btc_config.raw.log"
+PREVIOUS_LOG_PATH="$FAKE_REPO/logs/live-runs/20260717_010000_previous_mexc_toobit_btc_config.raw.log"
 MANIFEST_PATH="$FAKE_REPO/run-state/mexc-toobit-btc/current.json"
 MARKER_PATH="$FAKE_REPO/run-state/mexc-toobit-btc/current.done.json"
 TEXTFILE_DIR="$TEST_ROOT/textfile"
@@ -47,7 +48,17 @@ while :; do
 done
 EOF
 chmod 755 "$FAKE_REPO/quant"
-printf 'time=2026-07-17T02:45:06Z level=INFO msg=pnl_status real_pnl_usdt=12 stable=true\n' >"$LOG_PATH"
+today_local="$(TZ=Asia/Taipei date +%F)"
+cat >"$LOG_PATH" <<EOF
+time=${today_local}T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.1 real_pnl_usdt=10 cash_pnl_usdt=8 rebate_usdt=2 risk_pnl_usdt=9 cycles_completed=1
+time=${today_local}T09:30:00+08:00 level=INFO msg=pnl_status stable=false cycle_completed=false cycle_id=current.pending real_pnl_usdt=999 cash_pnl_usdt=999 rebate_usdt=0 risk_pnl_usdt=999 cycles_completed=1
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2
+EOF
+cat >"$PREVIOUS_LOG_PATH" <<EOF
+time=${today_local}T08:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=previous.1 real_pnl_usdt=4 cash_pnl_usdt=3 rebate_usdt=1 risk_pnl_usdt=3.5 cycles_completed=1
+time=${today_local}T08:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=previous.1 real_pnl_usdt=4 cash_pnl_usdt=3 rebate_usdt=1 risk_pnl_usdt=3.5 cycles_completed=1
+EOF
 
 export TQ_PRODUCT=tnauqquant
 export TQ_ENVIRONMENT=development
@@ -60,6 +71,8 @@ export TQ_RAW_LOG_GLOB="$FAKE_REPO/logs/live-runs/*.raw.log"
 export TQ_RUN_MANIFEST="$MANIFEST_PATH"
 export TQ_DONE_MARKER="$MARKER_PATH"
 export TQ_POC_RUN_EXPECTED=1
+export TQ_REQUIRE_RUNTIME_CONTRACT=1
+export TQ_TIMEZONE=Asia/Taipei
 export TQ_TEXTFILE_DIR="$TEXTFILE_DIR"
 export TQ_SIDECAR_SESSION=skyeye-fixture-missing
 export TQ_SIDECAR_IDENTITY_FILE="$TEST_ROOT/missing-sidecar.identity"
@@ -94,6 +107,15 @@ assert_metric() {
     printf 'FAIL: %s selector=%s expected=%s actual=%s\n' \
       "$metric" "$selector" "$expected" "${actual:-<missing>}" >&2
     sed -n '1,240p' "$METRICS_PATH" >&2
+    exit 1
+  fi
+}
+
+assert_metric_missing() {
+  local metric="$1"
+  if [[ -n "$(metric_value "$metric")" ]]; then
+    printf 'FAIL: %s must not be emitted\n' "$metric" >&2
+    sed -n '1,280p' "$METRICS_PATH" >&2
     exit 1
   fi
 }
@@ -169,12 +191,25 @@ write_marker() {
     }' >"$MARKER_PATH"
 }
 
-printf 'case: heuristic zero process\n'
+printf 'case: production contract required\n'
 run_probe
 assert_metric tnauqquant_process_count 0
 assert_metric tnauqquant_run_expected 1
 assert_metric tnauqquant_runtime_contract_available 0
+assert_metric tnauqquant_process_identity_ok 0
+assert_metric tnauqquant_log_binding_ok 0
 assert_metric tnauqquant_marker_binding_ok 0
+assert_metric tnauqquant_current_pnl_valid 0
+assert_metric_missing tnauqquant_current_run_info
+assert_metric_missing tnauqquant_current_real_pnl_usdt
+
+printf 'case: development heuristic zero process\n'
+export TQ_REQUIRE_RUNTIME_CONTRACT=0
+run_probe
+assert_metric tnauqquant_process_count 0
+assert_metric tnauqquant_run_expected 1
+assert_metric tnauqquant_runtime_contract_available 0
+assert_metric tnauqquant_log_binding_ok 1
 
 printf 'case: heuristic one process\n'
 start_quant
@@ -196,6 +231,7 @@ stop_quant "$pid_two"
 
 config_sha="$(shasum -a 256 "$CONFIG_PATH" | awk '{print $1}')"
 write_manifest "$pid_one" "$config_sha"
+export TQ_REQUIRE_RUNTIME_CONTRACT=1
 
 printf 'case: contract running\n'
 run_probe
@@ -205,6 +241,29 @@ assert_metric tnauqquant_strategy_identity_ok 1
 assert_metric tnauqquant_log_binding_ok 1
 assert_metric tnauqquant_marker_binding_ok 1
 assert_metric tnauqquant_run_expected 1
+assert_metric tnauqquant_current_run_info 1 'run_id="20260717_024506_mexc_toobit_btc_config"'
+assert_metric tnauqquant_current_pnl_valid 1
+assert_metric tnauqquant_current_real_pnl_usdt 12.5
+assert_metric tnauqquant_current_cash_pnl_usdt 9.5
+assert_metric tnauqquant_current_rebate_usdt 3
+assert_metric tnauqquant_current_risk_pnl_usdt 11.5
+assert_metric tnauqquant_current_cycles_completed 2
+assert_metric tnauqquant_completed_cycles_today 3
+
+sample_timestamp="$(metric_value tnauqquant_pnl_sample_timestamp_seconds)"
+last_completed_timestamp="$(metric_value tnauqquant_last_completed_cycle_timestamp_seconds)"
+run_started_timestamp="$(metric_value tnauqquant_current_run_started_timestamp_seconds)"
+for timestamp_value in "$sample_timestamp" "$last_completed_timestamp" "$run_started_timestamp"; do
+  if [[ ! "$timestamp_value" =~ ^[0-9]+$ ]] || [[ "$timestamp_value" -le 0 ]]; then
+    printf 'FAIL: expected a positive timestamp, got %s\n' "${timestamp_value:-<missing>}" >&2
+    exit 1
+  fi
+done
+
+if rg -q '(_path|pid)=' "$METRICS_PATH"; then
+  printf 'FAIL: paths and process IDs must not become metric labels\n' >&2
+  exit 1
+fi
 
 printf 'case: safe completion\n'
 write_marker "$pid_one" "$config_sha" max_cycles_complete

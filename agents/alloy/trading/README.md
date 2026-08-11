@@ -3,7 +3,7 @@
 This directory installs two source-host components:
 
 - Grafana Alloy tails tnauqquant `*.raw.log` files, scrubs sensitive text, and pushes logs/metrics through Cloudflare Access.
-- A 15-second launchd probe reads process/config/run state and writes `tnauqquant.prom` for Alloy's textfile collector.
+- A 15-second launchd probe reads process/config/run state plus manifest-bound PNL events and writes `tnauqquant.prom` for Alloy's textfile collector.
 
 Neither component starts, stops, signals, or attaches to the trading process.
 
@@ -17,7 +17,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
 | `setup-macos.sh` | Render, validate, install and optionally start Alloy + launchd |
 | `com.wanbrain.skyeye-trading-probe.plist.tmpl` | 15-second user launchd job |
 
-## Development Mac install
+## Production Mac install
 
 1. Copy and edit the environment file:
 
@@ -27,7 +27,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
      "$brew_prefix/etc/alloy/config.env"
    ```
 
-2. Replace every `/Users/operator/...` path and both Cloudflare placeholders. Keep `TQ_SERVER_ID=tnauqquant-dev-mac` and `TQ_ENVIRONMENT=development`.
+2. Verify the checked-in non-secret production paths, then replace both Cloudflare placeholders with the dedicated host token. Production keeps `TQ_REQUIRE_RUNTIME_CONTRACT=1`, so missing or invalid `current.json` fails closed instead of selecting a log by mtime.
 
 3. Render without changing services:
 
@@ -57,7 +57,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
 
 ## New server handoff
 
-The new server agent changes environment values only:
+Another server agent changes environment values only:
 
 - `TQ_ENVIRONMENT=production`
 - `TQ_SERVER_ID=tnauqquant-prod-1`
@@ -65,6 +65,7 @@ The new server agent changes environment values only:
 - `TQ_INSTANCE_ID` matching the Trading config
 - one capture-group `TQ_REPO_ROOT_REGEX` matching the canonical root
 - a production-host-specific Cloudflare service token
+- `TQ_TIMEZONE=Asia/Taipei` for the daily completed-cycle boundary
 
 Central labels, dashboard queries and rules must not be changed to accommodate a different filesystem path.
 
@@ -79,7 +80,7 @@ brew services info grafana/grafana/alloy
 curl -fsS http://127.0.0.1:12345/-/ready
 ```
 
-The probe output must contain no PID, path or run ID labels:
+The probe output must contain no PID or path labels. `run_id` is allowed only on the single bounded `tnauqquant_current_run_info` series:
 
 ```bash
 sed -n '1,240p' "$(brew --prefix)/var/lib/alloy/trading-textfile/tnauqquant.prom"

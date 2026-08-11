@@ -24,6 +24,93 @@ file_mtime() {
   stat -f '%m' "$path" 2>/dev/null || stat -c '%Y' "$path"
 }
 
+is_number() {
+  [[ "$1" =~ ^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$ ]]
+}
+
+timestamp_to_epoch() {
+  local timestamp="$1"
+  local normalized result
+  normalized="$(printf '%s\n' "$timestamp" | sed -E \
+    's/\.[0-9]+([+-][0-9]{2}):([0-9]{2})$/\1\2/; s/([+-][0-9]{2}):([0-9]{2})$/\1\2/; s/\.[0-9]+Z$/Z/')"
+
+  case "$normalized" in
+    *Z)
+      if result="$(date -j -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" '+%s' 2>/dev/null)"; then
+        printf '%s\n' "$result"
+        return 0
+      fi
+      ;;
+    *)
+      if result="$(date -j -f '%Y-%m-%dT%H:%M:%S%z' "$normalized" '+%s' 2>/dev/null)"; then
+        printf '%s\n' "$result"
+        return 0
+      fi
+      ;;
+  esac
+
+  date -d "$timestamp" '+%s' 2>/dev/null
+}
+
+local_day_start_epoch() {
+  local day="$1"
+  local result
+  if result="$(TZ="$TQ_TIMEZONE" date -j -f '%Y-%m-%d %H:%M:%S' \
+    "$day 00:00:00" '+%s' 2>/dev/null)"; then
+    printf '%s\n' "$result"
+    return 0
+  fi
+  TZ="$TQ_TIMEZONE" date -d "$day 00:00:00" '+%s' 2>/dev/null
+}
+
+latest_pnl_line() {
+  local log_path="$1"
+  local require_completed="$2"
+  awk -v require_completed="$require_completed" '
+    {
+      message = ""
+      stable = ""
+      completed = ""
+      for (i = 1; i <= NF; i++) {
+        equals = index($i, "=")
+        if (equals == 0) {
+          continue
+        }
+        key = substr($i, 1, equals - 1)
+        value = substr($i, equals + 1)
+        gsub(/^"|"$/, "", value)
+        if (key == "msg") message = value
+        if (key == "stable") stable = value
+        if (key == "cycle_completed") completed = value
+      }
+      if (message == "pnl_status" && stable == "true" &&
+          (require_completed != "1" || completed == "true")) {
+        latest = $0
+      }
+    }
+    END { if (latest != "") print latest }
+  ' "$log_path"
+}
+
+logfmt_value() {
+  local line="$1"
+  local wanted="$2"
+  awk -v wanted="$wanted" '
+    {
+      for (i = 1; i <= NF; i++) {
+        equals = index($i, "=")
+        if (equals == 0 || substr($i, 1, equals - 1) != wanted) {
+          continue
+        }
+        value = substr($i, equals + 1)
+        gsub(/^"|"$/, "", value)
+        print value
+        exit
+      }
+    }
+  ' <<<"$line"
+}
+
 config_instance_id() {
   sed -nE "s/^[[:space:]]*instance_id:[[:space:]]*['\"]?([^'\"#[:space:]]+)['\"]?.*$/\\1/p" \
     "$TQ_CONFIG_PATH" | head -n 1
@@ -77,12 +164,14 @@ for required_name in \
   TQ_RUN_MANIFEST \
   TQ_DONE_MARKER \
   TQ_POC_RUN_EXPECTED \
+  TQ_REQUIRE_RUNTIME_CONTRACT \
+  TQ_TIMEZONE \
   TQ_TEXTFILE_DIR
 do
   require_env "$required_name"
 done
 
-for command_name in awk date find jq mktemp ps sed shasum stat
+for command_name in awk date find jq mktemp ps sed shasum sort stat
 do
   require_command "$command_name"
 done
@@ -107,6 +196,13 @@ case "$TQ_POC_RUN_EXPECTED" in
   *) die "TQ_POC_RUN_EXPECTED must be 0 or 1" ;;
 esac
 
+case "$TQ_REQUIRE_RUNTIME_CONTRACT" in
+  0|1) ;;
+  *) die "TQ_REQUIRE_RUNTIME_CONTRACT must be 0 or 1" ;;
+esac
+
+[[ "$TQ_TIMEZONE" =~ ^[A-Za-z0-9_+./-]+$ ]] || die "invalid TQ_TIMEZONE"
+
 for absolute_path in \
   "$TQ_REPO_ROOT" \
   "$TQ_CONFIG_PATH" \
@@ -125,6 +221,10 @@ TQ_EXECUTABLE="${TQ_EXECUTABLE:-$TQ_REPO_ROOT/quant}"
 TQ_SIDECAR_SESSION="${TQ_SIDECAR_SESSION:-goexchange-sidecar}"
 TQ_SIDECAR_IDENTITY_FILE="${TQ_SIDECAR_IDENTITY_FILE:-$TQ_REPO_ROOT/logs/sidecar-runtime.identity}"
 TQ_SIDECAR_HEALTH_URL="${TQ_SIDECAR_HEALTH_URL:-http://127.0.0.1:3457/health}"
+TQ_TMUX_PATH="${TQ_TMUX_PATH:-$(command -v tmux || true)}"
+TQ_CURL_PATH="${TQ_CURL_PATH:-$(command -v curl || true)}"
+[[ -n "$TQ_TMUX_PATH" ]] || [[ ! -x /opt/homebrew/bin/tmux ]] || TQ_TMUX_PATH=/opt/homebrew/bin/tmux
+[[ -n "$TQ_CURL_PATH" ]] || [[ ! -x /usr/bin/curl ]] || TQ_CURL_PATH=/usr/bin/curl
 
 [[ "$TQ_EXECUTABLE" == /* ]] || die "TQ_EXECUTABLE must be absolute"
 [[ "$TQ_CONFIG_PATH" == "$TQ_REPO_ROOT/"* ]] || \
@@ -185,16 +285,28 @@ LOG_BINDING_OK=0
 MARKER_BINDING_OK=0
 RUN_EXPECTED="$TQ_POC_RUN_EXPECTED"
 DONE_REASON=""
+CURRENT_RUN_ID=""
+CURRENT_RUN_STARTED_TIMESTAMP=""
+CURRENT_PNL_VALID=0
+CURRENT_REAL_PNL=""
+CURRENT_CASH_PNL=""
+CURRENT_REBATE=""
+CURRENT_RISK_PNL=""
+CURRENT_CYCLES_COMPLETED=""
+PNL_SAMPLE_TIMESTAMP=""
+LAST_COMPLETED_CYCLE_TIMESTAMP=""
 
 if [[ "$ACTUAL_INSTANCE_ID" == "$TQ_INSTANCE_ID" ]]; then
   STRATEGY_IDENTITY_OK=1
 fi
 
-if [[ "$PROCESS_COUNT" -eq 1 ]]; then
+if [[ "$TQ_REQUIRE_RUNTIME_CONTRACT" -eq 0 && "$PROCESS_COUNT" -eq 1 ]]; then
   PROCESS_IDENTITY_OK=1
 fi
 
-if [[ -n "$LATEST_LOG" && "$(basename "$LATEST_LOG")" == *"_$CONFIG_STEM.raw.log" ]]; then
+if [[ "$TQ_REQUIRE_RUNTIME_CONTRACT" -eq 0 && -n "$LATEST_LOG" &&
+      "$(basename "$LATEST_LOG")" == *"_$CONFIG_STEM.raw.log" ]]
+then
   LOG_BINDING_OK=1
 fi
 
@@ -226,6 +338,7 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
     MANIFEST_INSTANCE_ID="$(jq -r '.instance_id' "$TQ_RUN_MANIFEST")"
     MANIFEST_PID="$(jq -r '.pid' "$TQ_RUN_MANIFEST")"
     MANIFEST_CONFIG_SHA256="$(jq -r '.config_sha256' "$TQ_RUN_MANIFEST")"
+    MANIFEST_PROCESS_STARTED_AT="$(jq -r '.process_started_at' "$TQ_RUN_MANIFEST")"
     MANIFEST_EXECUTABLE="$(jq -r '.executable' "$TQ_RUN_MANIFEST")"
     MANIFEST_CONFIG_PATH="$(jq -r '.config_path' "$TQ_RUN_MANIFEST")"
     MANIFEST_LOG_PATH="$(jq -r '.log_path' "$TQ_RUN_MANIFEST")"
@@ -256,6 +369,34 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
     then
       LOG_BINDING_OK=1
       LATEST_LOG_MTIME="$(file_mtime "$MANIFEST_LOG_PATH")"
+      CURRENT_RUN_ID="$MANIFEST_RUN_ID"
+      CURRENT_RUN_STARTED_TIMESTAMP="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
+
+      CURRENT_PNL_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 0)"
+      if [[ -n "$CURRENT_PNL_LINE" ]]; then
+        current_pnl_time="$(logfmt_value "$CURRENT_PNL_LINE" time)"
+        current_real_pnl="$(logfmt_value "$CURRENT_PNL_LINE" real_pnl_usdt)"
+        current_pnl_timestamp="$(timestamp_to_epoch "$current_pnl_time" || true)"
+        if is_number "$current_real_pnl" && [[ "$current_pnl_timestamp" =~ ^[0-9]+$ ]]; then
+          CURRENT_PNL_VALID=1
+          CURRENT_REAL_PNL="$current_real_pnl"
+          PNL_SAMPLE_TIMESTAMP="$current_pnl_timestamp"
+          current_cash_pnl="$(logfmt_value "$CURRENT_PNL_LINE" cash_pnl_usdt)"
+          current_rebate="$(logfmt_value "$CURRENT_PNL_LINE" rebate_usdt)"
+          current_risk_pnl="$(logfmt_value "$CURRENT_PNL_LINE" risk_pnl_usdt)"
+          current_cycles_completed="$(logfmt_value "$CURRENT_PNL_LINE" cycles_completed)"
+          is_number "$current_cash_pnl" && CURRENT_CASH_PNL="$current_cash_pnl"
+          is_number "$current_rebate" && CURRENT_REBATE="$current_rebate"
+          is_number "$current_risk_pnl" && CURRENT_RISK_PNL="$current_risk_pnl"
+          is_number "$current_cycles_completed" && CURRENT_CYCLES_COMPLETED="$current_cycles_completed"
+        fi
+      fi
+
+      LAST_COMPLETED_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 1)"
+      if [[ -n "$LAST_COMPLETED_LINE" ]]; then
+        last_completed_time="$(logfmt_value "$LAST_COMPLETED_LINE" time)"
+        LAST_COMPLETED_CYCLE_TIMESTAMP="$(timestamp_to_epoch "$last_completed_time" || true)"
+      fi
     fi
 
     if [[ ! -e "$TQ_DONE_MARKER" ]]; then
@@ -298,25 +439,67 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
   fi
 fi
 
+TODAY_LOCAL="$(TZ="$TQ_TIMEZONE" date +%F)"
+TODAY_START_EPOCH="$(local_day_start_epoch "$TODAY_LOCAL")"
+TODAY_COMPLETED_CYCLES="$({
+  while IFS= read -r history_log; do
+    [[ -n "$history_log" && -f "$history_log" ]] || continue
+    history_mtime="$(file_mtime "$history_log")"
+    [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
+    history_run_id="$(basename "$history_log")"
+    history_run_id="${history_run_id%.raw.log}"
+    awk -v day="$TODAY_LOCAL" -v run_id="$history_run_id" '
+      {
+        timestamp = ""
+        message = ""
+        stable = ""
+        completed = ""
+        cycle_id = ""
+        cycles_completed = ""
+        for (i = 1; i <= NF; i++) {
+          equals = index($i, "=")
+          if (equals == 0) continue
+          key = substr($i, 1, equals - 1)
+          value = substr($i, equals + 1)
+          gsub(/^"|"$/, "", value)
+          if (key == "time") timestamp = value
+          if (key == "msg") message = value
+          if (key == "stable") stable = value
+          if (key == "cycle_completed") completed = value
+          if (key == "cycle_id") cycle_id = value
+          if (key == "cycles_completed") cycles_completed = value
+        }
+        if (substr(timestamp, 1, 10) == day && message == "pnl_status" &&
+            stable == "true" && completed == "true") {
+          if (cycle_id == "") cycle_id = timestamp ":" cycles_completed
+          print run_id ":" cycle_id
+        }
+      }
+    ' "$history_log"
+  done <<EOF
+$(compgen -G "$TQ_RAW_LOG_GLOB" || true)
+EOF
+} | sort -u | awk 'END { print NR + 0 }')"
+
 SIDECAR_UP=0
 SIDECAR_IDENTITY_OK=0
-if command -v tmux >/dev/null 2>&1 &&
-   tmux has-session -t "$TQ_SIDECAR_SESSION" 2>/dev/null
+if [[ -x "$TQ_TMUX_PATH" ]] &&
+   "$TQ_TMUX_PATH" has-session -t "$TQ_SIDECAR_SESSION" 2>/dev/null
 then
   SIDECAR_UP=1
   recorded_session="$(sidecar_identity_field session)"
   recorded_created="$(sidecar_identity_field session_created)"
   recorded_source_root="$(sidecar_identity_field source_root)"
   recorded_source_version="$(sidecar_identity_field source_version)"
-  current_created="$(tmux display-message -p -t "$TQ_SIDECAR_SESSION" '#{session_created}' 2>/dev/null || true)"
+  current_created="$("$TQ_TMUX_PATH" display-message -p -t "$TQ_SIDECAR_SESSION" '#{session_created}' 2>/dev/null || true)"
 
   if [[ "$recorded_session" == "$TQ_SIDECAR_SESSION" ]] &&
      [[ -n "$recorded_created" ]] &&
      [[ "$recorded_created" == "$current_created" ]] &&
      [[ -n "$recorded_source_root" ]] &&
      [[ -n "$recorded_source_version" ]] &&
-     command -v curl >/dev/null 2>&1 &&
-     curl -fsS --max-time 2 "$TQ_SIDECAR_HEALTH_URL" >/dev/null 2>&1
+     [[ -x "$TQ_CURL_PATH" ]] &&
+     "$TQ_CURL_PATH" -fsS --max-time 2 "$TQ_SIDECAR_HEALTH_URL" >/dev/null 2>&1
   then
     SIDECAR_IDENTITY_OK=1
   fi
@@ -349,6 +532,21 @@ trap cleanup_temp EXIT HUP INT TERM
   emit_gauge tnauqquant_sidecar_identity_ok "Whether sidecar runtime identity and health match." "$SIDECAR_IDENTITY_OK"
   emit_gauge tnauqquant_probe_timestamp_seconds "Unix timestamp of the latest successful probe." "$PROBE_TIMESTAMP"
   emit_gauge tnauqquant_log_mtime_seconds "Unix mtime of the current bound log, or zero." "$LATEST_LOG_MTIME"
+  emit_gauge tnauqquant_current_pnl_valid "Whether current-run stable PNL is available." "$CURRENT_PNL_VALID"
+  emit_gauge tnauqquant_completed_cycles_today "Completed cycles today across all runs in the configured timezone." "$TODAY_COMPLETED_CYCLES"
+  if [[ -n "$CURRENT_RUN_ID" ]]; then
+    printf '# HELP tnauqquant_current_run_info Current manifest-bound run identity.\n'
+    printf '# TYPE tnauqquant_current_run_info gauge\n'
+    printf 'tnauqquant_current_run_info{%s,run_id="%s"} 1\n' "$METRIC_LABELS" "$CURRENT_RUN_ID"
+  fi
+  [[ -n "$CURRENT_RUN_STARTED_TIMESTAMP" ]] && emit_gauge tnauqquant_current_run_started_timestamp_seconds "Unix timestamp when the current run process started." "$CURRENT_RUN_STARTED_TIMESTAMP"
+  [[ -n "$CURRENT_REAL_PNL" ]] && emit_gauge tnauqquant_current_real_pnl_usdt "Latest stable real PNL for the current run in USDT." "$CURRENT_REAL_PNL"
+  [[ -n "$CURRENT_CASH_PNL" ]] && emit_gauge tnauqquant_current_cash_pnl_usdt "Latest stable cash PNL for the current run in USDT." "$CURRENT_CASH_PNL"
+  [[ -n "$CURRENT_REBATE" ]] && emit_gauge tnauqquant_current_rebate_usdt "Latest stable rebate for the current run in USDT." "$CURRENT_REBATE"
+  [[ -n "$CURRENT_RISK_PNL" ]] && emit_gauge tnauqquant_current_risk_pnl_usdt "Latest stable risk PNL for the current run in USDT." "$CURRENT_RISK_PNL"
+  [[ -n "$CURRENT_CYCLES_COMPLETED" ]] && emit_gauge tnauqquant_current_cycles_completed "Completed cycles reported by the current run." "$CURRENT_CYCLES_COMPLETED"
+  [[ -n "$PNL_SAMPLE_TIMESTAMP" ]] && emit_gauge tnauqquant_pnl_sample_timestamp_seconds "Unix timestamp of the latest stable current-run PNL sample." "$PNL_SAMPLE_TIMESTAMP"
+  [[ -n "$LAST_COMPLETED_CYCLE_TIMESTAMP" ]] && emit_gauge tnauqquant_last_completed_cycle_timestamp_seconds "Unix timestamp of the latest completed current-run cycle." "$LAST_COMPLETED_CYCLE_TIMESTAMP"
   if [[ -n "$DONE_REASON" ]]; then
     printf '# HELP tnauqquant_done_marker Bound terminal marker by normalized reason.\n'
     printf '# TYPE tnauqquant_done_marker gauge\n'

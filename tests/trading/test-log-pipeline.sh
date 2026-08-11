@@ -56,6 +56,7 @@ assert_contains "$TEMPLATE" 'action_on_duplicate_timestamp[[:space:]]*=[[:space:
 assert_contains "$TEMPLATE" 'stage.replace'
 assert_contains "$TEMPLATE" 'TQ_REPO_ROOT_REGEX'
 assert_contains "$TEMPLATE" '\\[EMAIL\\]'
+assert_contains "$TEMPLATE" '\\[ORDER_REF\\]'
 assert_contains "$TEMPLATE" 'stage.label_drop'
 assert_contains "$TEMPLATE" 'stage.label_keep'
 assert_contains "$TEMPLATE" 'prometheus.exporter.unix "trading_textfile"'
@@ -108,6 +109,8 @@ export TQ_RAW_LOG_GLOB='$FAKE_REPO/logs/live-runs/*.raw.log'
 export TQ_RUN_MANIFEST=$FAKE_REPO/run-state/mexc-toobit-btc/current.json
 export TQ_DONE_MARKER=$FAKE_REPO/run-state/mexc-toobit-btc/current.done.json
 export TQ_POC_RUN_EXPECTED=1
+export TQ_REQUIRE_RUNTIME_CONTRACT=1
+export TQ_TIMEZONE=Asia/Taipei
 export TQ_TEXTFILE_DIR=$TEST_ROOT/textfile
 export LOKI_PUSH_URL=https://loki.invalid/loki/api/v1/push
 export PROM_PUSH_URL=https://prom.invalid/api/v1/write
