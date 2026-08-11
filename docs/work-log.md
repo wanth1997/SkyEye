@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-08-11 20:41 — 部署 Trading production monitoring
+
+**改動摘要：** 將 manifest-bound macOS Alloy/probe、production Trading rules 與 Grafana dashboard 部署到 `tnauqquant-prod-1`，完成 Cloudflare Access、Prometheus remote write、Loki push 與 shadow alert 端到端 canary。
+
+**修改的檔案：**
+- `agents/alloy/trading/` — 安裝 Alloy 1.18.1、15 秒 read-only probe、source scrub 與 production host contract
+- `prometheus/rules/trading-targets.yml`、`prometheus/rules/trading.yml` — 切換為 `production` / `tnauqquant-prod-1` / `toobit-mexc-btc` 並維持 shadow
+- `loki/rules/fake/tnauqquant.yml` — 切換 production log selectors 並維持 shadow
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 新增 current-run PNL、今日 completed cycles、最後完成時間、run identity 與跨 run 分佈
+- `tests/trading/`、`prometheus/rules/tests/trading.test.yml` — 固定 runtime contract、跨重啟去重、cardinality、production target 與 alert 行為
+- `docs/project-brief.md`、`docs/work-log.md` — 記錄 production rollout 與後續 canary/rotation 工作
+
+**原因/備註：** PR #5 於 `93706c4` 合併並部署。Prometheus 2.54.1 rules/tests、Loki 3.1.1 rules、Alertmanager、Grafana provisioning、Alloy validate、launchd 與 Cloudflare push 均驗證通過；中央已收到 current run `20260811_121739_toobit-mexc`、Real PNL `182.8703` 與今日 19 個 completed cycles，未 scrubbed repo path 命中為 0。Trading 在安裝前 `20:23:16` 已以 `normal_or_context_cancelled` 退出，安裝前後 matching PID 均為 0，config、manifest、log metadata 與 sidecar identity 完全不變；`TradingProcessDown` 因 stale-running manifest 正確 firing，但由 `notification_mode=shadow` 路由至 `shadow-null`，未送 Telegram。
+
+---
+
 ## 2026-08-01 19:45 — 保存 live monitoring 設定並整合付款 shadow 告警
 
 **改動摘要：** 將 production checkout 內 21 個既有 live-only 修改做成可追溯快照，合併到含付款失敗告警的最新 master，保留 Trading／ZenIncome runtime 設定與付款 shadow routing。
