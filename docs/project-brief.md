@@ -16,7 +16,7 @@
 
 - 中央監控棧、Cloudflare ingress、Telegram routing、host/app/business rules 與多個產品 dashboard 已投入使用。
 - Linux/Ubuntu Alloy installer 已支援 journald、node metrics 與 application `/metrics`。
-- Development Trading POC 的 dashboard、Prometheus/Loki shadow rules 與 runbook 已納入 Git；target 固定為 `tnauqquant-dev-mac`，尚未升級為 production paging。
+- Trading production target 固定為 `tnauqquant-prod-1` / `toobit-mexc-btc`；dashboard、Prometheus/Loki rules 與 macOS Alloy/probe deployment 均以 shadow rollout 管理。
 - ZenIncome 的 Loki log alerts、dashboard 與唯讀 Bitfinex 診斷腳本已納入 Git；既有 production 規則狀態需由 operator 持續觀察。
 - LinkCourt 付款建立 5xx 與訂單編號 capacity/exhausted 告警已進入 shadow routing，等待 production canary review 後再決定是否升級通知。
 
@@ -25,15 +25,13 @@
 - 遠端 agent 採 Alloy 主動 push，不讓中央端直接連入產品主機。
 - Grafana datasource UID 固定，dashboard JSON 是唯一持久來源。
 - Loki 使用單一 `fake` tenant，以低 cardinality labels 區隔產品；高 cardinality 欄位只在 query time parse。
-- Trading 第一版以 log-derived PNL、外部 process probe 與 error logs 為核心；authoritative position/risk metrics 留給後續原生 `/metrics`。
-- Development POC 可先只改 SkyEye；production-safe migration 仍要求 Trading repo 提供 run manifest 與可驗證 done marker。
+- Trading 第一版以 manifest-bound current-run PNL、跨重啟 completed-cycle 統計、唯讀 process probe 與 scrubbed error logs 為核心；authoritative position/risk metrics 留給後續原生 `/metrics`。
+- Production probe 強制使用 Trading repo 的 run manifest 與可驗證 done marker，缺少 contract 時 fail closed，不以最新 mtime 猜測 current run。
 - Owner 已核准：TQ human foreground launch、`real_pnl_usdt` primary PNL、development/production target IDs、Trading runtime contract 修改，以及 operator-only Grafana access。
 - 新增告警一律先帶 `notification_mode="shadow"`，通過 canary review 後才可移除 shadow routing。
 
 ## 待辦 / 下一步
 
-- 審核 `docs/trading-monitoring-development-plan.md` 與可轉交 Trading agent 的 `docs/trading-runtime-contract-agent-spec.md`。
-- 完成 macOS Alloy 與 trading probe 的端到端 development canary，確認 POC dashboard 與 shadow rules 的實際訊號品質。
-- 由 Trading repo owner 實作 runtime contract，完成後在新 server 套用 deployment contract。
-- 驗證 Cloudflare allowlist、為 trading host 建立可獨立撤銷的 service token，再開放 production paging。
+- 為 `tnauqquant-prod-1` 建立可獨立撤銷的 Cloudflare push service token，完成 macOS Alloy 端到端 canary。
+- 觀察 Trading production shadow alerts 與 dashboard 訊號品質，完成 canary review 後另案決定是否啟用通知。
 - 觀察 LinkCourt 付款 shadow 告警，完成 canary review 後另案決定是否啟用通知。

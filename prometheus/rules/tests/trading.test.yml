@@ -1,0 +1,117 @@
+rule_files:
+  - ../trading.yml
+
+evaluation_interval: 30s
+
+tests:
+  - name: healthy production contract remains quiet
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TradingDuplicateProcess
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: TradingUnexpectedProcess
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: TradingProcessDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: TradingRunBindingInvalid
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: TradingTelemetryMissing
+        exp_alerts: []
+
+  - name: duplicate production process fires a shadow alert
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x5'
+      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '2x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: TradingDuplicateProcess
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: tnauqquant-prod-1
+              strategy: toobit-mexc-btc
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc has duplicate trading processes'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-process-down.md'
+
+  - name: invalid production binding fires and suppresses process down
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0x10'
+      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0x10'
+      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: TradingRunBindingInvalid
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: tnauqquant-prod-1
+              strategy: toobit-mexc-btc
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc run binding is invalid'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md'
+      - eval_time: 3m
+        alertname: TradingProcessDown
+        exp_alerts: []
+
+  - name: missing production telemetry fires independently
+    interval: 30s
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TradingTelemetryMissing
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: tnauqquant-prod-1
+              strategy: toobit-mexc-btc
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc telemetry is missing'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'

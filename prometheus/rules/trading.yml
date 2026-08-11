@@ -6,9 +6,9 @@ groups:
         expr: |
           tnauqquant_process_count{
             product="tnauqquant",
-            environment="development",
-            server_id="tnauqquant-dev-mac",
-            strategy="mexc-toobit-btc"
+            environment="production",
+            server_id="tnauqquant-prod-1",
+            strategy="toobit-mexc-btc"
           } > 1
         for: 30s
         labels:
@@ -23,24 +23,24 @@ groups:
           (
             tnauqquant_run_expected{
               product="tnauqquant",
-              environment="development",
-              server_id="tnauqquant-dev-mac",
-              strategy="mexc-toobit-btc"
+              environment="production",
+              server_id="tnauqquant-prod-1",
+              strategy="toobit-mexc-btc"
             } == 0
             and on (product, environment, server_id, strategy)
             tnauqquant_process_count{
               product="tnauqquant",
-              environment="development",
-              server_id="tnauqquant-dev-mac",
-              strategy="mexc-toobit-btc"
+              environment="production",
+              server_id="tnauqquant-prod-1",
+              strategy="toobit-mexc-btc"
             } > 0
           )
           unless on (product, environment, server_id, strategy)
           tnauqquant_done_marker{
             product="tnauqquant",
-            environment="development",
-            server_id="tnauqquant-dev-mac",
-            strategy="mexc-toobit-btc",
+            environment="production",
+            server_id="tnauqquant-prod-1",
+            strategy="toobit-mexc-btc",
             reason=~"risk_halt|max_cycles_drain_failed|unknown"
           } == 1
         for: 2m
@@ -56,34 +56,34 @@ groups:
           (
             tnauqquant_run_expected{
               product="tnauqquant",
-              environment="development",
-              server_id="tnauqquant-dev-mac",
-              strategy="mexc-toobit-btc"
+              environment="production",
+              server_id="tnauqquant-prod-1",
+              strategy="toobit-mexc-btc"
             } == 1
             and on (product, environment, server_id, strategy)
             tnauqquant_process_count{
               product="tnauqquant",
-              environment="development",
-              server_id="tnauqquant-dev-mac",
-              strategy="mexc-toobit-btc"
+              environment="production",
+              server_id="tnauqquant-prod-1",
+              strategy="toobit-mexc-btc"
             } == 0
           )
           unless on (product, environment, server_id, strategy)
           (
             tnauqquant_runtime_contract_available{
               product="tnauqquant",
-              environment="development",
-              server_id="tnauqquant-dev-mac",
-              strategy="mexc-toobit-btc"
+              environment="production",
+              server_id="tnauqquant-prod-1",
+              strategy="toobit-mexc-btc"
             } == 1
             and on (product, environment, server_id, strategy)
             min by (product, environment, server_id, strategy) (
               {
                 __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)",
                 product="tnauqquant",
-                environment="development",
-                server_id="tnauqquant-dev-mac",
-                strategy="mexc-toobit-btc"
+                environment="production",
+                server_id="tnauqquant-prod-1",
+                strategy="toobit-mexc-btc"
               }
             ) == 0
           )
@@ -99,9 +99,9 @@ groups:
         expr: |
           tnauqquant_done_marker{
             product="tnauqquant",
-            environment="development",
-            server_id="tnauqquant-dev-mac",
-            strategy="mexc-toobit-btc",
+            environment="production",
+            server_id="tnauqquant-prod-1",
+            strategy="toobit-mexc-btc",
             reason=~"risk_halt|max_cycles_drain_failed|unknown"
           } == 1
         for: 0m
@@ -116,18 +116,18 @@ groups:
         expr: |
           tnauqquant_runtime_contract_available{
             product="tnauqquant",
-            environment="development",
-            server_id="tnauqquant-dev-mac",
-            strategy="mexc-toobit-btc"
+            environment="production",
+            server_id="tnauqquant-prod-1",
+            strategy="toobit-mexc-btc"
           } == 1
           and on (product, environment, server_id, strategy)
           min by (product, environment, server_id, strategy) (
             {
               __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)",
               product="tnauqquant",
-              environment="development",
-              server_id="tnauqquant-dev-mac",
-              strategy="mexc-toobit-btc"
+              environment="production",
+              server_id="tnauqquant-prod-1",
+              strategy="toobit-mexc-btc"
             }
           ) == 0
         for: 1m
@@ -143,9 +143,9 @@ groups:
           absent_over_time(
             tnauqquant_probe_timestamp_seconds{
               product="tnauqquant",
-              environment="development",
-              server_id="tnauqquant-dev-mac",
-              strategy="mexc-toobit-btc"
+              environment="production",
+              server_id="tnauqquant-prod-1",
+              strategy="toobit-mexc-btc"
             }[3m]
           )
         for: 0m

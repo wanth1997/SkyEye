@@ -38,10 +38,10 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Latest pnl_status.real_pnl_usdt where stable=true. This is the primary PNL and already includes cash and rebate effects.",
+      "description": "Latest stable real_pnl_usdt from the manifest-bound current run. No value is shown until that run emits a stable PNL sample.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -94,13 +94,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | unwrap real_pnl_usdt | __error__=\"\" [$__range])",
+          "expr": "tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
           "instant": true,
-          "queryType": "instant",
+          "legendFormat": "current stable Real PNL",
+          "range": false,
           "refId": "A"
         }
       ],
@@ -109,10 +110,10 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Latest stable cash_pnl_usdt, before rebates.",
+      "description": "Latest stable cash PNL from the manifest-bound current run, before rebates.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -163,13 +164,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | unwrap cash_pnl_usdt | __error__=\"\" [$__range])",
+          "expr": "tnauqquant_current_cash_pnl_usdt{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
           "instant": true,
-          "queryType": "instant",
+          "legendFormat": "current cash PNL",
+          "range": false,
           "refId": "A"
         }
       ],
@@ -178,10 +180,10 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Latest stable rebate_usdt contribution.",
+      "description": "Latest stable rebate contribution from the manifest-bound current run.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -219,13 +221,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | unwrap rebate_usdt | __error__=\"\" [$__range])",
+          "expr": "tnauqquant_current_rebate_usdt{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
           "instant": true,
-          "queryType": "instant",
+          "legendFormat": "current rebate",
+          "range": false,
           "refId": "A"
         }
       ],
@@ -234,10 +237,10 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Latest stable risk_pnl_usdt reported by the engine.",
+      "description": "Latest stable risk PNL from the manifest-bound current run.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -288,13 +291,14 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | unwrap risk_pnl_usdt | __error__=\"\" [$__range])",
+          "expr": "tnauqquant_current_risk_pnl_usdt{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
           "instant": true,
-          "queryType": "instant",
+          "legendFormat": "current risk PNL",
+          "range": false,
           "refId": "A"
         }
       ],
@@ -303,10 +307,10 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "cycles_completed from the latest stable pnl_status sample.",
+      "description": "Completed cycles reported by the latest stable PNL sample for the manifest-bound current run.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -344,17 +348,18 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "last_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | unwrap cycles_completed | __error__=\"\" [$__range])",
+          "expr": "tnauqquant_current_cycles_completed{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
           "instant": true,
-          "queryType": "instant",
+          "legendFormat": "current run",
+          "range": false,
           "refId": "A"
         }
       ],
-      "title": "Cycles completed",
+      "title": "Current run cycles",
       "type": "stat"
     },
     {
@@ -456,55 +461,32 @@
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Fresh means at least one stable pnl_status sample arrived during the last five minutes. The source log panel below preserves the exact sample time.",
+      "description": "Seconds since the latest stable PNL sample from the manifest-bound current run. Red after five minutes.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "decimals": 0,
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "STALE"
-                }
-              },
-              "type": "value"
-            },
-            {
-              "options": {
-                "from": 1,
-                "result": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "FRESH"
-                },
-                "to": 1000000000
-              },
-              "type": "range"
-            }
-          ],
-          "noValue": "STALE",
+          "mappings": [],
+          "noValue": "NO CURRENT PNL",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "green",
                 "value": null
               },
               {
-                "color": "green",
-                "value": 1
+                "color": "red",
+                "value": 300
               }
             ]
           },
-          "unit": "short"
+          "unit": "s"
         },
         "overrides": []
       },
@@ -534,17 +516,18 @@
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" [5m]))",
+          "expr": "time() - tnauqquant_pnl_sample_timestamp_seconds{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
           "instant": true,
-          "queryType": "instant",
+          "legendFormat": "age",
+          "range": false,
           "refId": "A"
         }
       ],
-      "title": "PNL sample freshness",
+      "title": "PNL sample age",
       "type": "stat"
     },
     {
@@ -552,7 +535,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Newest stable pnl_status lines. Use the displayed timestamp to audit the exact source sample behind the PNL cards.",
+      "description": "Newest stable PNL source lines for the selected run filter. Current PNL cards above remain strictly manifest-bound.",
       "gridPos": {
         "h": 4,
         "w": 8,
@@ -593,9 +576,385 @@
         "x": 0,
         "y": 14
       },
+      "id": 30,
+      "panels": [],
+      "title": "Today's Activity · Asia/Taipei",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Unique completed cycles today across every same-day run, deduplicated by run_id + cycle_id using the Asia/Taipei boundary.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixedColor"
+          },
+          "decimals": 0,
+          "noValue": "0",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 0,
+        "y": 15
+      },
+      "id": 31,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_completed_cycles_today{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "completed cycles",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Completed today",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Completed cycles in the manifest-bound current run. This resets naturally when the strategy restarts with a new run_id.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixedColor"
+          },
+          "decimals": 0,
+          "noValue": "—",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 5,
+        "y": 15
+      },
+      "id": 32,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_current_cycles_completed{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "current run cycles",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current run cycles",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Exact event time of the latest stable, completed cycle in the manifest-bound current run.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixedColor"
+          },
+          "decimals": 0,
+          "noValue": "No completed cycle",
+          "unit": "dateTimeAsIso"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 7,
+        "x": 10,
+        "y": 15
+      },
+      "id": 33,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_last_completed_cycle_timestamp_seconds{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} * 1000",
+          "instant": true,
+          "legendFormat": "last completed",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Last completed cycle",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "run_id selected only from the authoritative current.json contract.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixedColor"
+          },
+          "decimals": 0,
+          "noValue": "No bound run",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 7,
+        "x": 17,
+        "y": 15
+      },
+      "id": 34,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_current_run_info{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "{{run_id}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Current run",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Completed cycle events over the selected range, split by run_id so same-day restarts remain visible.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "cycles",
+            "axisPlacement": "auto",
+            "drawStyle": "bars",
+            "fillOpacity": 75,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 0,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line+area"
+            }
+          },
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "id": 35,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "sum by (run_id) (count_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | cycle_completed=\"true\" [$__interval]))",
+          "legendFormat": "{{run_id}}",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Completed-cycle distribution by run",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Newest stable completed-cycle events, including their source time and PNL fields.",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "id": 36,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "editorMode": "code",
+          "expr": "{product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | cycle_completed=\"true\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "Latest completed cycles",
+      "type": "logs"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
       "id": 10,
       "panels": [],
-      "title": "Current Run Status",
+      "title": "Current Run Status · Shadow alerts",
       "type": "row"
     },
     {
@@ -692,7 +1051,7 @@
         "h": 5,
         "w": 8,
         "x": 0,
-        "y": 15
+        "y": 27
       },
       "id": 11,
       "options": {
@@ -766,7 +1125,7 @@
         "h": 5,
         "w": 4,
         "x": 8,
-        "y": 15
+        "y": 27
       },
       "id": 12,
       "options": {
@@ -851,7 +1210,7 @@
         "h": 5,
         "w": 4,
         "x": 12,
-        "y": 15
+        "y": 27
       },
       "id": 13,
       "options": {
@@ -923,7 +1282,7 @@
         "h": 5,
         "w": 4,
         "x": 16,
-        "y": 15
+        "y": 27
       },
       "id": 14,
       "options": {
@@ -962,7 +1321,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Contract v1 is authoritative. Heuristic mode is expected only during the development transition.",
+      "description": "Contract v1 is authoritative. Heuristic mode is expected only during the production transition.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1008,7 +1367,7 @@
         "h": 5,
         "w": 4,
         "x": 20,
-        "y": 15
+        "y": 27
       },
       "id": 15,
       "options": {
@@ -1047,7 +1406,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "All currently firing or pending Trading alerts. During the POC these carry notification_mode=shadow and do not page.",
+      "description": "All currently firing or pending Trading alerts. Production rollout remains notification_mode=shadow until the canary window is reviewed.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -1078,7 +1437,7 @@
         "h": 5,
         "w": 24,
         "x": 0,
-        "y": 20
+        "y": 32
       },
       "id": 16,
       "options": {
@@ -1140,7 +1499,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 37
       },
       "id": 20,
       "panels": [],
@@ -1181,7 +1540,7 @@
         "h": 5,
         "w": 6,
         "x": 0,
-        "y": 26
+        "y": 38
       },
       "id": 21,
       "options": {
@@ -1250,7 +1609,7 @@
         "h": 5,
         "w": 6,
         "x": 6,
-        "y": 26
+        "y": 38
       },
       "id": 22,
       "options": {
@@ -1335,7 +1694,7 @@
         "h": 5,
         "w": 12,
         "x": 12,
-        "y": 26
+        "y": 38
       },
       "id": 23,
       "options": {
@@ -1376,7 +1735,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 43
       },
       "id": 24,
       "options": {
@@ -1419,8 +1778,8 @@
         "allValue": null,
         "current": {
           "selected": true,
-          "text": "development",
-          "value": "development"
+          "text": "production",
+          "value": "production"
         },
         "datasource": {
           "type": "loki",
@@ -1444,8 +1803,8 @@
         "allValue": null,
         "current": {
           "selected": true,
-          "text": "tnauqquant-dev-mac",
-          "value": "tnauqquant-dev-mac"
+          "text": "tnauqquant-prod-1",
+          "value": "tnauqquant-prod-1"
         },
         "datasource": {
           "type": "loki",
@@ -1469,8 +1828,8 @@
         "allValue": null,
         "current": {
           "selected": true,
-          "text": "mexc-toobit-btc",
-          "value": "mexc-toobit-btc"
+          "text": "toobit-mexc-btc",
+          "value": "toobit-mexc-btc"
         },
         "datasource": {
           "type": "loki",
@@ -1518,7 +1877,7 @@
     ]
   },
   "time": {
-    "from": "now-24h",
+    "from": "now/d",
     "to": "now"
   },
   "timepicker": {
@@ -1530,8 +1889,8 @@
       "5m"
     ]
   },
-  "timezone": "browser",
-  "title": "Trading — TNAUQQuant operations",
+  "timezone": "Asia/Taipei",
+  "title": "Trading · TNAUQQuant Production",
   "uid": "tnauqquant-trading-overview",
   "version": 1,
   "weekStart": "monday"
