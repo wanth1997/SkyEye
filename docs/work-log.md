@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-08-12 13:53 — 修正 Trading P&L 的 Prometheus table 欄位流程
+
+**改動摘要：** 讓 Grafana XY 直接使用 Prometheus table 已合併完成的 `Value` 與 `cycle` 欄位，移除會丟失 cycle 的重複 Reduce。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 將 P&L transformation 收斂為 Organize、Convert field type、Sort；把 `Value` 改名為累積 Real P&L、把 `cycle` 轉為數字並依 cycle 排序
+- `tests/trading/test-central-config.sh` — 固定 Prometheus table 的 `Value`／`cycle` input contract，並禁止重新加入多餘的 Reduce
+- `docs/work-log.md` — 記錄 Grafana 11.2 browser-side result transformer 根因與 production 驗收
+
+**原因/備註：** Grafana Prometheus `format: table` 會先在瀏覽器端把 backend multi-frames 合成含 `Time`、labels、`Value` 的單一 table；先前再次 Reduce 會把欄位壓成 reducer rows，使 `cycle` 消失，XY 因只剩一個 numeric field 而顯示內建 `Err`。PR #21（`0e4468d`）已部署，Grafana provisioning database 為 version 12，正式 table 重建結果包含 Cycle 1–8，最新累積 P&L 為 `154.4897`。Grafana 近 10 分鐘 error 為 0；Trading PID 仍為 `11834`、啟動時間仍是 `2026-08-12 03:13:47`，probe error lines 為 0，未修改或重啟 Trading process。
+
+---
+
 ## 2026-08-12 13:36 — 修復 Grafana 11 Trading XY 與標示持倉方向
 
 **改動摘要：** 將 Trading P&L 面板改為 Grafana 11.2 XY Chart v2 與單一 reduced DataFrame，並以文字及顏色清楚標示兩間交易所的 LONG／SHORT／FLAT 持倉。
