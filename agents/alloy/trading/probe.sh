@@ -36,7 +36,7 @@ timestamp_to_epoch() {
 
   case "$normalized" in
     *Z)
-      if result="$(date -j -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" '+%s' 2>/dev/null)"; then
+      if result="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" '+%s' 2>/dev/null)"; then
         printf '%s\n' "$result"
         return 0
       fi
@@ -49,7 +49,7 @@ timestamp_to_epoch() {
       ;;
   esac
 
-  date -d "$timestamp" '+%s' 2>/dev/null
+  TZ=UTC date -d "$timestamp" '+%s' 2>/dev/null
 }
 
 local_day_start_epoch() {
@@ -89,6 +89,53 @@ latest_pnl_line() {
       }
     }
     END { if (latest != "") print latest }
+  ' "$log_path"
+}
+
+completed_cycle_pnl_series() {
+  local log_path="$1"
+  awk '
+    function valid_number(value) {
+      return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
+    }
+    {
+      message = ""
+      stable = ""
+      completed = ""
+      cycle = ""
+      fallback_cycle = ""
+      real_pnl = ""
+      for (i = 1; i <= NF; i++) {
+        equals = index($i, "=")
+        if (equals == 0) continue
+        key = substr($i, 1, equals - 1)
+        value = substr($i, equals + 1)
+        gsub(/^"|"$/, "", value)
+        if (key == "msg") message = value
+        if (key == "stable") stable = value
+        if (key == "cycle_completed") completed = value
+        if (key == "session_cycle") cycle = value
+        if (key == "cycles_completed") fallback_cycle = value
+        if (key == "real_pnl_usdt") real_pnl = value
+      }
+      if (cycle == "") cycle = fallback_cycle
+      if (message != "pnl_status" || stable != "true" ||
+          completed != "true" || cycle !~ /^[0-9]+$/ ||
+          !valid_number(real_pnl)) {
+        next
+      }
+      if (!(cycle in seen)) {
+        seen[cycle] = 1
+        order[++count] = cycle
+      }
+      pnl[cycle] = real_pnl
+    }
+    END {
+      for (i = 1; i <= count; i++) {
+        cycle = order[i]
+        print cycle "\t" pnl[cycle]
+      }
+    }
   ' "$log_path"
 }
 
@@ -349,6 +396,7 @@ CURRENT_CYCLES_COMPLETED=""
 PNL_SAMPLE_TIMESTAMP=""
 LAST_COMPLETED_CYCLE_TIMESTAMP=""
 LAST_COMPLETED_CYCLE_REAL_PNL=""
+COMPLETED_CYCLE_PNL_SERIES=""
 CURRENT_POSITION_VALID=0
 CURRENT_TOOBIT_POSITION_BTC=""
 CURRENT_TOOBIT_POSITION_SIDE=""
@@ -430,6 +478,7 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       LATEST_LOG_MTIME="$(file_mtime "$MANIFEST_LOG_PATH")"
       CURRENT_RUN_ID="$MANIFEST_RUN_ID"
       CURRENT_RUN_STARTED_TIMESTAMP="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
+      COMPLETED_CYCLE_PNL_SERIES="$(completed_cycle_pnl_series "$MANIFEST_LOG_PATH")"
 
       CURRENT_PNL_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 0)"
       if [[ -n "$CURRENT_PNL_LINE" ]]; then
@@ -632,6 +681,14 @@ trap cleanup_temp EXIT HUP INT TERM
   [[ -n "$PNL_SAMPLE_TIMESTAMP" ]] && emit_gauge tnauqquant_pnl_sample_timestamp_seconds "Unix timestamp of the latest stable current-run PNL sample." "$PNL_SAMPLE_TIMESTAMP"
   [[ -n "$LAST_COMPLETED_CYCLE_TIMESTAMP" ]] && emit_gauge tnauqquant_last_completed_cycle_timestamp_seconds "Unix timestamp of the latest completed current-run cycle." "$LAST_COMPLETED_CYCLE_TIMESTAMP"
   [[ -n "$LAST_COMPLETED_CYCLE_REAL_PNL" ]] && emit_gauge tnauqquant_last_cycle_real_pnl_usdt "Real PNL change of the latest completed current-run cycle in USDT." "$LAST_COMPLETED_CYCLE_REAL_PNL"
+  if [[ -n "$COMPLETED_CYCLE_PNL_SERIES" ]]; then
+    printf '# HELP tnauqquant_cycle_cumulative_real_pnl_usdt Cumulative real PNL at each completed cycle in the current manifest-bound run.\n'
+    printf '# TYPE tnauqquant_cycle_cumulative_real_pnl_usdt gauge\n'
+    while IFS=$'\t' read -r cycle cumulative_real_pnl; do
+      printf 'tnauqquant_cycle_cumulative_real_pnl_usdt{%s,cycle="%s"} %s\n' \
+        "$METRIC_LABELS" "$cycle" "$cumulative_real_pnl"
+    done <<<"$COMPLETED_CYCLE_PNL_SERIES"
+  fi
   if [[ "$CURRENT_POSITION_VALID" -eq 1 ]]; then
     printf '# HELP tnauqquant_current_position_btc Latest coordinator-reported position quantity by exchange and side.\n'
     printf '# TYPE tnauqquant_current_position_btc gauge\n'
