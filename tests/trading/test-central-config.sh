@@ -20,14 +20,20 @@ jq -e '
   .uid == "tnauqquant-trading-overview" and
   .timezone == "Asia/Taipei" and
   .time.from == "now/d" and
-  ([.templating.list[] | select(.name == "environment") | .current.value] == ["production"]) and
-  ([.templating.list[] | select(.name == "server_id") | .current.value] == ["tnauqquant-prod-1"]) and
-  ([.templating.list[] | select(.name == "strategy") | .current.value] == ["toobit-mexc-btc"]) and
+  (.templating.list | length == 0) and
+  (.panels | length == 6) and
+  ([.panels[].type] | all(. == "stat")) and
   ([.panels[] | select(.id == 2) | .targets[].expr | contains("tnauqquant_current_real_pnl_usdt")] == [true]) and
-  ([.panels[] | select(.id == 31) | .targets[].expr | contains("tnauqquant_completed_cycles_today")] == [true]) and
-  ([.panels[] | select(.id == 33) | .targets[].expr | contains("tnauqquant_last_completed_cycle_timestamp_seconds")] == [true]) and
-  ([.panels[] | select(.id == 34) | .targets[].expr | contains("tnauqquant_current_run_info")] == [true]) and
-  ([.panels[] | select(.id == 35) | .targets[].expr | contains("cycle_completed=\"true\"")] == [true])
+  ([.panels[] | select(.id == 40) | .targets[].expr | contains("exchange=\"toobit\"")] == [true]) and
+  ([.panels[] | select(.id == 41) | .targets[].expr | contains("exchange=\"mexc\"")] == [true]) and
+  ([.panels[] | select(.id == 42) | .targets[].expr | contains("tnauqquant_last_cycle_real_pnl_usdt")] == [true]) and
+  ([.panels[] | select(.id == 43) | .targets[].expr | contains("tnauqquant_completed_cycles_today")] == [true]) and
+  ([.panels[] | select(.id == 44) | .targets[].expr | contains("tnauqquant_log_mtime_seconds")] == [true, true]) and
+  ([.panels[].targets[].expr] | all(
+    contains("environment=\"production\"") and
+    contains("server_id=\"tnauqquant-prod-1\"") and
+    contains("strategy=\"toobit-mexc-btc\"")
+  ))
 ' "$DASHBOARD" >/dev/null
 
 if rg -q 'development|tnauqquant-dev-mac|mexc-toobit-btc' \

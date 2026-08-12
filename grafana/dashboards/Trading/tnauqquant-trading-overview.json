@@ -9,39 +9,26 @@
         },
         "enable": true,
         "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
+        "iconColor": "rgba(87, 148, 242, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
       }
     ]
   },
-  "description": "TNAUQQuant trading operations console. Stable Real PNL is authoritative; status is derived from the read-only runtime probe; errors come from scrubbed Loki logs.",
+  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. Positions are the latest coordinator-reported quantities; log freshness is shown beside the update time. Entry prices are intentionally omitted until the runtime exposes authoritative fill prices.",
   "editable": false,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
+  "graphTooltip": 0,
   "id": null,
   "links": [],
   "liveNow": false,
   "panels": [
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "id": 1,
-      "panels": [],
-      "title": "PNL",
-      "type": "row"
-    },
-    {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Latest stable real_pnl_usdt from the manifest-bound current run. No value is shown until that run emits a stable PNL sample.",
+      "description": "Latest stable real_pnl_usdt from the current manifest-bound run.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -49,7 +36,7 @@
           },
           "decimals": 2,
           "mappings": [],
-          "noValue": "No stable PNL",
+          "noValue": "Waiting for stable P&L",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -63,89 +50,18 @@
               }
             ]
           },
-          "unit": "currencyUSD"
+          "unit": "suffix: USDT"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
-        "w": 8,
+        "h": 6,
+        "w": 7,
         "x": 0,
-        "y": 1
+        "y": 0
       },
       "id": 2,
       "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": true,
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "current stable Real PNL",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Stable Real PNL",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Latest stable cash PNL from the manifest-bound current run, before rebates.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 2,
-          "noValue": "—",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 8,
-        "y": 1
-      },
-      "id": 3,
-      "options": {
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
@@ -157,6 +73,7 @@
           "fields": "",
           "values": false
         },
+        "showPercentChange": false,
         "textMode": "value_and_name",
         "wideLayout": true
       },
@@ -168,688 +85,30 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "tnauqquant_current_cash_pnl_usdt{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "current cash PNL",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Cash PNL",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Latest stable rebate contribution from the manifest-bound current run.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixedColor"
-          },
-          "decimals": 2,
-          "noValue": "—",
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 12,
-        "y": 1
-      },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_current_rebate_usdt{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "current rebate",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Rebate",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Latest stable risk PNL from the manifest-bound current run.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 2,
-          "noValue": "—",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 16,
-        "y": 1
-      },
-      "id": 5,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_current_risk_pnl_usdt{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "current risk PNL",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Risk PNL",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Completed cycles reported by the latest stable PNL sample for the manifest-bound current run.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixedColor"
-          },
-          "decimals": 0,
-          "noValue": "—",
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 20,
-        "y": 1
-      },
-      "id": 6,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_current_cycles_completed{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
+          "expr": "tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
           "instant": true,
           "legendFormat": "current run",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Current run cycles",
+      "title": "REAL P&L",
       "type": "stat"
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Stable Real PNL over the selected time range.",
+      "description": "cycle_real_pnl_usdt from the latest stable, completed cycle in the current run.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": true,
-            "axisColorMode": "text",
-            "axisLabel": "USDT",
-            "axisPlacement": "auto",
-            "drawStyle": "line",
-            "fillOpacity": 16,
-            "gradientMode": "opacity",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 2,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
+            "mode": "thresholds"
           },
           "decimals": 2,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "currencyUSD"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 16,
-        "x": 0,
-        "y": 6
-      },
-      "id": 7,
-      "options": {
-        "legend": {
-          "calcs": [
-            "lastNotNull",
-            "min",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "last_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | unwrap real_pnl_usdt | __error__=\"\" [$__interval])",
-          "legendFormat": "stable Real PNL",
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "title": "PNL trend",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Seconds since the latest stable PNL sample from the manifest-bound current run. Red after five minutes.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
           "mappings": [],
-          "noValue": "NO CURRENT PNL",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 300
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 6
-      },
-      "id": 8,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "time() - tnauqquant_pnl_sample_timestamp_seconds{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "age",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "PNL sample age",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "Newest stable PNL source lines for the selected run filter. Current PNL cards above remain strictly manifest-bound.",
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 10
-      },
-      "id": 9,
-      "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": false,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "{product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\"",
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "title": "Stable PNL source",
-      "type": "logs"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 14
-      },
-      "id": 30,
-      "panels": [],
-      "title": "Today's Activity · Asia/Taipei",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Unique completed cycles today across every same-day run, deduplicated by run_id + cycle_id using the Asia/Taipei boundary.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixedColor"
-          },
-          "decimals": 0,
-          "noValue": "0",
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 5,
-        "x": 0,
-        "y": 15
-      },
-      "id": 31,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_completed_cycles_today{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "completed cycles",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Completed today",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Completed cycles in the manifest-bound current run. This resets naturally when the strategy restarts with a new run_id.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixedColor"
-          },
-          "decimals": 0,
-          "noValue": "—",
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 5,
-        "x": 5,
-        "y": 15
-      },
-      "id": 32,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_current_cycles_completed{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "current run cycles",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Current run cycles",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Exact event time of the latest stable, completed cycle in the manifest-bound current run.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixedColor"
-          },
-          "decimals": 0,
           "noValue": "No completed cycle",
-          "unit": "dateTimeAsIso"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 7,
-        "x": 10,
-        "y": 15
-      },
-      "id": 33,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_last_completed_cycle_timestamp_seconds{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} * 1000",
-          "instant": true,
-          "legendFormat": "last completed",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Last completed cycle",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "run_id selected only from the authoritative current.json contract.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixedColor"
-          },
-          "decimals": 0,
-          "noValue": "No bound run",
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 7,
-        "x": 17,
-        "y": 15
-      },
-      "id": 34,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_current_run_info{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "{{run_id}}",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Current run",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "Completed cycle events over the selected range, split by run_id so same-day restarts remain visible.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "cycles",
-            "axisPlacement": "auto",
-            "drawStyle": "bars",
-            "fillOpacity": 75,
-            "gradientMode": "opacity",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 0,
-            "pointSize": 4,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": true,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "line+area"
-            }
-          },
-          "decimals": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -863,199 +122,19 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "suffix: USDT"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 6,
-        "w": 12,
-        "x": 0,
-        "y": 20
+        "w": 5,
+        "x": 7,
+        "y": 0
       },
-      "id": 35,
+      "id": 42,
       "options": {
-        "legend": {
-          "calcs": [
-            "lastNotNull",
-            "min",
-            "max"
-          ],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "sum by (run_id) (count_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | cycle_completed=\"true\" [$__interval]))",
-          "legendFormat": "{{run_id}}",
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "title": "Completed-cycle distribution by run",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "Newest stable completed-cycle events, including their source time and PNL fields.",
-      "gridPos": {
-        "h": 6,
-        "w": 12,
-        "x": 12,
-        "y": 20
-      },
-      "id": 36,
-      "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": false,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "{product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\"} | logfmt | msg=\"pnl_status\" | stable=\"true\" | cycle_completed=\"true\"",
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "title": "Latest completed cycles",
-      "type": "logs"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 26
-      },
-      "id": 10,
-      "panels": [],
-      "title": "Current Run Status · Shadow alerts",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Priority: Telemetry Missing > Critical > Duplicate > Binding Invalid > Unexpected > Down > Completed > Running > Idle.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "dark-gray",
-                  "index": 0,
-                  "text": "IDLE"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "RUNNING"
-                },
-                "2": {
-                  "color": "blue",
-                  "index": 2,
-                  "text": "COMPLETED"
-                },
-                "3": {
-                  "color": "red",
-                  "index": 3,
-                  "text": "PROCESS DOWN"
-                },
-                "4": {
-                  "color": "orange",
-                  "index": 4,
-                  "text": "UNEXPECTED PROCESS"
-                },
-                "5": {
-                  "color": "orange",
-                  "index": 5,
-                  "text": "BINDING INVALID"
-                },
-                "6": {
-                  "color": "red",
-                  "index": 6,
-                  "text": "DUPLICATE PROCESS"
-                },
-                "7": {
-                  "color": "red",
-                  "index": 7,
-                  "text": "CRITICAL SAFETY"
-                },
-                "8": {
-                  "color": "red",
-                  "index": 8,
-                  "text": "TELEMETRY MISSING"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "NO INVENTORY",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "dark-gray",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              },
-              {
-                "color": "blue",
-                "value": 2
-              },
-              {
-                "color": "red",
-                "value": 3
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 8,
-        "x": 0,
-        "y": 27
-      },
-      "id": 11,
-      "options": {
-        "colorMode": "background",
+        "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "horizontal",
@@ -1066,7 +145,8 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value",
+        "showPercentChange": false,
+        "textMode": "value_and_name",
         "wideLayout": true
       },
       "pluginVersion": "11.2.0",
@@ -1077,14 +157,14 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max((absent_over_time(tnauqquant_probe_timestamp_seconds{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}[3m]) * 8) or ((tnauqquant_process_count{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} > bool 1) * 6) or ((max(tnauqquant_done_marker{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\",reason=~\"risk_halt|max_cycles_drain_failed|unknown\"}) > bool 0) * 7) or (((tnauqquant_runtime_contract_available{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} == bool 1) * on(product,environment,server_id,strategy) (min by(product,environment,server_id,strategy)({__name__=~\"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)\",product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}) == bool 0)) * 5) or (((tnauqquant_run_expected{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} == bool 0) * on(product,environment,server_id,strategy) (tnauqquant_process_count{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} > bool 0)) * 4) or (((tnauqquant_run_expected{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} == bool 1) * on(product,environment,server_id,strategy) (tnauqquant_process_count{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} == bool 0)) * 3) or ((max(tnauqquant_done_marker{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\",reason=~\"max_cycles_complete|reduce_only_complete\"}) > bool 0) * 2) or ((tnauqquant_process_count{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} == bool 1) * 1) or (tnauqquant_target_info{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} * 0))",
+          "expr": "tnauqquant_last_cycle_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
           "instant": true,
-          "legendFormat": "state",
+          "legendFormat": "completed cycle",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Trading state",
+      "title": "LAST CYCLE · Δ P&L",
       "type": "stat"
     },
     {
@@ -1092,676 +172,291 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Exact token-aware match count for the configured quant binary and config.",
+      "description": "Unique completed cycles today across every same-day run, using the Asia/Taipei day boundary.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "No telemetry",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "dark-gray",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 2
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 8,
-        "y": 27
-      },
-      "id": 12,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_process_count{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Process count",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Healthy only when the tmux sidecar exists and its runtime identity/health match the current run.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "NOT READY"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "HEALTHY"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "No telemetry",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 12,
-        "y": 27
-      },
-      "id": 13,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_sidecar_up{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"} * on(product,environment,server_id,strategy) tnauqquant_sidecar_identity_ok{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Sidecar",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Seconds since the read-only runtime probe last completed successfully.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "Missing",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 30
-              },
-              {
-                "color": "red",
-                "value": 180
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 16,
-        "y": 27
-      },
-      "id": 14,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "time() - tnauqquant_probe_timestamp_seconds{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Probe age",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Contract v1 is authoritative. Heuristic mode is expected only during the production transition.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "yellow",
-                  "index": 0,
-                  "text": "HEURISTIC"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "CONTRACT V1"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "No telemetry",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "yellow",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "none"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 20,
-        "y": 27
-      },
-      "id": 15,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_runtime_contract_available{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\"}",
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Runtime contract",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "All currently firing or pending Trading alerts. Production rollout remains notification_mode=shadow until the canary window is reviewed.",
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": {
-              "type": "auto"
-            },
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 24,
-        "x": 0,
-        "y": 32
-      },
-      "id": 16,
-      "options": {
-        "cellHeight": "sm",
-        "footer": {
-          "countRows": false,
-          "fields": "",
-          "reducer": [
-            "sum"
-          ],
-          "show": false
-        },
-        "showHeader": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "ALERTS{product=\"tnauqquant\",environment=~\"$environment\",server_id=~\"$server_id\",strategy=~\"$strategy\",alertstate=~\"pending|firing\"}",
-          "format": "table",
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Active shadow alerts",
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "environment": true,
-              "instance": true,
-              "job": true,
-              "notification_mode": true,
-              "product": true,
-              "server_id": true,
-              "strategy": true
-            },
-            "indexByName": {
-              "alertname": 0,
-              "alertstate": 1,
-              "severity": 2,
-              "Value": 3
-            }
-          }
-        }
-      ],
-      "type": "table"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 37
-      },
-      "id": 20,
-      "panels": [],
-      "title": "Errors",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "ERROR/FATAL lines in the selected dashboard time range. No data is rendered as zero.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 0,
-        "y": 38
-      },
-      "id": 21,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "sum(count_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\", level=~\"ERROR|FATAL\"} [$__range]))",
-          "instant": true,
-          "queryType": "instant",
-          "refId": "A"
-        }
-      ],
-      "title": "Error count",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "Explicitly allowlisted WARN events that indicate a safety concern.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 6,
-        "y": 38
-      },
-      "id": 22,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "editorMode": "code",
-          "expr": "sum(count_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\", level=\"WARN\"} | logfmt | msg=~\"emergency_exit|unhedged_exposure\" [$__range]))",
-          "instant": true,
-          "queryType": "instant",
-          "refId": "A"
-        }
-      ],
-      "title": "Critical WARN count",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "ERROR/FATAL event count per dashboard interval.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
+            "fixedColor": "#B8C7E0",
             "mode": "fixedColor"
           },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "events",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "bars",
-            "fillOpacity": 70,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
           "decimals": 0,
+          "mappings": [],
+          "noValue": "0",
           "unit": "short"
         },
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
-        "w": 12,
+        "h": 6,
+        "w": 4,
         "x": 12,
-        "y": 38
+        "y": 0
       },
-      "id": 23,
+      "id": 43,
       "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
       },
+      "pluginVersion": "11.2.0",
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(count_over_time({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\", level=~\"ERROR|FATAL\"} [$__interval]))",
-          "legendFormat": "ERROR/FATAL",
-          "queryType": "range",
+          "expr": "tnauqquant_completed_cycles_today{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "completed",
+          "range": false,
           "refId": "A"
         }
       ],
-      "title": "Error trend",
-      "type": "timeseries"
+      "title": "TODAY · CYCLES",
+      "type": "stat"
     },
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
+        "type": "prometheus",
+        "uid": "prometheus"
       },
-      "description": "Newest ERROR/FATAL lines first. Log text was scrubbed on the source server before ingestion.",
+      "description": "Filesystem modification time of the current manifest-bound raw log, plus its current age.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#B8C7E0",
+            "mode": "fixedColor"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "No bound log",
+          "unit": "dateTimeAsLocal"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 45
+                    },
+                    {
+                      "color": "red",
+                      "value": 120
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
       "gridPos": {
-        "h": 10,
-        "w": 24,
-        "x": 0,
-        "y": 43
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 0
       },
-      "id": 24,
+      "id": 44,
       "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": false,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
       },
+      "pluginVersion": "11.2.0",
       "targets": [
         {
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "{product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\", run_id=~\"$run_id\", level=~\"ERROR|FATAL\"}",
-          "queryType": "range",
+          "expr": "tnauqquant_log_mtime_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} * 1000",
+          "instant": true,
+          "legendFormat": "Updated",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "time() - tnauqquant_log_mtime_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "Age",
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "title": "LATEST LOG UPDATE",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Latest coordinator-reported Toobit position quantity. The label below the value shows long, short, or flat; use the log update card to confirm freshness.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#5794F2",
+            "mode": "fixedColor"
+          },
+          "decimals": 3,
+          "mappings": [],
+          "noValue": "No current snapshot",
+          "unit": "suffix: BTC"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "id": 40,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\"}",
+          "instant": true,
+          "legendFormat": "{{side}}",
+          "range": false,
           "refId": "A"
         }
       ],
-      "title": "Error logs",
-      "type": "logs"
+      "title": "TOOBIT · POSITION",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Latest coordinator-reported MEXC position quantity. The label below the value shows long, short, or flat; use the log update card to confirm freshness.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#FFB357",
+            "mode": "fixedColor"
+          },
+          "decimals": 3,
+          "mappings": [],
+          "noValue": "No current snapshot",
+          "unit": "suffix: BTC"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 41,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\"}",
+          "instant": true,
+          "legendFormat": "{{side}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "MEXC · POSITION",
+      "type": "stat"
     }
   ],
   "refresh": "15s",
@@ -1773,108 +468,7 @@
     "trading"
   ],
   "templating": {
-    "list": [
-      {
-        "allValue": null,
-        "current": {
-          "selected": true,
-          "text": "production",
-          "value": "production"
-        },
-        "datasource": {
-          "type": "loki",
-          "uid": "loki"
-        },
-        "definition": "label_values({product=\"tnauqquant\"}, environment)",
-        "hide": 0,
-        "includeAll": false,
-        "label": "Environment",
-        "multi": false,
-        "name": "environment",
-        "options": [],
-        "query": "label_values({product=\"tnauqquant\"}, environment)",
-        "refresh": 2,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 1,
-        "type": "query"
-      },
-      {
-        "allValue": null,
-        "current": {
-          "selected": true,
-          "text": "tnauqquant-prod-1",
-          "value": "tnauqquant-prod-1"
-        },
-        "datasource": {
-          "type": "loki",
-          "uid": "loki"
-        },
-        "definition": "label_values({product=\"tnauqquant\", environment=~\"$environment\"}, server_id)",
-        "hide": 0,
-        "includeAll": false,
-        "label": "Server",
-        "multi": false,
-        "name": "server_id",
-        "options": [],
-        "query": "label_values({product=\"tnauqquant\", environment=~\"$environment\"}, server_id)",
-        "refresh": 2,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 1,
-        "type": "query"
-      },
-      {
-        "allValue": null,
-        "current": {
-          "selected": true,
-          "text": "toobit-mexc-btc",
-          "value": "toobit-mexc-btc"
-        },
-        "datasource": {
-          "type": "loki",
-          "uid": "loki"
-        },
-        "definition": "label_values({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\"}, strategy)",
-        "hide": 0,
-        "includeAll": false,
-        "label": "Strategy",
-        "multi": false,
-        "name": "strategy",
-        "options": [],
-        "query": "label_values({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\"}, strategy)",
-        "refresh": 2,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 1,
-        "type": "query"
-      },
-      {
-        "allValue": ".+",
-        "current": {
-          "selected": true,
-          "text": "All",
-          "value": "$__all"
-        },
-        "datasource": {
-          "type": "loki",
-          "uid": "loki"
-        },
-        "definition": "label_values({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\"}, run_id)",
-        "hide": 0,
-        "includeAll": true,
-        "label": "Run",
-        "multi": true,
-        "name": "run_id",
-        "options": [],
-        "query": "label_values({product=\"tnauqquant\", environment=~\"$environment\", server_id=~\"$server_id\", strategy=~\"$strategy\"}, run_id)",
-        "refresh": 2,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 2,
-        "type": "query"
-      }
-    ]
+    "list": []
   },
   "time": {
     "from": "now/d",
@@ -1890,7 +484,7 @@
     ]
   },
   "timezone": "Asia/Taipei",
-  "title": "Trading · TNAUQQuant Production",
+  "title": "Trading · Live Operations",
   "uid": "tnauqquant-trading-overview",
   "version": 1,
   "weekStart": "monday"
