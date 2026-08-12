@@ -15,6 +15,25 @@
 ---
 -->
 
+## 2026-08-12 16:20 — Config drift 時保留 Trading P&L telemetry
+
+**改動摘要：** 將 runtime manifest 的 config snapshot 比對改為獨立可觀測信號；目前執行中的 PID、executable、instance 與 log binding 仍有效時，即使 config 檔案在 run 中被改動，probe 仍持續輸出該 run 的 P&L、cycle、position 與 log telemetry。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/probe.sh` — 從 manifest validity gate 拆出 config hash 比對，新增 `tnauqquant_config_snapshot_match`
+- `tests/trading/test-probe.sh` — 新增 config drift fixture，確認 drift 時 P&L 與 bound log telemetry 不會消失
+- `prometheus/rules/trading.yml` — 將 config snapshot drift 納入 production binding shadow alert
+- `prometheus/rules/tests/trading.test.yml` — 固定 config drift 的 alert contract
+- `runbooks/trading-critical-safety-state.md` — 補充 config drift 判讀與處理方式
+- `docs/trading-monitoring-development-plan.md` — 更新 runtime identity/binding 指標與狀態表
+- `docs/project-brief.md` — 記錄 config drift 不解除 current-run log binding 的架構決策
+- `docs/work-log.md` — 記錄 P&L `Err` 根因、修復與 production 驗收
+
+**原因/備註：** 目前 run 的 config 檔於 `2026-08-12 15:54:58` 被改動，SHA-256 因而與啟動時 immutable manifest snapshot 不同；舊 probe 將整份 manifest 判為無效，停止輸出 cycle P&L，Grafana XY 因沒有資料而顯示 `Err`。PR #25（`5f62497`）已部署；Grafana datasource 驗收回傳 Cycle 1–18，最新累積 P&L 為 `282.889`，dashboard provisioning version 仍為 13，Grafana 近 10 分鐘無 error。`tnauqquant_config_snapshot_match=0` 正確保留為 shadow binding alert，沒有覆寫 manifest 或 config。Trading PID 仍為 `11834`、啟動時間仍是 `2026-08-12 03:13:47`，未修改或重啟 Trading process。
+
+---
+
 ## 2026-08-12 13:56 — 將 Trading P&L 圖調整為 X=Cycle、Y=P&L
 
 **改動摘要：** 依 owner 更正交換 P&L XY 圖的欄位順序，改為 X 軸 Cycle、Y 軸累積 Real P&L。
