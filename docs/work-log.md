@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-08-12 13:56 — 將 Trading P&L 圖調整為 X=Cycle、Y=P&L
+
+**改動摘要：** 依 owner 更正交換 P&L XY 圖的欄位順序，改為 X 軸 Cycle、Y 軸累積 Real P&L。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 將 transformed table 固定為 Cycle 第一、P&L 第二，並同步更新 dashboard 與 panel 說明
+- `tests/trading/test-central-config.sh` — 固定 X=Cycle、Y=P&L 的 field order 與軸語意 contract
+- `docs/work-log.md` — 記錄軸向更正與 production 驗收
+
+**原因/備註：** PR #23（`e307888`）已部署，Grafana provisioning database 為 version 13，production JSON 的 field order 為 `cycle=0`、`Value=1`，並依 Cycle 升冪連線。Grafana 近 10 分鐘 error 為 0；Trading PID 仍為 `11834`、啟動時間仍是 `2026-08-12 03:13:47`，未修改或重啟 Trading process。
+
+---
+
 ## 2026-08-12 13:53 — 修正 Trading P&L 的 Prometheus table 欄位流程
 
 **改動摘要：** 讓 Grafana XY 直接使用 Prometheus table 已合併完成的 `Value` 與 `cycle` 欄位，移除會丟失 cycle 的重複 Reduce。
