@@ -15,6 +15,21 @@
 ---
 -->
 
+## 2026-08-12 12:11 — Trading cycle P&L、recent logs 與 process status
+
+**改動摘要：** 將 Trading dashboard 收斂為 current-run cycle 累積 Real P&L 橫向圖、signed positions、最新五行 log、log freshness 與 RUNNING／SHUTDOWN 狀態，並修正 macOS UTC `Z` 時間解析。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/probe.sh` — 從 current manifest 綁定 log 去重輸出每個 completed cycle 的累積 Real P&L，並以 UTC 正確解析 `Z` timestamp
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 以 Y=cycle、X=cumulative Real P&L 的 horizontal bar gauge 呈現，合併三個 signed position 數值，新增最新五行 log 與底部 process status
+- `tests/trading/test-probe.sh`、`tests/trading/test-central-config.sh` — 固定 cycle 去重、UTC epoch、bar gauge 軸向、status mapping 與 production selector contract
+- `docs/project-brief.md`、`docs/work-log.md` — 更新 Trading dashboard production 現況與部署紀錄
+
+**原因/備註：** PR #11（`9382287`）與 PR #12（`a243aeb`）已合併部署，Grafana provisioning database 為 version 7。舊的 `182.8703` Max 來自前一個 run，且 UTC `Z` 曾因本機時區被算早 8 小時；新圖直接取 current log 的 completed cycles，production 值為 Cycle 1 `82.4097`、Cycle 2 `52.0618`、Cycle 3 `48.6446`。Status 為 RUNNING，最新 log 查詢回 5 行，最終 position 為 Toobit `+0.1519 BTC`、MEXC `-0.1519 BTC`、NET `0 BTC`。部署前後 Trading PID 皆為 `11834`，啟動時間、config 與 manifest checksum 未變，probe error 與 Grafana recent error 皆為 0；entry price 仍因沒有兩交易所確認的 average fill 欄位而不顯示。本次 session 無可用的 in-app browser，畫面驗收由使用者端完成。
+
+---
+
 ## 2026-08-12 11:32 — 修復 Trading stat 數值未顯示
 
 **改動摘要：** 將四張 Trading stat panels 的無效 Grafana color mode `fixedColor` 修正為 `fixed`，恢復 Cycle、Log Update、Toobit 與 MEXC 數值呈現。
