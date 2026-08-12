@@ -30,9 +30,14 @@ jq -e '
   ] | all) and
   ([.panels[] | select(.id == 2) |
     (.type == "xychart" and
-     .options.seriesMapping == "manual" and
-     .options.series[0].x == "Cumulative Real P&L" and
-     .options.series[0].y == "Cycle" and
+     .pluginVersion == "11.2.0" and
+     .options.mapping == "manual" and
+     (.options | has("seriesMapping") | not) and
+     (.options | has("dims") | not) and
+     .options.series[0].frame.matcher == {"id": "byIndex", "options": 0} and
+     .options.series[0].name.fixed == "Completed cycles" and
+     .options.series[0].x.matcher == {"id": "byName", "options": "Cumulative Real P&L"} and
+     .options.series[0].y.matcher == {"id": "byName", "options": "Cycle"} and
      .fieldConfig.defaults.custom.show == "points+lines" and
      .fieldConfig.defaults.custom.pointSize.fixed == 7 and
      .options.legend.showLegend == false and
@@ -62,13 +67,32 @@ jq -e '
   ] == [true]) and
   ([.panels[] | select(.id == 40) |
     (.type == "stat" and
-     (.targets | length) == 3 and
-     ([.targets[].legendFormat] == ["TOOBIT", "MEXC", "NET"]) and
-     ([.targets[].expr] | all(contains("side=\"long\"") and contains("side=\"short\""))) and
-     (.targets[0].expr | contains("exchange=\"toobit\"")) and
-     (.targets[1].expr | contains("exchange=\"mexc\"")) and
-     (.targets[2].expr | contains("exchange=\"toobit\"") | not) and
-     (.targets[2].expr | contains("exchange=\"mexc\"") | not))
+     (.targets | length) == 7 and
+     ([.targets[].legendFormat] == [
+       "TOOBIT · LONG", "TOOBIT · SHORT", "TOOBIT · FLAT",
+       "MEXC · LONG", "MEXC · SHORT", "MEXC · FLAT", "NET"
+     ]) and
+     (.targets[0:3] | map(.expr) | all(contains("exchange=\"toobit\""))) and
+     (.targets[3:6] | map(.expr) | all(contains("exchange=\"mexc\""))) and
+     (.targets[0:6] | map(.expr | capture("side=\\\"(?<side>long|short|flat)\\\"").side) ==
+       ["long", "short", "flat", "long", "short", "flat"]) and
+     ([.targets[1].expr, .targets[4].expr] | all(startswith("-sum("))) and
+     (.targets[6].expr | contains("side=\"long\"") and contains("side=\"short\"")) and
+     (.targets[6].expr | contains("exchange=\"toobit\"") | not) and
+     (.targets[6].expr | contains("exchange=\"mexc\"") | not) and
+     ([.fieldConfig.overrides[] |
+       select(.matcher.options == "TOOBIT · LONG" or .matcher.options == "MEXC · LONG") |
+       .properties[] | select(.id == "color") | .value.fixedColor
+     ] == ["#73BF69", "#73BF69"]) and
+     ([.fieldConfig.overrides[] |
+       select(.matcher.options == "TOOBIT · SHORT" or .matcher.options == "MEXC · SHORT") |
+       .properties[] | select(.id == "color") | .value.fixedColor
+     ] == ["#F2495C", "#F2495C"]) and
+     ([.fieldConfig.overrides[] | select(.matcher.options == "NET") |
+       .properties[] | select(.id == "color") | .value.mode
+     ] == ["thresholds"]) and
+     ((.description | ascii_downcase) | contains("long is green")) and
+     ((.description | ascii_downcase) | contains("short is red")))
   ] == [true]) and
   ([.panels[] | select(.id == 44) | .targets[].expr | contains("tnauqquant_log_mtime_seconds")] == [true, true]) and
   ([.panels[] | select(.id == 45) |
