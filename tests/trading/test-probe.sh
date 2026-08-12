@@ -50,10 +50,13 @@ EOF
 chmod 755 "$FAKE_REPO/quant"
 today_local="$(TZ=Asia/Taipei date +%F)"
 cat >"$LOG_PATH" <<EOF
-time=${today_local}T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.1 real_pnl_usdt=10 cash_pnl_usdt=8 rebate_usdt=2 risk_pnl_usdt=9 cycles_completed=1
+time=${today_local}T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.1 real_pnl_usdt=10 cash_pnl_usdt=8 rebate_usdt=2 risk_pnl_usdt=9 cycles_completed=1 cycle_real_pnl_usdt=10
 time=${today_local}T09:30:00+08:00 level=INFO msg=pnl_status stable=false cycle_completed=false cycle_id=current.pending real_pnl_usdt=999 cash_pnl_usdt=999 rebate_usdt=0 risk_pnl_usdt=999 cycles_completed=1
-time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2
-time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
+time=${today_local}T10:01:00+08:00 level=INFO msg=trade_status state=settled initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.125 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.125 portfolio_projection=coordinator_book
+time=${today_local}T10:02:00+08:00 level=INFO msg=coordinated_signal_skipped initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.103 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.103 portfolio_projection=coordinator_book
+time=${today_local}T10:03:00+08:00 level=INFO msg=invalid_snapshot initiator_venue=unknown initiator_side=Short initiator_qty_btc=99 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=99 portfolio_projection=coordinator_book
 EOF
 cat >"$PREVIOUS_LOG_PATH" <<EOF
 time=${today_local}T08:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=previous.1 real_pnl_usdt=4 cash_pnl_usdt=3 rebate_usdt=1 risk_pnl_usdt=3.5 cycles_completed=1
@@ -200,8 +203,11 @@ assert_metric tnauqquant_process_identity_ok 0
 assert_metric tnauqquant_log_binding_ok 0
 assert_metric tnauqquant_marker_binding_ok 0
 assert_metric tnauqquant_current_pnl_valid 0
+assert_metric tnauqquant_current_position_valid 0
 assert_metric_missing tnauqquant_current_run_info
 assert_metric_missing tnauqquant_current_real_pnl_usdt
+assert_metric_missing tnauqquant_last_cycle_real_pnl_usdt
+assert_metric_missing tnauqquant_current_position_btc
 
 printf 'case: development heuristic zero process\n'
 export TQ_REQUIRE_RUNTIME_CONTRACT=0
@@ -249,6 +255,10 @@ assert_metric tnauqquant_current_rebate_usdt 3
 assert_metric tnauqquant_current_risk_pnl_usdt 11.5
 assert_metric tnauqquant_current_cycles_completed 2
 assert_metric tnauqquant_completed_cycles_today 3
+assert_metric tnauqquant_last_cycle_real_pnl_usdt 2.5
+assert_metric tnauqquant_current_position_valid 1
+assert_metric tnauqquant_current_position_btc 0.103 'exchange="toobit",side="short"'
+assert_metric tnauqquant_current_position_btc 0.103 'exchange="mexc",side="long"'
 
 sample_timestamp="$(metric_value tnauqquant_pnl_sample_timestamp_seconds)"
 last_completed_timestamp="$(metric_value tnauqquant_last_completed_cycle_timestamp_seconds)"
