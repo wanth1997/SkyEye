@@ -31,13 +31,11 @@ jq -e '
   ([.panels[] | select(.id == 2) |
     (.type == "xychart" and
      .pluginVersion == "11.2.0" and
-     .options.mapping == "manual" and
+     .options.mapping == "auto" and
      (.options | has("seriesMapping") | not) and
      (.options | has("dims") | not) and
-     .options.series[0].frame.matcher == {"id": "byIndex", "options": 0} and
      .options.series[0].name.fixed == "Completed cycles" and
-     .options.series[0].x.matcher == {"id": "byName", "options": "Cumulative Real P&L"} and
-     .options.series[0].y.matcher == {"id": "byName", "options": "Cycle"} and
+     (.options.series[0] | keys == ["name"]) and
      .fieldConfig.defaults.custom.show == "points+lines" and
      .fieldConfig.defaults.custom.pointSize.fixed == 7 and
      .options.legend.showLegend == false and
@@ -45,23 +43,26 @@ jq -e '
      .targets[0].range == false and
      .targets[0].format == "table" and
      (.targets[0].expr | contains("tnauqquant_cycle_cumulative_real_pnl_usdt")) and
-     ([.transformations[].id] == ["labelsToFields", "merge", "organize", "convertFieldType", "sortBy"]) and
-     .transformations[0].options.mode == "columns" and
-     .transformations[0].options.keepLabels == ["cycle"] and
-     .transformations[1].options == {} and
-     .transformations[2].options.excludeByName == {"Time": true} and
-     .transformations[2].options.indexByName == {
-       "tnauqquant_cycle_cumulative_real_pnl_usdt": 0,
+     ([.transformations[].id] == ["reduce", "organize", "convertFieldType", "sortBy"]) and
+     .transformations[0].options == {
+       "labelsToFields": true,
+       "mode": "seriesToRows",
+       "reducers": ["lastNotNull"]
+     } and
+     .transformations[1].options.excludeByName == {} and
+     .transformations[1].options.includeByName == {"Last *": true, "cycle": true} and
+     .transformations[1].options.indexByName == {
+       "Last *": 0,
        "cycle": 1
      } and
-     .transformations[2].options.renameByName == {
-       "tnauqquant_cycle_cumulative_real_pnl_usdt": "Cumulative Real P&L",
+     .transformations[1].options.renameByName == {
+       "Last *": "Cumulative Real P&L",
        "cycle": "Cycle"
      } and
-     .transformations[3].options.conversions[0].targetField == "Cycle" and
-     .transformations[3].options.conversions[0].destinationType == "number" and
-     .transformations[4].options.sort[0].field == "Cycle" and
-     .transformations[4].options.sort[0].desc == false and
+     .transformations[2].options.conversions[0].targetField == "Cycle" and
+     .transformations[2].options.conversions[0].destinationType == "number" and
+     .transformations[3].options.sort[0].field == "Cycle" and
+     .transformations[3].options.sort[0].desc == false and
      (.description | contains("X is cumulative")) and
      (.description | contains("Y is the completed session cycle")))
   ] == [true]) and
