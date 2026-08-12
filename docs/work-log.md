@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-08-12 13:36 — 修復 Grafana 11 Trading XY 與標示持倉方向
+
+**改動摘要：** 將 Trading P&L 面板改為 Grafana 11.2 XY Chart v2 與單一 reduced DataFrame，並以文字及顏色清楚標示兩間交易所的 LONG／SHORT／FLAT 持倉。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 移除 legacy XY options，改用 v2 series schema；以 Reduce series-to-rows 產生依 cycle 排序的 P&L XY 資料；positions 保留 signed BTC 數字並加入綠色 LONG、紅色 SHORT、灰色 FLAT 與依正負著色的 NET
+- `tests/trading/test-central-config.sh` — 固定 Grafana 11.2 options、reduced DataFrame、auto XY mapping、side-specific queries 與方向色彩 contract
+- `docs/work-log.md` — 記錄 mobile Safari 錯誤根因、hotfix 與 production 安全驗收
+
+**原因/備註：** PR #18（`89f5c09`）修復 legacy `name` 字串使 XY v2 在 mobile Safari 呼叫 `.split()` 崩潰的問題；PR #19（`2539ad3`）再修復 manual series 無匹配資料時元件只顯示 `Err` 的問題。Grafana provisioning database 已更新為 version 11，P&L query 回傳 Cycle 1–7；正式 position snapshot 為 Toobit LONG `1.262 BTC`、MEXC SHORT `1.262 BTC`。過去 15 分鐘 Grafana error 為 0，Trading PID 仍為 `11834`、啟動時間仍是 `2026-08-12 03:13:47`，probe exit code 與 error lines 均為 0；未修改或重啟 Trading process。
+
+---
+
 ## 2026-08-12 13:04 — 修復 Trading XY P&L DataFrame 合併
 
 **改動摘要：** 修正 Grafana instant table 將每個 cycle 拆成獨立 DataFrame，導致 XY panel 只讀 frame 0、無法呈現完整折線的問題。
