@@ -15,10 +15,10 @@
       }
     ]
   },
-  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. Positions are the latest coordinator-reported quantities; log freshness is shown beside the update time. Entry prices are intentionally omitted until the runtime exposes authoritative fill prices.",
+  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. Real P&L advances on stable cycle completion; positions are signed coordinator snapshots; logs are scrubbed before they reach Loki. Entry prices remain omitted until the runtime exposes exchange-confirmed averages.",
   "editable": false,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [],
   "liveNow": false,
@@ -28,11 +28,42 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Latest stable real_pnl_usdt from the current manifest-bound run.",
+      "description": "Cumulative stable real_pnl_usdt for today's manifest-bound run. Each step is a newly completed stable cycle; flat segments mean no new completed cycle.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
+          },
+          "custom": {
+            "axisCenteredZero": true,
+            "axisColorMode": "text",
+            "axisLabel": "Real P&L (USDT)",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
           },
           "decimals": 2,
           "mappings": [],
@@ -55,27 +86,28 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 6,
-        "w": 7,
+        "h": 9,
+        "w": 16,
         "x": 0,
         "y": 0
       },
       "id": 2,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
+        "legend": {
           "calcs": [
-            "lastNotNull"
+            "lastNotNull",
+            "min",
+            "max"
           ],
-          "fields": "",
-          "values": false
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
         },
-        "showPercentChange": false,
-        "textMode": "value_and_name",
-        "wideLayout": true
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
       },
       "pluginVersion": "11.2.0",
       "targets": [
@@ -85,119 +117,93 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
-          "instant": true,
-          "legendFormat": "current run",
-          "range": false,
+          "expr": "tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} and (timestamp(tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}) >= scalar(tnauqquant_current_run_started_timestamp_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} @ end()))",
+          "instant": false,
+          "legendFormat": "REAL P&L",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "REAL P&L",
-      "type": "stat"
+      "title": "REAL P&L · BY CYCLE",
+      "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "cycle_real_pnl_usdt from the latest stable, completed cycle in the current run.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 2,
-          "mappings": [],
-          "noValue": "No completed cycle",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
-          },
-          "unit": "suffix: USDT"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 5,
-        "x": 7,
-        "y": 0
-      },
-      "id": 42,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_last_cycle_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
-          "instant": true,
-          "legendFormat": "completed cycle",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "LAST CYCLE · Δ P&L",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Unique completed cycles today across every same-day run, using the Asia/Taipei day boundary.",
+      "description": "Signed current positions from the latest coordinator snapshot. Long is positive, short is negative, and NET is the signed sum across both exchanges.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "fixedColor": "#B8C7E0",
             "mode": "fixed"
           },
-          "decimals": 0,
+          "decimals": 3,
           "mappings": [],
-          "noValue": "0",
-          "unit": "short"
+          "noValue": "No current snapshot",
+          "unit": "suffix: BTC"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TOOBIT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#5794F2",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MEXC"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FFB357",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "NET"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#73BF69",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 6,
-        "w": 4,
-        "x": 12,
+        "h": 9,
+        "w": 8,
+        "x": 16,
         "y": 0
       },
-      "id": 43,
+      "id": 40,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "horizontal",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -217,14 +223,38 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "tnauqquant_completed_cycles_today{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "expr": "(sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"long\"}) or vector(0)) - (sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"short\"}) or vector(0))",
           "instant": true,
-          "legendFormat": "completed",
+          "legendFormat": "TOOBIT",
           "range": false,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"long\"}) or vector(0)) - (sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"short\"}) or vector(0))",
+          "instant": true,
+          "legendFormat": "MEXC",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",side=\"long\"}) or vector(0)) - (sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",side=\"short\"}) or vector(0))",
+          "instant": true,
+          "legendFormat": "NET",
+          "range": false,
+          "refId": "C"
         }
       ],
-      "title": "TODAY · CYCLES",
+      "title": "CURRENT POSITIONS · SIGNED",
       "type": "stat"
     },
     {
@@ -286,17 +316,17 @@
         ]
       },
       "gridPos": {
-        "h": 6,
+        "h": 7,
         "w": 8,
-        "x": 16,
-        "y": 0
+        "x": 0,
+        "y": 9
       },
       "id": 44,
       "options": {
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "horizontal",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -340,123 +370,44 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
-      "description": "Latest coordinator-reported Toobit position quantity. The label below the value shows long, short, or flat; use the log update card to confirm freshness.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "#5794F2",
-            "mode": "fixed"
-          },
-          "decimals": 3,
-          "mappings": [],
-          "noValue": "No current snapshot",
-          "unit": "suffix: BTC"
-        },
-        "overrides": []
-      },
+      "description": "Five newest scrubbed lines from the current manifest-bound strategy log, newest first.",
       "gridPos": {
         "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 6
+        "w": 16,
+        "x": 8,
+        "y": 9
       },
-      "id": 40,
+      "id": 45,
       "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value_and_name",
-        "wideLayout": true
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
       },
       "pluginVersion": "11.2.0",
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
+          "direction": "backward",
           "editorMode": "code",
-          "expr": "tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\"}",
-          "instant": true,
-          "legendFormat": "{{side}}",
-          "range": false,
+          "expr": "{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "maxLines": 5,
+          "queryType": "range",
           "refId": "A"
         }
       ],
-      "title": "TOOBIT · POSITION",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Latest coordinator-reported MEXC position quantity. The label below the value shows long, short, or flat; use the log update card to confirm freshness.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "#FFB357",
-            "mode": "fixed"
-          },
-          "decimals": 3,
-          "mappings": [],
-          "noValue": "No current snapshot",
-          "unit": "suffix: BTC"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 6
-      },
-      "id": 41,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\"}",
-          "instant": true,
-          "legendFormat": "{{side}}",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "MEXC · POSITION",
-      "type": "stat"
+      "title": "LATEST 5 LOG LINES",
+      "type": "logs"
     }
   ],
   "refresh": "15s",
