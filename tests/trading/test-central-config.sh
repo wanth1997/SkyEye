@@ -21,22 +21,32 @@ jq -e '
   .timezone == "Asia/Taipei" and
   .time.from == "now/d" and
   (.templating.list | length == 0) and
-  (.panels | length == 5) and
-  ([.panels[].id] | sort == [2, 40, 44, 45, 46]) and
-  ([.panels[].type] | sort == ["bargauge", "logs", "stat", "stat", "stat"]) and
+  (.panels | length == 6) and
+  ([.panels[].id] | sort == [2, 40, 44, 45, 46, 47]) and
+  ([.panels[].type] | sort == ["logs", "stat", "stat", "stat", "stat", "xychart"]) and
   ([.. | objects | select(.mode? == "fixedColor")] | length == 0) and
   ([.. | objects | select(.mode? == "fixed") |
     (has("fixedColor") and (.fixedColor | type) == "string" and (.fixedColor | length) > 0)
   ] | all) and
   ([.panels[] | select(.id == 2) |
-    (.type == "bargauge" and
-     .options.orientation == "horizontal" and
+    (.type == "xychart" and
+     .options.seriesMapping == "manual" and
+     .options.series[0].x == "Cumulative Real P&L" and
+     .options.series[0].y == "Cycle" and
+     .fieldConfig.defaults.custom.show == "points+lines" and
+     .fieldConfig.defaults.custom.pointSize.fixed == 7 and
+     .options.legend.showLegend == false and
      .targets[0].instant == true and
      .targets[0].range == false and
-     .targets[0].legendFormat == "CYCLE {{cycle}}" and
+     .targets[0].format == "table" and
      (.targets[0].expr | contains("tnauqquant_cycle_cumulative_real_pnl_usdt")) and
-     (.description | contains("Y rows")) and
-     (.description | contains("horizontal X value")))
+     ([.transformations[].id] == ["organize", "convertFieldType", "sortBy"]) and
+     .transformations[1].options.conversions[0].targetField == "Cycle" and
+     .transformations[1].options.conversions[0].destinationType == "number" and
+     .transformations[2].options.sort[0].field == "Cycle" and
+     .transformations[2].options.sort[0].desc == false and
+     (.description | contains("X is cumulative")) and
+     (.description | contains("Y is the completed session cycle")))
   ] == [true]) and
   ([.panels[] | select(.id == 40) |
     (.type == "stat" and
@@ -60,10 +70,25 @@ jq -e '
   ([.panels[] | select(.id == 46) |
     (.type == "stat" and
      .gridPos.y == 16 and
+     .gridPos.x == 16 and
      .fieldConfig.defaults.mappings[0].options["0"].text == "SHUTDOWN" and
      .fieldConfig.defaults.mappings[0].options["1"].text == "RUNNING" and
      (.targets[0].expr | contains("tnauqquant_process_count")) and
      (.targets[0].expr | contains("> bool 0")))
+  ] == [true]) and
+  ([.panels[] | select(.id == 47) |
+    (.type == "stat" and
+     .gridPos.y == 16 and
+     .gridPos.x == 0 and
+     .fieldConfig.defaults.unit == "currencyUSD" and
+     (.targets | length) == 2 and
+     ([.targets[].legendFormat] == ["TOOBIT VOLUME", "MEXC VOLUME"]) and
+     ([.targets[].expr] | all(contains("tnauqquant_current_run_exchange_volume_usd"))) and
+     (.targets[0].expr | contains("exchange=\"toobit\"")) and
+     (.targets[1].expr | contains("exchange=\"mexc\"")) and
+     ([.targets[].instant] == [true, true]) and
+     ([.targets[].range] == [false, false]) and
+     ((.description | ascii_downcase) | contains("current manifest-bound run")))
   ] == [true]) and
   ([.panels[].targets[].expr] | all(
     contains("environment=\"production\"") and
