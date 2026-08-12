@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-08-12 13:04 — 修復 Trading XY P&L DataFrame 合併
+
+**改動摘要：** 修正 Grafana instant table 將每個 cycle 拆成獨立 DataFrame，導致 XY panel 只讀 frame 0、無法呈現完整折線的問題。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 依序使用 Labels to fields、Merge、Organize、Convert field type 與 Sort，把 `cycle` label 和 P&L 合併成單一有序 XY table
+- `tests/trading/test-central-config.sh` — 固定五段 transformation、來源 metric 欄位改名、Cycle 數值轉換與排序 contract
+- `docs/work-log.md` — 記錄 production 根因、修正與安全驗收
+
+**原因/備註：** PR #16（`03baf58`）已合併部署，Grafana provisioning database 為 version 9，正式 panel 設定為 `labelsToFields → merge → organize → convertFieldType → sortBy`，X=`Cumulative Real P&L`、Y=`Cycle`。Production 已收到 Cycle 1–7，累積 P&L 依序為 `82.4097`、`52.0618`、`48.6446`、`47.1045`、`9.3863`、`64.3121`、`88.0269`；Grafana recent error 為 0。Trading PID 部署前後皆為 `11834`，啟動時間與 config／manifest／probe checksum 未變，probe error 為 0。本次 session 無可用的 in-app browser，畫面由使用者重新整理後驗收。
+
+---
+
 ## 2026-08-12 12:31 — Trading XY P&L 與雙交易所 Volume
 
 **改動摘要：** 將 current-run completed-cycle P&L 改為真正的 Grafana XY 折線圖，並新增 Toobit／MEXC 分別累積的 current-run 成交額。
