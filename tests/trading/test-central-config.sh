@@ -23,6 +23,12 @@ jq -e '
   (.templating.list | length == 0) and
   (.panels | length == 6) and
   ([.panels[].type] | all(. == "stat")) and
+  ([.panels[].fieldConfig.defaults.color.mode] | all(. == "thresholds" or . == "fixed")) and
+  ([.panels[] |
+    select(.id == 40 or .id == 41 or .id == 43 or .id == 44) |
+    .fieldConfig.defaults.color |
+    (.mode == "fixed" and (.fixedColor | type) == "string" and (.fixedColor | length) > 0)
+  ] | all) and
   ([.panels[] | select(.id == 2) | .targets[].expr | contains("tnauqquant_current_real_pnl_usdt")] == [true]) and
   ([.panels[] | select(.id == 40) | .targets[].expr | contains("exchange=\"toobit\"")] == [true]) and
   ([.panels[] | select(.id == 41) | .targets[].expr | contains("exchange=\"mexc\"")] == [true]) and
