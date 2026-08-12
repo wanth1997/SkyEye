@@ -177,24 +177,30 @@
       "title": "REAL P&L · CYCLE XY",
       "transformations": [
         {
+          "id": "labelsToFields",
+          "options": {
+            "keepLabels": [
+              "cycle"
+            ],
+            "mode": "columns"
+          }
+        },
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
           "id": "organize",
           "options": {
             "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "environment": true,
-              "instance": true,
-              "job": true,
-              "product": true,
-              "server_id": true,
-              "strategy": true
+              "Time": true
             },
             "indexByName": {
-              "Value": 0,
+              "tnauqquant_cycle_cumulative_real_pnl_usdt": 0,
               "cycle": 1
             },
             "renameByName": {
-              "Value": "Cumulative Real P&L",
+              "tnauqquant_cycle_cumulative_real_pnl_usdt": "Cumulative Real P&L",
               "cycle": "Cycle"
             }
           }
