@@ -50,10 +50,10 @@ EOF
 chmod 755 "$FAKE_REPO/quant"
 today_local="$(TZ=Asia/Taipei date +%F)"
 cat >"$LOG_PATH" <<EOF
-time=${today_local}T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.1 real_pnl_usdt=10 cash_pnl_usdt=8 rebate_usdt=2 risk_pnl_usdt=9 cycles_completed=1 cycle_real_pnl_usdt=10
+time=${today_local}T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.1 session_cycle=1 real_pnl_usdt=10 cash_pnl_usdt=8 rebate_usdt=2 risk_pnl_usdt=9 cycles_completed=1 cycle_real_pnl_usdt=10
 time=${today_local}T09:30:00+08:00 level=INFO msg=pnl_status stable=false cycle_completed=false cycle_id=current.pending real_pnl_usdt=999 cash_pnl_usdt=999 rebate_usdt=0 risk_pnl_usdt=999 cycles_completed=1
-time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
-time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
 time=${today_local}T10:01:00+08:00 level=INFO msg=trade_status state=settled initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.125 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.125 portfolio_projection=coordinator_book
 time=${today_local}T10:02:00+08:00 level=INFO msg=coordinated_signal_skipped initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.103 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.103 portfolio_projection=coordinator_book
 time=${today_local}T10:03:00+08:00 level=INFO msg=invalid_snapshot initiator_venue=unknown initiator_side=Short initiator_qty_btc=99 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=99 portfolio_projection=coordinator_book
@@ -207,6 +207,7 @@ assert_metric tnauqquant_current_position_valid 0
 assert_metric_missing tnauqquant_current_run_info
 assert_metric_missing tnauqquant_current_real_pnl_usdt
 assert_metric_missing tnauqquant_last_cycle_real_pnl_usdt
+assert_metric_missing tnauqquant_cycle_cumulative_real_pnl_usdt
 assert_metric_missing tnauqquant_current_position_btc
 
 printf 'case: development heuristic zero process\n'
@@ -256,6 +257,17 @@ assert_metric tnauqquant_current_risk_pnl_usdt 11.5
 assert_metric tnauqquant_current_cycles_completed 2
 assert_metric tnauqquant_completed_cycles_today 3
 assert_metric tnauqquant_last_cycle_real_pnl_usdt 2.5
+assert_metric tnauqquant_cycle_cumulative_real_pnl_usdt 10 'cycle="1"'
+assert_metric tnauqquant_cycle_cumulative_real_pnl_usdt 12.5 'cycle="2"'
+cycle_pnl_series_count="$(awk '
+  index($0, "tnauqquant_cycle_cumulative_real_pnl_usdt{") == 1 { count++ }
+  END { print count + 0 }
+' "$METRICS_PATH")"
+if [[ "$cycle_pnl_series_count" != "2" ]]; then
+  printf 'FAIL: expected two deduplicated current-run cycle PNL series, got %s\n' \
+    "$cycle_pnl_series_count" >&2
+  exit 1
+fi
 assert_metric tnauqquant_current_position_valid 1
 assert_metric tnauqquant_current_position_btc 0.103 'exchange="toobit",side="short"'
 assert_metric tnauqquant_current_position_btc 0.103 'exchange="mexc",side="long"'
@@ -263,6 +275,11 @@ assert_metric tnauqquant_current_position_btc 0.103 'exchange="mexc",side="long"
 sample_timestamp="$(metric_value tnauqquant_pnl_sample_timestamp_seconds)"
 last_completed_timestamp="$(metric_value tnauqquant_last_completed_cycle_timestamp_seconds)"
 run_started_timestamp="$(metric_value tnauqquant_current_run_started_timestamp_seconds)"
+if [[ "$run_started_timestamp" != "1784256306" ]]; then
+  printf 'FAIL: UTC run start expected=1784256306 actual=%s\n' \
+    "${run_started_timestamp:-<missing>}" >&2
+  exit 1
+fi
 for timestamp_value in "$sample_timestamp" "$last_completed_timestamp" "$run_started_timestamp"; do
   if [[ ! "$timestamp_value" =~ ^[0-9]+$ ]] || [[ "$timestamp_value" -le 0 ]]; then
     printf 'FAIL: expected a positive timestamp, got %s\n' "${timestamp_value:-<missing>}" >&2

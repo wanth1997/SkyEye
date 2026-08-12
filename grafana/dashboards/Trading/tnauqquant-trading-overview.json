@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. Real P&L advances on stable cycle completion; positions are signed coordinator snapshots; logs are scrubbed before they reach Loki. Entry prices remain omitted until the runtime exposes exchange-confirmed averages.",
+  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. Each horizontal P&L row is one completed cycle; positions are signed coordinator snapshots; status reflects the exact configured process; logs are scrubbed before Loki. Entry prices remain omitted until the runtime exposes exchange-confirmed averages.",
   "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -28,42 +28,11 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Cumulative stable real_pnl_usdt for today's manifest-bound run. Each step is a newly completed stable cycle; flat segments mean no new completed cycle.",
+      "description": "Y rows are completed session cycles from the current manifest-bound log. Each horizontal X value is cumulative real_pnl_usdt at that cycle boundary; unfinished cycles and earlier runs are excluded.",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
-          },
-          "custom": {
-            "axisCenteredZero": true,
-            "axisColorMode": "text",
-            "axisLabel": "Real P&L (USDT)",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 12,
-            "gradientMode": "opacity",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
           },
           "decimals": 2,
           "mappings": [],
@@ -93,21 +62,18 @@
       },
       "id": 2,
       "options": {
-        "legend": {
+        "displayMode": "gradient",
+        "minVizHeight": 20,
+        "minVizWidth": 8,
+        "orientation": "horizontal",
+        "reduceOptions": {
           "calcs": [
-            "lastNotNull",
-            "min",
-            "max"
+            "lastNotNull"
           ],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
+        "showUnfilled": true
       },
       "pluginVersion": "11.2.0",
       "targets": [
@@ -117,15 +83,15 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} and (timestamp(tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}) >= scalar(tnauqquant_current_run_started_timestamp_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} @ end()))",
-          "instant": false,
-          "legendFormat": "REAL P&L",
-          "range": true,
+          "expr": "tnauqquant_cycle_cumulative_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "CYCLE {{cycle}}",
+          "range": false,
           "refId": "A"
         }
       ],
-      "title": "REAL P&L · BY CYCLE",
-      "type": "timeseries"
+      "title": "REAL P&L · CUMULATIVE BY CYCLE",
+      "type": "bargauge"
     },
     {
       "datasource": {
@@ -408,6 +374,94 @@
       ],
       "title": "LATEST 5 LOG LINES",
       "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "RUNNING means at least one process exactly matches the configured trading executable and config. SHUTDOWN means no matching process. Missing monitoring data is shown as UNKNOWN, not as a false shutdown.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "SHUTDOWN"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "RUNNING"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "noValue": "UNKNOWN",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 46,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_process_count{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} > bool 0",
+          "instant": true,
+          "legendFormat": "STATUS",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "STRATEGY STATUS",
+      "type": "stat"
     }
   ],
   "refresh": "15s",

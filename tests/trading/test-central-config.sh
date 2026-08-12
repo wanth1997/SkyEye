@@ -21,21 +21,22 @@ jq -e '
   .timezone == "Asia/Taipei" and
   .time.from == "now/d" and
   (.templating.list | length == 0) and
-  (.panels | length == 4) and
-  ([.panels[].id] | sort == [2, 40, 44, 45]) and
-  ([.panels[].type] | sort == ["logs", "stat", "stat", "timeseries"]) and
+  (.panels | length == 5) and
+  ([.panels[].id] | sort == [2, 40, 44, 45, 46]) and
+  ([.panels[].type] | sort == ["bargauge", "logs", "stat", "stat", "stat"]) and
   ([.. | objects | select(.mode? == "fixedColor")] | length == 0) and
   ([.. | objects | select(.mode? == "fixed") |
     (has("fixedColor") and (.fixedColor | type) == "string" and (.fixedColor | length) > 0)
   ] | all) and
   ([.panels[] | select(.id == 2) |
-    (.type == "timeseries" and
-     .fieldConfig.defaults.custom.lineInterpolation == "stepAfter" and
-     .targets[0].instant == false and
-     .targets[0].range == true and
-     (.targets[0].expr | contains("tnauqquant_current_real_pnl_usdt")) and
-     (.targets[0].expr | contains("tnauqquant_current_run_started_timestamp_seconds")) and
-     (.targets[0].expr | contains("@ end()")))
+    (.type == "bargauge" and
+     .options.orientation == "horizontal" and
+     .targets[0].instant == true and
+     .targets[0].range == false and
+     .targets[0].legendFormat == "CYCLE {{cycle}}" and
+     (.targets[0].expr | contains("tnauqquant_cycle_cumulative_real_pnl_usdt")) and
+     (.description | contains("Y rows")) and
+     (.description | contains("horizontal X value")))
   ] == [true]) and
   ([.panels[] | select(.id == 40) |
     (.type == "stat" and
@@ -56,13 +57,22 @@ jq -e '
      .targets[0].direction == "backward" and
      .options.sortOrder == "Descending")
   ] == [true]) and
+  ([.panels[] | select(.id == 46) |
+    (.type == "stat" and
+     .gridPos.y == 16 and
+     .fieldConfig.defaults.mappings[0].options["0"].text == "SHUTDOWN" and
+     .fieldConfig.defaults.mappings[0].options["1"].text == "RUNNING" and
+     (.targets[0].expr | contains("tnauqquant_process_count")) and
+     (.targets[0].expr | contains("> bool 0")))
+  ] == [true]) and
   ([.panels[].targets[].expr] | all(
     contains("environment=\"production\"") and
     contains("server_id=\"tnauqquant-prod-1\"") and
     contains("strategy=\"toobit-mexc-btc\"")
   )) and
   ([.panels[].targets[].expr] | all(
-    (contains("tnauqquant_last_cycle_real_pnl_usdt") or
+    (contains("tnauqquant_current_real_pnl_usdt") or
+     contains("tnauqquant_last_cycle_real_pnl_usdt") or
      contains("tnauqquant_completed_cycles_today")) | not
   ))
 ' "$DASHBOARD" >/dev/null
