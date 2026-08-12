@@ -92,6 +92,59 @@ latest_pnl_line() {
   ' "$log_path"
 }
 
+latest_position_snapshot() {
+  local log_path="$1"
+  awk '
+    function valid_number(value) {
+      return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
+    }
+    function normalize_side(value) {
+      if (value == "Long") return "long"
+      if (value == "Short") return "short"
+      if (value == "Flat") return "flat"
+      return ""
+    }
+    {
+      projection = ""
+      initiator_venue = ""
+      initiator_side = ""
+      initiator_qty = ""
+      carrier_venue = ""
+      carrier_side = ""
+      carrier_qty = ""
+
+      for (i = 1; i <= NF; i++) {
+        equals = index($i, "=")
+        if (equals == 0) continue
+        key = substr($i, 1, equals - 1)
+        value = substr($i, equals + 1)
+        gsub(/^"|"$/, "", value)
+        if (key == "portfolio_projection") projection = value
+        if (key == "initiator_venue") initiator_venue = value
+        if (key == "initiator_side") initiator_side = normalize_side(value)
+        if (key == "initiator_qty_btc") initiator_qty = value
+        if (key == "carrier_venue") carrier_venue = value
+        if (key == "carrier_side") carrier_side = normalize_side(value)
+        if (key == "carrier_qty_btc") carrier_qty = value
+      }
+
+      if (projection != "coordinator_book" ||
+          initiator_side == "" || carrier_side == "" ||
+          !valid_number(initiator_qty) || !valid_number(carrier_qty) ||
+          initiator_qty + 0 < 0 || carrier_qty + 0 < 0) {
+        next
+      }
+
+      if (initiator_venue == "toobit-main" && carrier_venue == "mexc-ui") {
+        latest = initiator_qty "\t" initiator_side "\t" carrier_qty "\t" carrier_side
+      } else if (initiator_venue == "mexc-ui" && carrier_venue == "toobit-main") {
+        latest = carrier_qty "\t" carrier_side "\t" initiator_qty "\t" initiator_side
+      }
+    }
+    END { if (latest != "") print latest }
+  ' "$log_path"
+}
+
 logfmt_value() {
   local line="$1"
   local wanted="$2"
@@ -295,6 +348,12 @@ CURRENT_RISK_PNL=""
 CURRENT_CYCLES_COMPLETED=""
 PNL_SAMPLE_TIMESTAMP=""
 LAST_COMPLETED_CYCLE_TIMESTAMP=""
+LAST_COMPLETED_CYCLE_REAL_PNL=""
+CURRENT_POSITION_VALID=0
+CURRENT_TOOBIT_POSITION_BTC=""
+CURRENT_TOOBIT_POSITION_SIDE=""
+CURRENT_MEXC_POSITION_BTC=""
+CURRENT_MEXC_POSITION_SIDE=""
 
 if [[ "$ACTUAL_INSTANCE_ID" == "$TQ_INSTANCE_ID" ]]; then
   STRATEGY_IDENTITY_OK=1
@@ -396,6 +455,30 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       if [[ -n "$LAST_COMPLETED_LINE" ]]; then
         last_completed_time="$(logfmt_value "$LAST_COMPLETED_LINE" time)"
         LAST_COMPLETED_CYCLE_TIMESTAMP="$(timestamp_to_epoch "$last_completed_time" || true)"
+        last_completed_cycle_real_pnl="$(logfmt_value "$LAST_COMPLETED_LINE" cycle_real_pnl_usdt)"
+        is_number "$last_completed_cycle_real_pnl" && \
+          LAST_COMPLETED_CYCLE_REAL_PNL="$last_completed_cycle_real_pnl"
+      fi
+
+      POSITION_SNAPSHOT="$(latest_position_snapshot "$MANIFEST_LOG_PATH")"
+      if [[ -n "$POSITION_SNAPSHOT" ]]; then
+        IFS=$'\t' read -r \
+          current_toobit_position_btc \
+          current_toobit_position_side \
+          current_mexc_position_btc \
+          current_mexc_position_side <<<"$POSITION_SNAPSHOT"
+
+        if is_number "$current_toobit_position_btc" &&
+           is_number "$current_mexc_position_btc" &&
+           [[ "$current_toobit_position_side" =~ ^(long|short|flat)$ ]] &&
+           [[ "$current_mexc_position_side" =~ ^(long|short|flat)$ ]]
+        then
+          CURRENT_POSITION_VALID=1
+          CURRENT_TOOBIT_POSITION_BTC="$current_toobit_position_btc"
+          CURRENT_TOOBIT_POSITION_SIDE="$current_toobit_position_side"
+          CURRENT_MEXC_POSITION_BTC="$current_mexc_position_btc"
+          CURRENT_MEXC_POSITION_SIDE="$current_mexc_position_side"
+        fi
       fi
     fi
 
@@ -533,6 +616,7 @@ trap cleanup_temp EXIT HUP INT TERM
   emit_gauge tnauqquant_probe_timestamp_seconds "Unix timestamp of the latest successful probe." "$PROBE_TIMESTAMP"
   emit_gauge tnauqquant_log_mtime_seconds "Unix mtime of the current bound log, or zero." "$LATEST_LOG_MTIME"
   emit_gauge tnauqquant_current_pnl_valid "Whether current-run stable PNL is available." "$CURRENT_PNL_VALID"
+  emit_gauge tnauqquant_current_position_valid "Whether a current-run coordinator position snapshot is available." "$CURRENT_POSITION_VALID"
   emit_gauge tnauqquant_completed_cycles_today "Completed cycles today across all runs in the configured timezone." "$TODAY_COMPLETED_CYCLES"
   if [[ -n "$CURRENT_RUN_ID" ]]; then
     printf '# HELP tnauqquant_current_run_info Current manifest-bound run identity.\n'
@@ -547,6 +631,15 @@ trap cleanup_temp EXIT HUP INT TERM
   [[ -n "$CURRENT_CYCLES_COMPLETED" ]] && emit_gauge tnauqquant_current_cycles_completed "Completed cycles reported by the current run." "$CURRENT_CYCLES_COMPLETED"
   [[ -n "$PNL_SAMPLE_TIMESTAMP" ]] && emit_gauge tnauqquant_pnl_sample_timestamp_seconds "Unix timestamp of the latest stable current-run PNL sample." "$PNL_SAMPLE_TIMESTAMP"
   [[ -n "$LAST_COMPLETED_CYCLE_TIMESTAMP" ]] && emit_gauge tnauqquant_last_completed_cycle_timestamp_seconds "Unix timestamp of the latest completed current-run cycle." "$LAST_COMPLETED_CYCLE_TIMESTAMP"
+  [[ -n "$LAST_COMPLETED_CYCLE_REAL_PNL" ]] && emit_gauge tnauqquant_last_cycle_real_pnl_usdt "Real PNL change of the latest completed current-run cycle in USDT." "$LAST_COMPLETED_CYCLE_REAL_PNL"
+  if [[ "$CURRENT_POSITION_VALID" -eq 1 ]]; then
+    printf '# HELP tnauqquant_current_position_btc Latest coordinator-reported position quantity by exchange and side.\n'
+    printf '# TYPE tnauqquant_current_position_btc gauge\n'
+    printf 'tnauqquant_current_position_btc{%s,exchange="toobit",side="%s"} %s\n' \
+      "$METRIC_LABELS" "$CURRENT_TOOBIT_POSITION_SIDE" "$CURRENT_TOOBIT_POSITION_BTC"
+    printf 'tnauqquant_current_position_btc{%s,exchange="mexc",side="%s"} %s\n' \
+      "$METRIC_LABELS" "$CURRENT_MEXC_POSITION_SIDE" "$CURRENT_MEXC_POSITION_BTC"
+  fi
   if [[ -n "$DONE_REASON" ]]; then
     printf '# HELP tnauqquant_done_marker Bound terminal marker by normalized reason.\n'
     printf '# TYPE tnauqquant_done_marker gauge\n'
