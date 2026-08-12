@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. The XY line maps cumulative Real P&L to completed cycles; positions are signed coordinator snapshots; exchange volume is summed from executed trade_status records; status reflects the exact configured process; logs are scrubbed before Loki. Entry prices remain omitted until the runtime exposes exchange-confirmed averages.",
+  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. The XY line maps completed cycles to cumulative Real P&L; positions are signed coordinator snapshots; exchange volume is summed from executed trade_status records; status reflects the exact configured process; logs are scrubbed before Loki. Entry prices remain omitted until the runtime exposes exchange-confirmed averages.",
   "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -28,7 +28,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Connected XY line for the current manifest-bound run. Grafana's Prometheus table result supplies Value and cycle columns; X is cumulative real_pnl_usdt and Y is the completed session cycle number. Unfinished cycles and earlier runs are excluded.",
+      "description": "Connected XY line for the current manifest-bound run. Grafana's Prometheus table result supplies cycle and Value columns; X is the completed session cycle number and Y is cumulative real_pnl_usdt. Unfinished cycles and earlier runs are excluded.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -172,8 +172,8 @@
               "cycle": true
             },
             "indexByName": {
-              "Value": 0,
-              "cycle": 1
+              "Value": 1,
+              "cycle": 0
             },
             "renameByName": {
               "Value": "Cumulative Real P&L",
