@@ -15,6 +15,18 @@
 ---
 -->
 
+## 2026-08-12 11:32 — 修復 Trading stat 數值未顯示
+
+**改動摘要：** 將四張 Trading stat panels 的無效 Grafana color mode `fixedColor` 修正為 `fixed`，恢復 Cycle、Log Update、Toobit 與 MEXC 數值呈現。
+
+**修改的檔案：**
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 修正四張 stat panels 的 fixed color mode
+- `tests/trading/test-central-config.sh` — 新增 Grafana 合法 color mode 與 fixed color contract
+
+**原因/備註：** PR #9 於 `1516913` 合併並部署；Grafana provisioning database 已更新為 version 5。Production 7 個 panel queries 均各回傳一個 series：Real P&L `48.6446`、最後 cycle `-3.4173`、今日 cycles `3`、Toobit `long 2.084 BTC`、MEXC `short 2.084 BTC`。Trading PID 仍為 `11834`，probe error log 為 0；未修改或重啟 Trading process 與 Mac probe。
+
+---
+
 ## 2026-08-12 11:20 — 精簡 Trading live dashboard
 
 **改動摘要：** 新增 manifest-bound 雙交易所持倉與最後 completed cycle P&L 指標，並將 production Trading dashboard 精簡為六個即時 stat panels。
