@@ -133,29 +133,11 @@
           "placement": "bottom",
           "showLegend": false
         },
-        "mapping": "manual",
+        "mapping": "auto",
         "series": [
           {
-            "frame": {
-              "matcher": {
-                "id": "byIndex",
-                "options": 0
-              }
-            },
             "name": {
               "fixed": "Completed cycles"
-            },
-            "x": {
-              "matcher": {
-                "id": "byName",
-                "options": "Cumulative Real P&L"
-              }
-            },
-            "y": {
-              "matcher": {
-                "id": "byName",
-                "options": "Cycle"
-              }
             }
           }
         ],
@@ -182,30 +164,29 @@
       "title": "REAL P&L · CYCLE XY",
       "transformations": [
         {
-          "id": "labelsToFields",
+          "id": "reduce",
           "options": {
-            "keepLabels": [
-              "cycle"
-            ],
-            "mode": "columns"
+            "labelsToFields": true,
+            "mode": "seriesToRows",
+            "reducers": [
+              "lastNotNull"
+            ]
           }
-        },
-        {
-          "id": "merge",
-          "options": {}
         },
         {
           "id": "organize",
           "options": {
-            "excludeByName": {
-              "Time": true
+            "excludeByName": {},
+            "includeByName": {
+              "Last *": true,
+              "cycle": true
             },
             "indexByName": {
-              "tnauqquant_cycle_cumulative_real_pnl_usdt": 0,
+              "Last *": 0,
               "cycle": 1
             },
             "renameByName": {
-              "tnauqquant_cycle_cumulative_real_pnl_usdt": "Cumulative Real P&L",
+              "Last *": "Cumulative Real P&L",
               "cycle": "Cycle"
             }
           }
