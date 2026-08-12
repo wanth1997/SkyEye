@@ -47,8 +47,8 @@ jq -e '
      .transformations[0].options.excludeByName == {} and
      .transformations[0].options.includeByName == {"Value": true, "cycle": true} and
      .transformations[0].options.indexByName == {
-       "Value": 0,
-       "cycle": 1
+       "Value": 1,
+       "cycle": 0
      } and
      .transformations[0].options.renameByName == {
        "Value": "Cumulative Real P&L",
@@ -58,9 +58,9 @@ jq -e '
      .transformations[1].options.conversions[0].destinationType == "number" and
      .transformations[2].options.sort[0].field == "Cycle" and
      .transformations[2].options.sort[0].desc == false and
-     (.description | contains("Prometheus table result supplies Value and cycle")) and
-     (.description | contains("X is cumulative")) and
-     (.description | contains("Y is the completed session cycle")))
+     (.description | contains("Prometheus table result supplies cycle and Value")) and
+     (.description | contains("X is the completed session cycle")) and
+     (.description | contains("Y is cumulative")))
   ] == [true]) and
   ([.panels[] | select(.id == 40) |
     (.type == "stat" and
