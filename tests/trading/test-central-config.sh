@@ -21,24 +21,49 @@ jq -e '
   .timezone == "Asia/Taipei" and
   .time.from == "now/d" and
   (.templating.list | length == 0) and
-  (.panels | length == 6) and
-  ([.panels[].type] | all(. == "stat")) and
-  ([.panels[].fieldConfig.defaults.color.mode] | all(. == "thresholds" or . == "fixed")) and
-  ([.panels[] |
-    select(.id == 40 or .id == 41 or .id == 43 or .id == 44) |
-    .fieldConfig.defaults.color |
-    (.mode == "fixed" and (.fixedColor | type) == "string" and (.fixedColor | length) > 0)
+  (.panels | length == 4) and
+  ([.panels[].id] | sort == [2, 40, 44, 45]) and
+  ([.panels[].type] | sort == ["logs", "stat", "stat", "timeseries"]) and
+  ([.. | objects | select(.mode? == "fixedColor")] | length == 0) and
+  ([.. | objects | select(.mode? == "fixed") |
+    (has("fixedColor") and (.fixedColor | type) == "string" and (.fixedColor | length) > 0)
   ] | all) and
-  ([.panels[] | select(.id == 2) | .targets[].expr | contains("tnauqquant_current_real_pnl_usdt")] == [true]) and
-  ([.panels[] | select(.id == 40) | .targets[].expr | contains("exchange=\"toobit\"")] == [true]) and
-  ([.panels[] | select(.id == 41) | .targets[].expr | contains("exchange=\"mexc\"")] == [true]) and
-  ([.panels[] | select(.id == 42) | .targets[].expr | contains("tnauqquant_last_cycle_real_pnl_usdt")] == [true]) and
-  ([.panels[] | select(.id == 43) | .targets[].expr | contains("tnauqquant_completed_cycles_today")] == [true]) and
+  ([.panels[] | select(.id == 2) |
+    (.type == "timeseries" and
+     .fieldConfig.defaults.custom.lineInterpolation == "stepAfter" and
+     .targets[0].instant == false and
+     .targets[0].range == true and
+     (.targets[0].expr | contains("tnauqquant_current_real_pnl_usdt")) and
+     (.targets[0].expr | contains("tnauqquant_current_run_started_timestamp_seconds")) and
+     (.targets[0].expr | contains("@ end()")))
+  ] == [true]) and
+  ([.panels[] | select(.id == 40) |
+    (.type == "stat" and
+     (.targets | length) == 3 and
+     ([.targets[].legendFormat] == ["TOOBIT", "MEXC", "NET"]) and
+     ([.targets[].expr] | all(contains("side=\"long\"") and contains("side=\"short\""))) and
+     (.targets[0].expr | contains("exchange=\"toobit\"")) and
+     (.targets[1].expr | contains("exchange=\"mexc\"")) and
+     (.targets[2].expr | contains("exchange=\"toobit\"") | not) and
+     (.targets[2].expr | contains("exchange=\"mexc\"") | not))
+  ] == [true]) and
   ([.panels[] | select(.id == 44) | .targets[].expr | contains("tnauqquant_log_mtime_seconds")] == [true, true]) and
+  ([.panels[] | select(.id == 45) |
+    (.type == "logs" and
+     .datasource.type == "loki" and
+     .targets[0].datasource.type == "loki" and
+     .targets[0].maxLines == 5 and
+     .targets[0].direction == "backward" and
+     .options.sortOrder == "Descending")
+  ] == [true]) and
   ([.panels[].targets[].expr] | all(
     contains("environment=\"production\"") and
     contains("server_id=\"tnauqquant-prod-1\"") and
     contains("strategy=\"toobit-mexc-btc\"")
+  )) and
+  ([.panels[].targets[].expr] | all(
+    (contains("tnauqquant_last_cycle_real_pnl_usdt") or
+     contains("tnauqquant_completed_cycles_today")) | not
   ))
 ' "$DASHBOARD" >/dev/null
 
