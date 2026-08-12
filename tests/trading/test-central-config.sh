@@ -43,26 +43,22 @@ jq -e '
      .targets[0].range == false and
      .targets[0].format == "table" and
      (.targets[0].expr | contains("tnauqquant_cycle_cumulative_real_pnl_usdt")) and
-     ([.transformations[].id] == ["reduce", "organize", "convertFieldType", "sortBy"]) and
-     .transformations[0].options == {
-       "labelsToFields": true,
-       "mode": "seriesToRows",
-       "reducers": ["lastNotNull"]
-     } and
-     .transformations[1].options.excludeByName == {} and
-     .transformations[1].options.includeByName == {"Last *": true, "cycle": true} and
-     .transformations[1].options.indexByName == {
-       "Last *": 0,
+     ([.transformations[].id] == ["organize", "convertFieldType", "sortBy"]) and
+     .transformations[0].options.excludeByName == {} and
+     .transformations[0].options.includeByName == {"Value": true, "cycle": true} and
+     .transformations[0].options.indexByName == {
+       "Value": 0,
        "cycle": 1
      } and
-     .transformations[1].options.renameByName == {
-       "Last *": "Cumulative Real P&L",
+     .transformations[0].options.renameByName == {
+       "Value": "Cumulative Real P&L",
        "cycle": "Cycle"
      } and
-     .transformations[2].options.conversions[0].targetField == "Cycle" and
-     .transformations[2].options.conversions[0].destinationType == "number" and
-     .transformations[3].options.sort[0].field == "Cycle" and
-     .transformations[3].options.sort[0].desc == false and
+     .transformations[1].options.conversions[0].targetField == "Cycle" and
+     .transformations[1].options.conversions[0].destinationType == "number" and
+     .transformations[2].options.sort[0].field == "Cycle" and
+     .transformations[2].options.sort[0].desc == false and
+     (.description | contains("Prometheus table result supplies Value and cycle")) and
      (.description | contains("X is cumulative")) and
      (.description | contains("Y is the completed session cycle")))
   ] == [true]) and
