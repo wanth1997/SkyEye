@@ -127,33 +127,38 @@
       },
       "id": 2,
       "options": {
-        "dims": {
-          "exclude": [],
-          "frame": 0
-        },
         "legend": {
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": false
         },
+        "mapping": "manual",
         "series": [
           {
-            "frame": 0,
-            "name": "Completed cycles",
-            "pointColor": {
-              "fixed": "#5794F2"
+            "frame": {
+              "matcher": {
+                "id": "byIndex",
+                "options": 0
+              }
             },
-            "pointSize": {
-              "fixed": 7,
-              "max": 20,
-              "min": 1
+            "name": {
+              "fixed": "Completed cycles"
             },
-            "x": "Cumulative Real P&L",
-            "y": "Cycle"
+            "x": {
+              "matcher": {
+                "id": "byName",
+                "options": "Cumulative Real P&L"
+              }
+            },
+            "y": {
+              "matcher": {
+                "id": "byName",
+                "options": "Cycle"
+              }
+            }
           }
         ],
-        "seriesMapping": "manual",
         "tooltip": {
           "mode": "single",
           "sort": "none"
@@ -236,7 +241,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Signed current positions from the latest coordinator snapshot. Long is positive, short is negative, and NET is the signed sum across both exchanges.",
+      "description": "Current positions from the latest coordinator snapshot. Each exchange name explicitly shows LONG, SHORT, or FLAT; long is green and positive, short is red and negative, flat is neutral, and NET is the signed sum.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -252,13 +257,13 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "TOOBIT"
+              "options": "TOOBIT · LONG"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#5794F2",
+                  "fixedColor": "#73BF69",
                   "mode": "fixed"
                 }
               }
@@ -267,13 +272,73 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "MEXC"
+              "options": "MEXC · LONG"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#FFB357",
+                  "fixedColor": "#73BF69",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TOOBIT · SHORT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#F2495C",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MEXC · SHORT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#F2495C",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TOOBIT · FLAT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#B8C7E0",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MEXC · FLAT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#B8C7E0",
                   "mode": "fixed"
                 }
               }
@@ -288,8 +353,27 @@
               {
                 "id": "color",
                 "value": {
-                  "fixedColor": "#73BF69",
-                  "mode": "fixed"
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#F2495C",
+                      "value": null
+                    },
+                    {
+                      "color": "#B8C7E0",
+                      "value": 0
+                    },
+                    {
+                      "color": "#73BF69",
+                      "value": 1e-12
+                    }
+                  ]
                 }
               }
             ]
@@ -327,9 +411,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"long\"}) or vector(0)) - (sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"short\"}) or vector(0))",
+          "expr": "sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"long\"})",
           "instant": true,
-          "legendFormat": "TOOBIT",
+          "legendFormat": "TOOBIT · LONG",
           "range": false,
           "refId": "A"
         },
@@ -339,11 +423,59 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "(sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"long\"}) or vector(0)) - (sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"short\"}) or vector(0))",
+          "expr": "-sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"short\"})",
           "instant": true,
-          "legendFormat": "MEXC",
+          "legendFormat": "TOOBIT · SHORT",
           "range": false,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"flat\"})",
+          "instant": true,
+          "legendFormat": "TOOBIT · FLAT",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"long\"})",
+          "instant": true,
+          "legendFormat": "MEXC · LONG",
+          "range": false,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "-sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"short\"})",
+          "instant": true,
+          "legendFormat": "MEXC · SHORT",
+          "range": false,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"flat\"})",
+          "instant": true,
+          "legendFormat": "MEXC · FLAT",
+          "range": false,
+          "refId": "F"
         },
         {
           "datasource": {
@@ -355,7 +487,7 @@
           "instant": true,
           "legendFormat": "NET",
           "range": false,
-          "refId": "C"
+          "refId": "G"
         }
       ],
       "title": "CURRENT POSITIONS · SIGNED",
