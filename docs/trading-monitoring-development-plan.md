@@ -349,6 +349,7 @@ Marker 只有在 `run_id`、PID、config hash 與 manifest 相符時才能影響
 | `tnauqquant_runtime_contract_available` | gauge | 0=development heuristic，1=manifest/marker v1 可用 |
 | `tnauqquant_process_identity_ok` | gauge | heuristic=command/config match；contract=process/manifest match |
 | `tnauqquant_strategy_identity_ok` | gauge | monitoring slug 與 config instance 是否相符 |
+| `tnauqquant_config_snapshot_match` | gauge | 磁碟 config 是否仍符合 running manifest 的啟動快照；drift 不解除既有 run/log 綁定 |
 | `tnauqquant_log_binding_ok` | gauge | current log 是否屬於 current run |
 | `tnauqquant_marker_binding_ok` | gauge | marker 是否屬於 current run |
 | `tnauqquant_done_marker{reason="..."}` | gauge | allowlisted marker reason；最多一個 reason=1 |
@@ -369,7 +370,7 @@ Marker 只有在 `run_id`、PID、config hash 與 manifest 相符時才能影響
 | `run_expected=1`、process 不存在、無當輪 safe reason | Down | `TradingProcessDown`, High |
 | 當輪 safe reason 且 process 不存在 | Completed | 無 ProcessDown |
 | reason=`risk_halt`/`max_cycles_drain_failed`/`unknown` | Critical | `TradingCriticalSafetyState`, High |
-| contract available=1 且 manifest/log/marker identity 不一致 | Binding invalid | `TradingRunBindingInvalid`, High |
+| contract available=1 且 manifest/config snapshot/log/marker identity 不一致 | Binding invalid | `TradingRunBindingInvalid`, High |
 | inventory target 缺少 probe series 超過 3m | Telemetry missing | `TradingTelemetryMissing`, High |
 
 Telemetry missing 必須從中央 inventory 檢查，不依賴同一 agent 的 `run_expected`。Prometheus 的 `absent_over_time()` 專門用於偵測指定 series 消失；多 target 版本以 inventory `unless` probe series 實作。參考：[Prometheus query functions](https://prometheus.io/docs/prometheus/latest/querying/functions/#absent_over_time)。

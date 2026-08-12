@@ -27,6 +27,7 @@
 - Loki 使用單一 `fake` tenant，以低 cardinality labels 區隔產品；高 cardinality 欄位只在 query time parse。
 - Trading 第一版以 manifest-bound current-run PNL、跨重啟 completed-cycle 統計、唯讀 process probe 與 scrubbed error logs 為核心；authoritative position/risk metrics 留給後續原生 `/metrics`。
 - Production probe 強制使用 Trading repo 的 run manifest 與可驗證 done marker，缺少 contract 時 fail closed，不以最新 mtime 猜測 current run。
+- Running manifest 的 PID、executable、instance 與 log binding 有效時，磁碟 config drift 只以 `config_snapshot_match=0` 揭露並維持 shadow binding alert，不解除既有 run 的 P&L/log 可觀測性，也不改寫 manifest 快照。
 - Owner 已核准：TQ human foreground launch、`real_pnl_usdt` primary PNL、development/production target IDs、Trading runtime contract 修改，以及 operator-only Grafana access。
 - 新增告警一律先帶 `notification_mode="shadow"`，通過 canary review 後才可移除 shadow routing。
 

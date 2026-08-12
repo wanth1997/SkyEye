@@ -419,6 +419,7 @@ EOF
 RUNTIME_CONTRACT_AVAILABLE=0
 PROCESS_IDENTITY_OK=0
 STRATEGY_IDENTITY_OK=0
+CONFIG_SNAPSHOT_MATCH=0
 LOG_BINDING_OK=0
 MARKER_BINDING_OK=0
 RUN_EXPECTED="$TQ_POC_RUN_EXPECTED"
@@ -496,13 +497,15 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
        [[ "$MANIFEST_INSTANCE_ID" == "$TQ_INSTANCE_ID" ]] &&
        [[ "$MANIFEST_INSTANCE_ID" == "$ACTUAL_INSTANCE_ID" ]] &&
        [[ "$MANIFEST_CONFIG_SHA256" =~ ^[0-9a-f]{64}$ ]] &&
-       [[ "$MANIFEST_CONFIG_SHA256" == "$CONFIG_SHA256" ]] &&
        [[ "$MANIFEST_EXECUTABLE" == "$TQ_EXECUTABLE" ]] &&
        [[ "$MANIFEST_CONFIG_PATH" == "$TQ_CONFIG_PATH" ]] &&
        [[ "$MANIFEST_DONE_MARKER_PATH" == "$TQ_DONE_MARKER" ]]
     then
       MANIFEST_VALID=1
       STRATEGY_IDENTITY_OK=1
+      if [[ "$MANIFEST_CONFIG_SHA256" == "$CONFIG_SHA256" ]]; then
+        CONFIG_SNAPSHOT_MATCH=1
+      fi
     fi
   fi
 
@@ -700,6 +703,7 @@ trap cleanup_temp EXIT HUP INT TERM
   emit_gauge tnauqquant_runtime_contract_available "Whether manifest contract v1 is present." "$RUNTIME_CONTRACT_AVAILABLE"
   emit_gauge tnauqquant_process_identity_ok "Whether process identity matches the configured run." "$PROCESS_IDENTITY_OK"
   emit_gauge tnauqquant_strategy_identity_ok "Whether strategy and instance identity match." "$STRATEGY_IDENTITY_OK"
+  emit_gauge tnauqquant_config_snapshot_match "Whether the on-disk config matches the running manifest snapshot." "$CONFIG_SNAPSHOT_MATCH"
   emit_gauge tnauqquant_log_binding_ok "Whether the current log belongs to the current run." "$LOG_BINDING_OK"
   emit_gauge tnauqquant_marker_binding_ok "Whether the terminal marker belongs to the current run." "$MARKER_BINDING_OK"
   emit_gauge tnauqquant_sidecar_up "Whether the managed sidecar session exists." "$SIDECAR_UP"
