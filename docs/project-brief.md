@@ -16,7 +16,7 @@
 
 - 中央監控棧、Cloudflare ingress、Telegram routing、host/app/business rules 與多個產品 dashboard 已投入使用。
 - Linux/Ubuntu Alloy installer 已支援 journald、node metrics 與 application `/metrics`。
-- Trading production target 固定為 `tnauqquant-prod-1` / `toobit-mexc-btc`；macOS Alloy 1.18.1 與 read-only probe 已投入運行，dashboard 以 current-manifest completed-cycle 累積 P&L、signed positions、recent logs 與 process status 為核心，Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
+- Trading production target 固定為 `tnauqquant-prod-1` / `toobit-mexc-btc`；macOS Alloy 1.18.1 與 read-only probe 已投入運行，dashboard 以 current-manifest completed-cycle XY P&L、current-run 雙交易所成交額、signed positions、recent logs 與 process status 為核心，Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
 - ZenIncome 的 Loki log alerts、dashboard 與唯讀 Bitfinex 診斷腳本已納入 Git；既有 production 規則狀態需由 operator 持續觀察。
 - LinkCourt 付款建立 5xx 與訂單編號 capacity/exhausted 告警已進入 shadow routing，等待 production canary review 後再決定是否升級通知。
 

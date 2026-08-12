@@ -15,6 +15,21 @@
 ---
 -->
 
+## 2026-08-12 12:31 — Trading XY P&L 與雙交易所 Volume
+
+**改動摘要：** 將 current-run completed-cycle P&L 改為真正的 Grafana XY 折線圖，並新增 Toobit／MEXC 分別累積的 current-run 成交額。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/probe.sh` — 從 manifest-bound current log 的實際 `trade_status` 記錄，依 `executor` 加總 `volume_usd` 並輸出 bounded exchange metric
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 使用 native `xychart` 以 X=累積 Real P&L、Y=Cycle 顯示連線與資料點，新增雙交易所 Volume stat panel，保留 positions、recent logs 與底部 status
+- `tests/trading/test-probe.sh`、`tests/trading/test-central-config.sh` — 固定成交紀錄篩選、雙交易所 volume、XY 軸向、transform 與 dashboard layout contract
+- `docs/project-brief.md`、`docs/work-log.md` — 更新 Trading dashboard 現況與本次部署驗收紀錄
+
+**原因/備註：** PR #14（`2e82a91`）已合併部署，Grafana provisioning database 為 version 8。Production XY 點為 `(82.4097, 1)`、`(52.0618, 2)`、`(48.6446, 3)`、`(47.1045, 4)`、`(9.3863, 5)`，Prometheus 收到 Toobit `1,201,012.98 USD` 與 MEXC `1,200,952.65 USD`；Volume 僅加總有 `volume_usd` 的 Toobit／MEXC `trade_status`，排除 skipped signal、settlement-only 與未知 executor。Trading PID 部署前後皆為 `11834`，啟動時間與 config／manifest checksum 未變，probe error 與 Grafana recent error 均為 0。In-app browser 本次仍無可用 browser session，實際畫面需由使用者重新整理後驗收。
+
+---
+
 ## 2026-08-12 12:11 — Trading cycle P&L、recent logs 與 process status
 
 **改動摘要：** 將 Trading dashboard 收斂為 current-run cycle 累積 Real P&L 橫向圖、signed positions、最新五行 log、log freshness 與 RUNNING／SHUTDOWN 狀態，並修正 macOS UTC `Z` 時間解析。
