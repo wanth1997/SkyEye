@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. Each horizontal P&L row is one completed cycle; positions are signed coordinator snapshots; status reflects the exact configured process; logs are scrubbed before Loki. Entry prices remain omitted until the runtime exposes exchange-confirmed averages.",
+  "description": "Compact production view for the latest manifest-bound TNAUQQuant run. The XY line maps cumulative Real P&L to completed cycles; positions are signed coordinator snapshots; exchange volume is summed from executed trade_status records; status reflects the exact configured process; logs are scrubbed before Loki. Entry prices remain omitted until the runtime exposes exchange-confirmed averages.",
   "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -28,31 +28,96 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Y rows are completed session cycles from the current manifest-bound log. Each horizontal X value is cumulative real_pnl_usdt at that cycle boundary; unfinished cycles and earlier runs are excluded.",
+      "description": "Connected XY line for the current manifest-bound run. X is cumulative real_pnl_usdt at each completed cycle boundary; Y is the completed session cycle number. Unfinished cycles and earlier runs are excluded.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "fixedColor": "#5794F2",
+            "mode": "fixed"
+          },
+          "custom": {
+            "axisBorderShow": true,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisGridShow": true,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 7
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "points+lines"
           },
           "decimals": 2,
           "mappings": [],
-          "noValue": "Waiting for stable P&L",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "#5794F2",
                 "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cumulative Real P&L"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "suffix: USDT"
               },
               {
-                "color": "green",
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Cumulative Real P&L (USDT)"
+              },
+              {
+                "id": "custom.axisSoftMin",
                 "value": 0
               }
             ]
           },
-          "unit": "suffix: USDT"
-        },
-        "overrides": []
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cycle"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Cycle"
+              },
+              {
+                "id": "custom.axisSoftMin",
+                "value": 0
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 9,
@@ -62,18 +127,37 @@
       },
       "id": 2,
       "options": {
-        "displayMode": "gradient",
-        "minVizHeight": 20,
-        "minVizWidth": 8,
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
+        "dims": {
+          "exclude": [],
+          "frame": 0
         },
-        "showUnfilled": true
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "series": [
+          {
+            "frame": 0,
+            "name": "Completed cycles",
+            "pointColor": {
+              "fixed": "#5794F2"
+            },
+            "pointSize": {
+              "fixed": 7,
+              "max": 20,
+              "min": 1
+            },
+            "x": "Cumulative Real P&L",
+            "y": "Cycle"
+          }
+        ],
+        "seriesMapping": "manual",
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
       },
       "pluginVersion": "11.2.0",
       "targets": [
@@ -84,14 +168,62 @@
           },
           "editorMode": "code",
           "expr": "tnauqquant_cycle_cumulative_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "format": "table",
           "instant": true,
-          "legendFormat": "CYCLE {{cycle}}",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "REAL P&L · CUMULATIVE BY CYCLE",
-      "type": "bargauge"
+      "title": "REAL P&L · CYCLE XY",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "environment": true,
+              "instance": true,
+              "job": true,
+              "product": true,
+              "server_id": true,
+              "strategy": true
+            },
+            "indexByName": {
+              "Value": 0,
+              "cycle": 1
+            },
+            "renameByName": {
+              "Value": "Cumulative Real P&L",
+              "cycle": "Cycle"
+            }
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "targetField": "Cycle"
+              }
+            ],
+            "fields": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "desc": false,
+                "field": "Cycle"
+              }
+            ]
+          }
+        }
+      ],
+      "type": "xychart"
     },
     {
       "datasource": {
@@ -380,6 +512,109 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
+      "description": "Current manifest-bound run turnover by execution venue. Each value is the sum of volume_usd from trade_status records with an actual Toobit or MEXC executor; skipped signals and settlement-only records are excluded.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#B8C7E0",
+            "mode": "fixed"
+          },
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "No completed trades",
+          "unit": "currencyUSD"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TOOBIT VOLUME"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#5794F2",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "MEXC VOLUME"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FFB357",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 16,
+        "x": 0,
+        "y": 16
+      },
+      "id": 47,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_current_run_exchange_volume_usd{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\"}",
+          "instant": true,
+          "legendFormat": "TOOBIT VOLUME",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_current_run_exchange_volume_usd{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\"}",
+          "instant": true,
+          "legendFormat": "MEXC VOLUME",
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "title": "CURRENT RUN VOLUME · BY EXCHANGE",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "description": "RUNNING means at least one process exactly matches the configured trading executable and config. SHUTDOWN means no matching process. Missing monitoring data is shown as UNKNOWN, not as a false shutdown.",
       "fieldConfig": {
         "defaults": {
@@ -424,8 +659,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 24,
-        "x": 0,
+        "w": 8,
+        "x": 16,
         "y": 16
       },
       "id": 46,

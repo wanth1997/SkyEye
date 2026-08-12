@@ -139,6 +139,44 @@ completed_cycle_pnl_series() {
   ' "$log_path"
 }
 
+current_run_exchange_volumes() {
+  local log_path="$1"
+  awk '
+    function valid_number(value) {
+      return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
+    }
+    {
+      message = ""
+      executor = ""
+      volume_usd = ""
+      for (i = 1; i <= NF; i++) {
+        equals = index($i, "=")
+        if (equals == 0) continue
+        key = substr($i, 1, equals - 1)
+        value = substr($i, equals + 1)
+        gsub(/^"|"$/, "", value)
+        if (key == "msg") message = value
+        if (key == "executor") executor = value
+        if (key == "volume_usd") volume_usd = value
+      }
+
+      if (message != "trade_status" || !valid_number(volume_usd) ||
+          volume_usd + 0 < 0) {
+        next
+      }
+
+      if (executor == "toobit-main") {
+        toobit_volume += volume_usd
+      } else if (executor == "mexc-ui") {
+        mexc_volume += volume_usd
+      }
+    }
+    END {
+      printf "%.2f\t%.2f\n", toobit_volume + 0, mexc_volume + 0
+    }
+  ' "$log_path"
+}
+
 latest_position_snapshot() {
   local log_path="$1"
   awk '
@@ -402,6 +440,8 @@ CURRENT_TOOBIT_POSITION_BTC=""
 CURRENT_TOOBIT_POSITION_SIDE=""
 CURRENT_MEXC_POSITION_BTC=""
 CURRENT_MEXC_POSITION_SIDE=""
+CURRENT_TOOBIT_VOLUME_USD=""
+CURRENT_MEXC_VOLUME_USD=""
 
 if [[ "$ACTUAL_INSTANCE_ID" == "$TQ_INSTANCE_ID" ]]; then
   STRATEGY_IDENTITY_OK=1
@@ -479,6 +519,8 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       CURRENT_RUN_ID="$MANIFEST_RUN_ID"
       CURRENT_RUN_STARTED_TIMESTAMP="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
       COMPLETED_CYCLE_PNL_SERIES="$(completed_cycle_pnl_series "$MANIFEST_LOG_PATH")"
+      IFS=$'\t' read -r CURRENT_TOOBIT_VOLUME_USD CURRENT_MEXC_VOLUME_USD \
+        <<<"$(current_run_exchange_volumes "$MANIFEST_LOG_PATH")"
 
       CURRENT_PNL_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 0)"
       if [[ -n "$CURRENT_PNL_LINE" ]]; then
@@ -696,6 +738,14 @@ trap cleanup_temp EXIT HUP INT TERM
       "$METRIC_LABELS" "$CURRENT_TOOBIT_POSITION_SIDE" "$CURRENT_TOOBIT_POSITION_BTC"
     printf 'tnauqquant_current_position_btc{%s,exchange="mexc",side="%s"} %s\n' \
       "$METRIC_LABELS" "$CURRENT_MEXC_POSITION_SIDE" "$CURRENT_MEXC_POSITION_BTC"
+  fi
+  if [[ -n "$CURRENT_TOOBIT_VOLUME_USD" && -n "$CURRENT_MEXC_VOLUME_USD" ]]; then
+    printf '# HELP tnauqquant_current_run_exchange_volume_usd Sum of trade_status volume_usd for the current manifest-bound run by exchange.\n'
+    printf '# TYPE tnauqquant_current_run_exchange_volume_usd gauge\n'
+    printf 'tnauqquant_current_run_exchange_volume_usd{%s,exchange="toobit"} %s\n' \
+      "$METRIC_LABELS" "$CURRENT_TOOBIT_VOLUME_USD"
+    printf 'tnauqquant_current_run_exchange_volume_usd{%s,exchange="mexc"} %s\n' \
+      "$METRIC_LABELS" "$CURRENT_MEXC_VOLUME_USD"
   fi
   if [[ -n "$DONE_REASON" ]]; then
     printf '# HELP tnauqquant_done_marker Bound terminal marker by normalized reason.\n'

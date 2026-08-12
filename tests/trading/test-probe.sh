@@ -57,6 +57,12 @@ time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_c
 time=${today_local}T10:01:00+08:00 level=INFO msg=trade_status state=settled initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.125 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.125 portfolio_projection=coordinator_book
 time=${today_local}T10:02:00+08:00 level=INFO msg=coordinated_signal_skipped initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.103 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.103 portfolio_projection=coordinator_book
 time=${today_local}T10:03:00+08:00 level=INFO msg=invalid_snapshot initiator_venue=unknown initiator_side=Short initiator_qty_btc=99 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=99 portfolio_projection=coordinator_book
+time=${today_local}T10:04:00+08:00 level=INFO msg=trade_status state=open executor=toobit-main attempt_id=101 volume_usd=100.25 total_volume_usd=100.25
+time=${today_local}T10:05:00+08:00 level=INFO msg=trade_status state=closed executor=mexc-ui attempt_id=102 volume_usd=99.75 total_volume_usd=200
+time=${today_local}T10:06:00+08:00 level=INFO msg=trade_status state=settled executor=mexc-ui attempt_id=102 settlement=confirmed
+time=${today_local}T10:07:00+08:00 level=INFO msg=coordinated_signal_skipped executor=toobit-main volume_usd=500
+time=${today_local}T10:08:00+08:00 level=INFO msg=trade_status state=closed executor=unknown volume_usd=700
+time=${today_local}T10:09:00+08:00 level=INFO msg=trade_status state=closed executor=toobit-main volume_usd=-1
 EOF
 cat >"$PREVIOUS_LOG_PATH" <<EOF
 time=${today_local}T08:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=previous.1 real_pnl_usdt=4 cash_pnl_usdt=3 rebate_usdt=1 risk_pnl_usdt=3.5 cycles_completed=1
@@ -209,6 +215,7 @@ assert_metric_missing tnauqquant_current_real_pnl_usdt
 assert_metric_missing tnauqquant_last_cycle_real_pnl_usdt
 assert_metric_missing tnauqquant_cycle_cumulative_real_pnl_usdt
 assert_metric_missing tnauqquant_current_position_btc
+assert_metric_missing tnauqquant_current_run_exchange_volume_usd
 
 printf 'case: development heuristic zero process\n'
 export TQ_REQUIRE_RUNTIME_CONTRACT=0
@@ -271,6 +278,8 @@ fi
 assert_metric tnauqquant_current_position_valid 1
 assert_metric tnauqquant_current_position_btc 0.103 'exchange="toobit",side="short"'
 assert_metric tnauqquant_current_position_btc 0.103 'exchange="mexc",side="long"'
+assert_metric tnauqquant_current_run_exchange_volume_usd 100.25 'exchange="toobit"'
+assert_metric tnauqquant_current_run_exchange_volume_usd 99.75 'exchange="mexc"'
 
 sample_timestamp="$(metric_value tnauqquant_pnl_sample_timestamp_seconds)"
 last_completed_timestamp="$(metric_value tnauqquant_last_completed_cycle_timestamp_seconds)"
