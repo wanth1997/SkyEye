@@ -177,7 +177,7 @@
         "defaults": {
           "color": {
             "fixedColor": "#B8C7E0",
-            "mode": "fixedColor"
+            "mode": "fixed"
           },
           "decimals": 0,
           "mappings": [],
@@ -237,7 +237,7 @@
         "defaults": {
           "color": {
             "fixedColor": "#B8C7E0",
-            "mode": "fixedColor"
+            "mode": "fixed"
           },
           "decimals": 0,
           "mappings": [],
@@ -348,7 +348,7 @@
         "defaults": {
           "color": {
             "fixedColor": "#5794F2",
-            "mode": "fixedColor"
+            "mode": "fixed"
           },
           "decimals": 3,
           "mappings": [],
@@ -408,7 +408,7 @@
         "defaults": {
           "color": {
             "fixedColor": "#FFB357",
-            "mode": "fixedColor"
+            "mode": "fixed"
           },
           "decimals": 3,
           "mappings": [],
