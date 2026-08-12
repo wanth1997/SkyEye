@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-08-12 11:20 — 精簡 Trading live dashboard
+
+**改動摘要：** 新增 manifest-bound 雙交易所持倉與最後 completed cycle P&L 指標，並將 production Trading dashboard 精簡為六個即時 stat panels。
+
+**修改的檔案：**
+- `agents/alloy/trading/probe.sh` — 從最新 coordinator portfolio snapshot 輸出 Toobit/MEXC 持倉與方向，並輸出最新 `cycle_real_pnl_usdt`
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 僅保留 Real P&L、最後 cycle ΔP&L、今日 cycles、最新 log 更新與兩間交易所持倉
+- `tests/trading/test-probe.sh`、`tests/trading/test-central-config.sh` — 固定 bounded labels、欄位來源與六 panel dashboard contract
+
+**原因/備註：** PR #7 於 `95f7701` 合併並部署。Production Prometheus 已收到 Real P&L `52.0618`、最後 cycle `-30.3479`、今日 cycles `2`、Toobit `short 0.103 BTC` 與 MEXC `long 0.103 BTC`；7 個 panel queries 均各回傳一個 series，probe age 約 17 秒，過去一小時未 scrubbed repo path 命中為 0。部署前後 Trading PID 均為 `11834`，strategy config、manifest 與 sidecar identity checksum 完全不變，probe error log 為 0 行。Log 沒有權威 fill／entry price 欄位，因此未將訊號 `mid` 冒充進場價；本次 session 無可用的 in-app browser，未能截取實際 dashboard 畫面。
+
+---
+
 ## 2026-08-11 20:41 — 部署 Trading production monitoring
 
 **改動摘要：** 將 manifest-bound macOS Alloy/probe、production Trading rules 與 Grafana dashboard 部署到 `tnauqquant-prod-1`，完成 Cloudflare Access、Prometheus remote write、Loki push 與 shadow alert 端到端 canary。
