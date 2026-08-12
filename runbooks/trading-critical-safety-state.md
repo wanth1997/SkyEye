@@ -5,7 +5,7 @@ Used by `TradingCriticalSafetyState`, `TradingRunBindingInvalid`, `TradingCritic
 ## Symptoms
 
 - Marker reason is `risk_halt`, `max_cycles_drain_failed` or `unknown`.
-- Manifest, process, config, log or marker binding is invalid.
+- Manifest, process, config snapshot, log or marker binding is invalid.
 - An ERROR/FATAL or allowlisted critical WARN reached Loki.
 
 `risk_halt` may leave the process alive. Process presence does not make the state safe.
@@ -23,7 +23,7 @@ shasum -a 256 "$TQ_CONFIG_PATH"
 tail -n 200 "$(jq -r '.log_path' "run-state/$TQ_STRATEGY/current.json")"
 ```
 
-Compare `run_id`, `strategy`, `instance_id`, PID and config SHA-256 between manifest and marker. Then inspect the actual long/short inventory on both exchanges and decide whether an operator-led neutralization or shutdown is required.
+Compare `run_id`, `strategy`, `instance_id`, PID and config SHA-256 between manifest and marker. If only `tnauqquant_config_snapshot_match` is `0`, the running process and its manifest-bound log remain observable, but the on-disk config has changed since launch; preserve both hashes and do not rewrite the manifest to hide the drift. Then inspect the actual long/short inventory on both exchanges and decide whether an operator-led neutralization or shutdown is required.
 
 The marker is first-critical-wins. Never replace it with a safe marker to make the alert disappear.
 
@@ -31,7 +31,7 @@ The marker is first-critical-wins. Never replace it with a safe marker to make t
 
 ```promql
 tnauqquant_done_marker{product="tnauqquant",server_id="tnauqquant-prod-1"}
-min({__name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)",product="tnauqquant",server_id="tnauqquant-prod-1"})
+min({__name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok)",product="tnauqquant",server_id="tnauqquant-prod-1"})
 ```
 
 ```logql

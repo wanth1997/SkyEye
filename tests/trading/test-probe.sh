@@ -206,6 +206,7 @@ assert_metric tnauqquant_process_count 0
 assert_metric tnauqquant_run_expected 1
 assert_metric tnauqquant_runtime_contract_available 0
 assert_metric tnauqquant_process_identity_ok 0
+assert_metric tnauqquant_config_snapshot_match 0
 assert_metric tnauqquant_log_binding_ok 0
 assert_metric tnauqquant_marker_binding_ok 0
 assert_metric tnauqquant_current_pnl_valid 0
@@ -231,6 +232,7 @@ pid_one="$STARTED_PID"
 run_probe
 assert_metric tnauqquant_process_count 1
 assert_metric tnauqquant_process_identity_ok 1
+assert_metric tnauqquant_config_snapshot_match 0
 assert_metric tnauqquant_log_binding_ok 1
 assert_metric tnauqquant_sidecar_up 0
 assert_metric tnauqquant_sidecar_identity_ok 0
@@ -252,6 +254,7 @@ run_probe
 assert_metric tnauqquant_runtime_contract_available 1
 assert_metric tnauqquant_process_identity_ok 1
 assert_metric tnauqquant_strategy_identity_ok 1
+assert_metric tnauqquant_config_snapshot_match 1
 assert_metric tnauqquant_log_binding_ok 1
 assert_metric tnauqquant_marker_binding_ok 1
 assert_metric tnauqquant_run_expected 1
@@ -280,6 +283,20 @@ assert_metric tnauqquant_current_position_btc 0.103 'exchange="toobit",side="sho
 assert_metric tnauqquant_current_position_btc 0.103 'exchange="mexc",side="long"'
 assert_metric tnauqquant_current_run_exchange_volume_usd 100.25 'exchange="toobit"'
 assert_metric tnauqquant_current_run_exchange_volume_usd 99.75 'exchange="mexc"'
+
+printf 'case: running config drift remains observable\n'
+config_before_drift="$TEST_ROOT/config.before-drift"
+cp "$CONFIG_PATH" "$config_before_drift"
+printf 'future_setting: true\n' >>"$CONFIG_PATH"
+run_probe
+assert_metric tnauqquant_runtime_contract_available 1
+assert_metric tnauqquant_config_snapshot_match 0
+assert_metric tnauqquant_process_identity_ok 1
+assert_metric tnauqquant_log_binding_ok 1
+assert_metric tnauqquant_current_pnl_valid 1
+assert_metric tnauqquant_cycle_cumulative_real_pnl_usdt 10 'cycle="1"'
+assert_metric tnauqquant_cycle_cumulative_real_pnl_usdt 12.5 'cycle="2"'
+mv "$config_before_drift" "$CONFIG_PATH"
 
 sample_timestamp="$(metric_value tnauqquant_pnl_sample_timestamp_seconds)"
 last_completed_timestamp="$(metric_value tnauqquant_last_completed_cycle_timestamp_seconds)"

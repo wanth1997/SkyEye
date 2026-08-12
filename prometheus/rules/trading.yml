@@ -79,7 +79,7 @@ groups:
             and on (product, environment, server_id, strategy)
             min by (product, environment, server_id, strategy) (
               {
-                __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)",
+                __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok)",
                 product="tnauqquant",
                 environment="production",
                 server_id="tnauqquant-prod-1",
@@ -123,7 +123,7 @@ groups:
           and on (product, environment, server_id, strategy)
           min by (product, environment, server_id, strategy) (
             {
-              __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)",
+              __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok)",
               product="tnauqquant",
               environment="production",
               server_id="tnauqquant-prod-1",
