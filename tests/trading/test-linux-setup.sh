@@ -64,6 +64,10 @@ assert_not_contains "$SETUP" 'systemctl.*tnauqquant'
 assert_not_contains "$SERVICE_TEMPLATE" 'quant'
 assert_contains "$SERVICE_TEMPLATE" 'Type=oneshot'
 assert_contains "$TIMER_TEMPLATE" 'OnUnitActiveSec=15s'
+assert_contains "$ENV_EXAMPLE" '^TQ_TEXTFILE_DIR=/var/lib/skyeye-trading/textfile$'
+assert_not_contains "$ENV_EXAMPLE" '^TQ_TEXTFILE_DIR=/var/lib/alloy/'
+assert_contains "$SETUP" 'runuser -u "[$]TQ_PROBE_USER" -- test -x "[$]TQ_TEXTFILE_DIR"'
+assert_contains "$SETUP" 'runuser -u "[$]TQ_PROBE_USER" -- test -w "[$]TQ_TEXTFILE_DIR"'
 
 TEST_ROOT="$(mktemp -d /tmp/skyeye-linux-render.XXXXXX)"
 cleanup() {

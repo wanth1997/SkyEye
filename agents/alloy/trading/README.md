@@ -94,7 +94,9 @@ Loki receivers. This preserves other product pipelines such as ZenIncome.
 The installer requires setfacl. It grants Alloy read/traverse only on the
 raw-log directory and traverse-only access on the exact parent chain under the
 probe user's home. It does not add Alloy to the user's group. The textfile
-directory is setgid probe-user:alloy mode 2770; probe output is 0640.
+directory defaults to `/var/lib/skyeye-trading/textfile`, is setgid
+probe-user:alloy mode 2770, and is checked from the probe user's account before
+any service is restarted; probe output is 0640.
 
 To roll back, disable skyeye-trading-probe.timer, remove
 /etc/alloy/trading.alloy, restore the printed /etc/default/alloy backup,
