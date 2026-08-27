@@ -1,9 +1,10 @@
 # Trading monitoring agent for macOS and Linux
 
-This directory installs two source-host components:
+This directory installs three source-host components:
 
 - Grafana Alloy tails tnauqquant `*.raw.log` files, scrubs sensitive text, and pushes logs/metrics through Cloudflare Access.
 - A 15-second launchd probe reads process/config/run state plus manifest-bound PNL events and writes `tnauqquant.prom` for Alloy's textfile collector.
+- A separate 60-second launchd builder incrementally caches authoritative completed-cycle deltas across raw logs and writes the bounded `tnauqquant-pnl-history.prom` series used by the 30-day accumulated Real P&L chart.
 
 Neither component starts, stops, signals, or attaches to the trading process.
 
@@ -19,8 +20,10 @@ Neither component starts, stops, signals, or attaches to the trading process.
 | `config-macos.alloy.tmpl` | Logfmt pipeline, source-side scrub, Loki push and Prometheus remote write |
 | `deployment.env.example` | Complete host-specific deployment contract without real secrets |
 | `probe.sh` | Read-only process/manifest/marker/log probe |
+| `pnl-history.sh` | Incremental, cross-run accumulated Real P&L history builder |
 | `setup-macos.sh` | Render, validate, install and optionally start Alloy + launchd |
 | `com.wanbrain.skyeye-trading-probe.plist.tmpl` | 15-second user launchd job |
+| `com.wanbrain.skyeye-trading-pnl-history.plist.tmpl` | Independent 60-second history job |
 
 ## Production Mac install
 
@@ -42,6 +45,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
      --env-file "$(brew --prefix)/etc/alloy/config.env" \
      --render-only "$render_dir"
    plutil -lint "$render_dir/com.wanbrain.skyeye-trading-probe.plist"
+   plutil -lint "$render_dir/com.wanbrain.skyeye-trading-pnl-history.plist"
    alloy validate "$render_dir/config.alloy"
    ```
 
@@ -51,6 +55,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
    agents/alloy/trading/setup-macos.sh
    brew services list | grep alloy
    launchctl print "gui/$(id -u)/com.wanbrain.skyeye-trading-probe"
+   launchctl print "gui/$(id -u)/com.wanbrain.skyeye-trading-pnl-history"
    ```
 
 ## Linux install alongside an existing Alloy config
@@ -123,6 +128,7 @@ Another server agent changes environment values only:
 - an executor-to-exchange map such as lighter-robinhood-main=lighter
 - sidecar-required set to zero when the strategy has no sidecar
 - `TQ_TIMEZONE=Asia/Taipei` for the daily completed-cycle boundary
+- an absolute mode-`0700` `TQ_PNL_HISTORY_CACHE_DIR`; the default contract retains 30 display days and caps the current day at 500 completed-cycle points
 
 Central labels, dashboard queries and rules must not be changed to accommodate a different filesystem path.
 
@@ -132,7 +138,9 @@ Before installation, return the non-secret handoff report from section 4.4 of `d
 
 ```bash
 tail -n 100 "$(brew --prefix)/var/log/alloy/trading-probe.err.log"
+tail -n 100 "$(brew --prefix)/var/log/alloy/trading-pnl-history.err.log"
 launchctl print "gui/$(id -u)/com.wanbrain.skyeye-trading-probe"
+launchctl print "gui/$(id -u)/com.wanbrain.skyeye-trading-pnl-history"
 brew services info grafana/grafana/alloy
 curl -fsS http://127.0.0.1:12345/-/ready
 ```
@@ -141,7 +149,12 @@ The probe output must contain no PID or path labels. `run_id` is allowed only on
 
 ```bash
 sed -n '1,240p' "$(brew --prefix)/var/lib/alloy/trading-textfile/tnauqquant.prom"
+sed -n '1,240p' "$(brew --prefix)/var/lib/alloy/trading-textfile/tnauqquant-pnl-history.prom"
 ```
+
+The history builder accepts only `msg=pnl_status stable=true cycle_completed=true` records containing all of `time`, process-scoped `cycle_id`, and `cycle_real_pnl_usdt`. Exact duplicates within a raw log are ignored. A conflicting duplicate fails closed and leaves the last good metrics file intact. Older completed-looking records missing the authoritative fields are never guessed from session cumulative values; they increment `tnauqquant_pnl_history_skipped_legacy_events`, while the dashboard shows the first supported event and build age.
+
+Unchanged logs reuse their mode-`0600` per-run summaries. New or changed logs alone are rescanned, and summaries remain after raw-log rotation so accumulated history does not reset. The output uses stable bounded `point` ordinals; timestamps are metric values rather than labels.
 
 Official references:
 

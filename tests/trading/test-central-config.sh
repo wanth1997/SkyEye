@@ -30,48 +30,46 @@ jq empty "$FLEET_DASHBOARD"
 jq -e '
   .uid == "tnauqquant-trading-overview" and
   .timezone == "Asia/Taipei" and
-  .time.from == "now/d" and
+  .time.from == "now-30d" and
   (.templating.list | length == 0) and
-  (.panels | length == 6) and
-  ([.panels[].id] | sort == [2, 40, 44, 45, 46, 47]) and
-  ([.panels[].type] | sort == ["logs", "stat", "stat", "stat", "stat", "xychart"]) and
+  (.panels | length == 7) and
+  ([.panels[].id] | sort == [2, 40, 44, 45, 46, 47, 48]) and
+  ([.panels[].type] | sort == ["logs", "stat", "stat", "stat", "stat", "stat", "timeseries"]) and
   ([.. | objects | select(.mode? == "fixedColor")] | length == 0) and
   ([.. | objects | select(.mode? == "fixed") |
     (has("fixedColor") and (.fixedColor | type) == "string" and (.fixedColor | length) > 0)
   ] | all) and
   ([.panels[] | select(.id == 2) |
-    (.type == "xychart" and
+    (.type == "timeseries" and
      .pluginVersion == "11.2.0" and
-     .options.mapping == "auto" and
-     (.options | has("seriesMapping") | not) and
-     (.options | has("dims") | not) and
-     .options.series[0].name.fixed == "Completed cycles" and
-     (.options.series[0] | keys == ["name"]) and
-     .fieldConfig.defaults.custom.show == "points+lines" and
-     .fieldConfig.defaults.custom.pointSize.fixed == 7 and
+     .fieldConfig.defaults.custom.drawStyle == "line" and
+     .fieldConfig.defaults.custom.lineInterpolation == "stepAfter" and
+     .fieldConfig.defaults.custom.showPoints == "always" and
      .options.legend.showLegend == false and
-     .targets[0].instant == true and
-     .targets[0].range == false and
-     .targets[0].format == "table" and
-     (.targets[0].expr | contains("tnauqquant_cycle_cumulative_real_pnl_usdt")) and
-     ([.transformations[].id] == ["organize", "convertFieldType", "sortBy"]) and
-     .transformations[0].options.excludeByName == {} and
-     .transformations[0].options.includeByName == {"Value": true, "cycle": true} and
-     .transformations[0].options.indexByName == {
-       "Value": 1,
-       "cycle": 0
+     (.targets | length) == 2 and
+     ([.targets[].instant] == [true, true]) and
+     ([.targets[].range] == [false, false]) and
+     ([.targets[].format] == ["table", "table"]) and
+     (.targets[0].expr | contains("tnauqquant_pnl_history_point_value_usdt")) and
+     (.targets[1].expr | contains("tnauqquant_pnl_history_point_timestamp_seconds")) and
+     (.targets[1].expr | endswith(" * 1000")) and
+     ([.transformations[].id] == ["joinByField", "organize", "convertFieldType", "sortBy"]) and
+     .transformations[0].options == {"byField": "point", "mode": "outer"} and
+     .transformations[1].options.includeByName == {"Value #A": true, "Value #B": true} and
+     .transformations[1].options.indexByName == {
+       "Value #A": 1,
+       "Value #B": 0
      } and
-     .transformations[0].options.renameByName == {
-       "Value": "Cumulative Real P&L",
-       "cycle": "Cycle"
+     .transformations[1].options.renameByName == {
+       "Value #A": "Accumulated Real P&L",
+       "Value #B": "Time"
      } and
-     .transformations[1].options.conversions[0].targetField == "Cycle" and
-     .transformations[1].options.conversions[0].destinationType == "number" and
-     .transformations[2].options.sort[0].field == "Cycle" and
-     .transformations[2].options.sort[0].desc == false and
-     (.description | contains("Prometheus table result supplies cycle and Value")) and
-     (.description | contains("X is the completed session cycle")) and
-     (.description | contains("Y is cumulative")))
+     .transformations[2].options.conversions[0].targetField == "Time" and
+     .transformations[2].options.conversions[0].destinationType == "time" and
+     .transformations[3].options.sort[0].field == "Time" and
+     .transformations[3].options.sort[0].desc == false and
+     (.description | contains("Cross-run accumulated Real P&L")) and
+     (.description | contains("step-after")))
   ] == [true]) and
   ([.panels[] | select(.id == 40) |
     (.type == "stat" and
@@ -124,6 +122,7 @@ jq -e '
     (.type == "stat" and
      .gridPos.y == 16 and
      .gridPos.x == 0 and
+     .gridPos.w == 10 and
      .fieldConfig.defaults.unit == "currencyUSD" and
      (.targets | length) == 2 and
      ([.targets[].legendFormat] == ["TOOBIT VOLUME", "MEXC VOLUME"]) and
@@ -134,11 +133,25 @@ jq -e '
      ([.targets[].range] == [false, false]) and
      ((.description | ascii_downcase) | contains("current manifest-bound run")))
   ] == [true]) and
+  ([.panels[] | select(.id == 48) |
+    (.type == "stat" and
+     .gridPos.y == 16 and
+     .gridPos.x == 10 and
+     .gridPos.w == 6 and
+     ([.targets[].legendFormat] == ["AGE", "COVERAGE START", "LEGACY SKIPPED"]) and
+     (.targets[0].expr | contains("tnauqquant_pnl_history_build_timestamp_seconds")) and
+     (.targets[1].expr | contains("tnauqquant_pnl_history_first_supported_event_timestamp_seconds")) and
+     (.targets[2].expr | contains("tnauqquant_pnl_history_skipped_legacy_events")) and
+     ([.targets[].instant] == [true, true, true]) and
+     ([.targets[].range] == [false, false, false]) and
+     (.description | contains("cycle_id or cycle_real_pnl_usdt was absent")))
+  ] == [true]) and
   ([.panels[].targets[].expr] | all(
     contains("environment=\"production\"") and
     contains("server_id=\"tnauqquant-prod-1\"") and
     contains("strategy=\"toobit-mexc-btc\"")
   )) and
+  ([.panels[].targets[].expr] | all(contains("tnauqquant_cycle_cumulative_real_pnl_usdt") | not)) and
   ([.panels[].targets[].expr] | all(
     (contains("tnauqquant_current_real_pnl_usdt") or
      contains("tnauqquant_last_cycle_real_pnl_usdt") or

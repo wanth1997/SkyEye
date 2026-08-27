@@ -373,6 +373,11 @@ Marker 只有在 `run_id`、PID、config hash 與 manifest 相符時才能影響
 | `tnauqquant_sidecar_identity_ok` | gauge | sidecar binary/version/runtime identity 是否正確 |
 | `tnauqquant_probe_timestamp_seconds` | gauge | 本次 probe 完成時間 |
 | `tnauqquant_log_mtime_seconds` | gauge | current log 最後修改時間 |
+| `tnauqquant_pnl_history_point_value_usdt{point}` | gauge | bounded point 的跨 run accumulated Real P&L；`point` 為固定 ordinal，不含時間 |
+| `tnauqquant_pnl_history_point_timestamp_seconds{point}` | gauge | 同一 bounded point 的實際事件／day-boundary 時間，作 metric value 而非 label |
+| `tnauqquant_pnl_history_build_timestamp_seconds` | gauge | 最近一次成功 atomic history build 時間 |
+| `tnauqquant_pnl_history_first_supported_event_timestamp_seconds` | gauge | cache 中第一筆完整 authoritative event |
+| `tnauqquant_pnl_history_skipped_legacy_events` | gauge | 因缺 `cycle_id` 或 `cycle_real_pnl_usdt` 而排除的 completed-looking records |
 
 所有 metrics 都帶 `product`、`environment`、`server_id`、`strategy`；不帶 PID、path、run ID 等高 churn labels。
 
@@ -402,44 +407,38 @@ Folder: Trading
 Title:  Trading — tnauqquant overview
 UID:    tnauqquant-trading-overview
 Tags:   layer:business, product:tnauqquant, provisioned
-Default range: Last 24 hours
-Variables: $environment → $server_id → $strategy → $run_id
+Default range: Last 30 days
+Variables: none; production selector is provisioned and fixed
 ```
 
 ### 7.1 Layout
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ PNL                                                         │
-│ [Current Real PNL] [Risk PNL] [Cash PNL] [Rebate]           │
-│ [Real PNL trend...........................................]  │
-│ [Latest PNL sample time] [PNL data age] [Cycles completed]   │
+│ [Accumulated Real P&L · 30D................] [Positions]     │
 ├─────────────────────────────────────────────────────────────┤
-│ CURRENT RUN STATUS                                          │
-│ [Running (heuristic) / Running / Completed / Critical / ...]│
-│ [Process count] [Run expected] [Log age] [Identity status]   │
+│ [Latest log update] [Latest 5 scrubbed log lines............]│
 ├─────────────────────────────────────────────────────────────┤
-│ ERRORS                                                      │
-│ [Errors in selected range] [Latest error time + msg]         │
-│ [Error/Fatal log table: time | level | msg | err | run_id]  │
+│ [Current-run volume] [P&L history coverage] [Strategy status]│
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### 7.2 PNL panels
 
-Primary PNL 定義為最新 `stable=true` 的 `pnl_status.real_pnl_usdt`。這個欄位是 engine 對外呈現的已計算結果；`cash_pnl_usdt`、`rebate_usdt` 與 `risk_pnl_usdt` 作為解釋與風險對照。若最新 `pnl_status` 是 `stable=false`，dashboard 保留上一筆 stable PNL，但 PNL data age 繼續增加並顯示 sample unstable，不能把不穩定值冒充 current。
+目前 production 主圖已由 current-run trend 升級為 30 天跨 run accumulated Real P&L。獨立 60 秒 history builder 只加總 `stable=true`、`cycle_completed=true` 且同時具有 `time`、process-scoped `cycle_id`、`cycle_real_pnl_usdt` 的事件。Identity 是 `(raw-log basename, cycle_id)`；因此不同 run 可安全重用 process-scoped cycle ID，單一 run 內的完全相同重複事件會去重，衝突則保留上一份有效 metrics。
+
+Builder 對未變更 raw log 重用 mode-`0600` per-run summary，只重掃新增或 inode/size/mtime 改變的檔案；raw log 被輪替後仍保留已驗證摘要。顯示輸出固定為 rolling-window baseline、每個已完成 Asia/Taipei 日的 close、以及當日每個 cycle point。`point` label 是有上限的 ordinal（預設 30 日加最多 500 個當日 cycles），事件 timestamp 另以 metric value 輸出。Grafana 以 `point` join value/timestamp，轉為 real time field 後使用 `stepAfter` Timeseries，避免 XY interpolation 語意不明。
+
+Legacy completed-looking record 缺必要欄位時不得從 `real_pnl_usdt` 推測 delta，以免跨 run 無聲低估或重複計算。Dashboard 的 `P&L HISTORY COVERAGE` 必須同時顯示 build age、first supported event 與 skipped legacy count。
+
+跨 run Primary PNL 定義為所有 authoritative completed-cycle `cycle_real_pnl_usdt` delta 的依時序總和。`real_pnl_usdt`、`cash_pnl_usdt`、`rebate_usdt` 與 `risk_pnl_usdt` 保留其單一 session／current-run 語意，不作歷史 backfill 或跨 round 相加。
 
 | Panel | Source | 行為 |
 |---|---|---|
-| Current Real PNL | Loki `msg=pnl_status`, `stable=true`，unwrap `real_pnl_usdt` | >=0 綠、<0 紅、無近期 stable 樣本顯示 No data |
-| Risk PNL | unwrap `risk_pnl_usdt` | 顯示 engine risk basis 的最新值 |
-| Cash PNL | unwrap `cash_pnl_usdt` | 顯示未含 rebate 的現金損益 |
-| Rebate | unwrap `rebate_usdt` | 解釋 cash 與 real PNL 差異 |
-| Real PNL trend | latest value over time | 不對不同 run 自動累加；由 `$run_id` 篩選 |
-| PNL data age | latest `pnl_status` event timestamp | 防止把舊 PNL 當成 current |
-| Cycles completed | unwrap `cycles_completed` | 最新 cycle count |
-
-`position` 不納入 v1 核心 dashboard。若未來顯示 log-derived position，必須標示 `last reported` 與 age；authoritative current exposure 留給原生 `/metrics`。
+| Accumulated Real P&L · 30D | bounded value/timestamp textfile metrics | rolling baseline、已完成日 close、當日 per-cycle points；Timeseries `stepAfter` |
+| P&L History Coverage | build timestamp、first supported timestamp、skipped legacy count | age 120 秒起黃、300 秒起紅；缺完整 contract 的舊資料明確揭露 |
+| Current Positions | current manifest-bound coordinator snapshot | signed BTC 與 LONG／SHORT／FLAT 語意 |
+| Current-run Volume | current manifest-bound completed trades | 依 Toobit／MEXC 分開顯示，不跨 run 累積 |
 
 ### 7.3 Run status panels
 
@@ -522,11 +521,14 @@ agents/alloy/trading/config-macos.alloy.tmpl
 agents/alloy/trading/deployment.env.example
 agents/alloy/trading/setup-macos.sh
 agents/alloy/trading/probe.sh
+agents/alloy/trading/pnl-history.sh
 agents/alloy/trading/com.wanbrain.skyeye-trading-probe.plist.tmpl
+agents/alloy/trading/com.wanbrain.skyeye-trading-pnl-history.plist.tmpl
 agents/alloy/trading/README.md
 tests/fixtures/tnauqquant/trading.raw.log
 tests/fixtures/tnauqquant/trading.raw.log.sha256
 tests/trading/test-probe.sh
+tests/trading/test-pnl-history.sh
 tests/trading/test-log-pipeline.sh
 prometheus/rules/trading-targets.yml
 prometheus/rules/trading.yml
@@ -718,8 +720,9 @@ SkyEye probe tests 以這兩份 schema fixture 驗證。兩個 repo 對 `schema_
 ```bash
 bash -n agents/alloy/trading/setup-macos.sh
 bash -n agents/alloy/trading/probe.sh
-shellcheck agents/alloy/trading/setup-macos.sh agents/alloy/trading/probe.sh
+shellcheck agents/alloy/trading/setup-macos.sh agents/alloy/trading/probe.sh agents/alloy/trading/pnl-history.sh
 plutil -lint rendered/com.wanbrain.skyeye-trading-probe.plist
+plutil -lint rendered/com.wanbrain.skyeye-trading-pnl-history.plist
 alloy fmt rendered/config.alloy
 alloy validate rendered/config.alloy
 amtool check-config alertmanager/alertmanager.yml

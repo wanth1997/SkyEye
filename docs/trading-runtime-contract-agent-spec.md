@@ -79,6 +79,21 @@ docs/trading-server-runbook.md
 
 ## 4. Exact Version 1 Contract
 
+### 4.0 Completed-cycle P&L event compatibility
+
+SkyEye 的跨 run 歷史圖不改動 P&L 公式，只消費既有 completed-cycle log contract。每次完成 cycle 的 authoritative event 必須同時包含：
+
+```text
+time=<RFC3339Nano>
+msg=pnl_status
+stable=true
+cycle_completed=true
+cycle_id=<process-scoped unique id>
+cycle_real_pnl_usdt=<rebate-adjusted delta for this cycle>
+```
+
+`real_pnl_usdt` 仍是單一 session 的 cumulative 值，不能拿來跨 run 直接相加。SkyEye 以 raw-log basename 作 run identity，再以 `(run identity, cycle_id)` 去重 `cycle_real_pnl_usdt`；同一 process-scoped cycle 的完全相同重複 log 可忽略，內容衝突則 fail closed。缺少任一必要欄位的 legacy record 不得猜測或 backfill，只能排除並顯示 coverage gap。
+
 ### 4.1 Environment variables passed only to quant
 
 `scripts/tq live run --human` 必須在 quant process environment 設定：
