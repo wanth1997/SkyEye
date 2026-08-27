@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-08-28 00:02 — 部署跨 round accumulated Real P&L 並完成 Grafana canary
+
+**改動摘要：** 合併 PR #30，將獨立的 macOS P&L history LaunchAgent 部署到 `tnauqquant-prod-1`，並讓中央 Grafana provisioning 載入 30 天跨 run／跨日 accumulated Real P&L Timeseries 與 coverage panel。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/` — production 私有 `config.env` 補入 30 日 cache／point bounds；先 render 與 `--no-start` 驗證，再單獨 bootstrap `com.wanbrain.skyeye-trading-pnl-history`
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — monitoring-prod fast-forward 到 merge commit `ed9d774`，由既有 provider 無重啟載入 dashboard version 14
+- `docs/work-log.md` — 記錄 source-host、Prometheus、Grafana 與日界線 canary
+
+**原因/備註：** History job 連續 6 次 exit 0、stderr 0 行，cache／metrics 權限為 `0700`／`0600`，中央 `node_textfile_scrape_error=0`。首次日內輸出為 84 組對齊且時間單調的 value/timestamp points；跨過 Asia/Taipei 零點後自動收斂為 30 個 daily-boundary points，最後一點位於 `2026-08-28 00:00:00`，並承接前一日相同 accumulated Real P&L `2154.2912 USDT`。Cache 當時保留 386 個 authoritative cycles，另揭露 43 筆 legacy skipped records；第一筆完整 contract event 為 `2026-08-07 11:00:44`。Alloy PID 維持 `72385`、Grafana container start time維持 `2026-08-27T12:00:36Z`，既有 probe run start 保持 `1787816200`，未啟停或修改 trading process。Prometheus／Alertmanager config、所有 dashboard JSON 均通過 production container 驗證；Grafana 近 20 分鐘 error 與 provisioning error 均為 0。外部固定 URL 已正確導向 Cloudflare Access。
+
+---
+
 ## 2026-08-27 20:13 — 納管 Trading01 並建立多策略 Trading dashboards
 
 **改動摘要：** 將 Trading01 的單交易所 Lighter／Robinhood 策略接入既有 SkyEye，新增跨 server 的策略 inventory、recording rules、shadow alerts、fleet／detail dashboards，並修復 Linux probe textfile 目錄權限問題後完成 production 驗收。
