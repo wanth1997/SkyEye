@@ -1,6 +1,6 @@
 # Trading Monitoring Development and Server Onboarding Plan
 
-> **狀態：** Core decisions approved; implementation pending
+> **狀態：** Initial production monitoring live; Trading01 multi-strategy extension implemented for shadow rollout
 >
 > **日期：** 2026-07-17
 >
@@ -11,6 +11,22 @@
 **Architecture:** Development POC 由 macOS Grafana Alloy 讀取現有 raw log，搭配唯讀 probe 將 process/run state 寫成 Prometheus textfile metrics，再經 Cloudflare Tunnel 推送到中央 Loki 與 Prometheus。Production 版本沿用相同 SkyEye agent，但由 tnauqquant 提供 run manifest 與結構化 done marker，使 process、config、log 與 run identity 能可靠綁定。
 
 **Tech Stack:** Grafana Alloy、Loki/LogQL、Prometheus/PromQL、Grafana 11、Alertmanager、Cloudflare Access、macOS Homebrew/launchd、POSIX shell。
+
+## 2026-08-27 Multi-strategy extension
+
+第二個 production target 是 `trading01` / `lighter-robinhood-btc-canary`。它在 Ubuntu 上使用單一 `lighter-robinhood-main` executor，且既有 Alloy 已負責 ZenIncome telemetry。SkyEye 不替換該 base config；`setup-linux.sh` 將 Alloy 切為 `/etc/alloy` directory mode，加入只定義 Trading sources/processors 的 `trading.alloy` fragment，並重用既有 `prometheus.remote_write.central` 與 `loki.write.central` receivers。
+
+Probe 的 portable inputs 新增：
+
+- `TQ_EXECUTOR_MAP`：runtime executor 到 bounded exchange label 的明確映射。
+- `TQ_SIDECAR_REQUIRED`：單交易所 Lighter 設為 `0`，避免不存在的 sidecar 造成假告警。
+- `TQ_TEXTFILE_MODE`：Linux shared textfile directory 使用 `0640`；macOS 同 user 保持 `0600`。
+
+Volume 優先取最新 stable `pnl_status.volume_usd_by_executor`，避免只加總部分 `trade_status` 而低估 Lighter close actions。Position 優先使用 coordinator-book 的 `net_side` / `net_qty_btc` 產生 signed net，同時保留雙交易所 initiator/carrier position contract。
+
+中央 target source 改為 `trading_target_info`。Raw `tnauqquant_*` metric 不改名，透過 `trading_strategy_*` recording rules 提供 dashboard/alerts 的 engine-neutral 介面。新 detail dashboard 以 `server_id` / `strategy` 變數選取 target；fleet dashboard 每策略一列顯示 current-run P&L、cycles、volume、position、process/binding/risk 與 telemetry freshness。不同 run 沒有共同 accounting period，因此禁止 fleet current-run P&L total。
+
+所有 generalized Prometheus/Loki alerts 保持 `notification_mode=shadow`。Trading01 若 manifest 仍為 running、但 process 已正常退出且沒有 bound done marker，監控必須顯示 process down / stale telemetry；不得由 SkyEye 偽造 done marker 或重啟交易程序。
 
 ## Global Constraints
 

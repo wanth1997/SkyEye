@@ -16,7 +16,7 @@
 
 - 中央監控棧、Cloudflare ingress、Telegram routing、host/app/business rules 與多個產品 dashboard 已投入使用。
 - Linux/Ubuntu Alloy installer 已支援 journald、node metrics 與 application `/metrics`。
-- Trading production target 固定為 `tnauqquant-prod-1` / `toobit-mexc-btc`；macOS Alloy 1.18.1 與 read-only probe 已投入運行，dashboard 以 current-manifest completed-cycle XY P&L、current-run 雙交易所成交額、signed positions、recent logs 與 process status 為核心，Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
+- Trading inventory 已包含 `tnauqquant-prod-1` / `toobit-mexc-btc` 與 `trading01` / `lighter-robinhood-btc-canary`；portable read-only probe 同時支援雙交易所與單交易所 executor mapping，Linux Alloy 以 directory fragment 共存於既有 ZenIncome pipeline。既有 dashboard 保留，另有可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
 - ZenIncome 的 Loki log alerts、dashboard 與唯讀 Bitfinex 診斷腳本已納入 Git；既有 production 規則狀態需由 operator 持續觀察。
 - LinkCourt 付款建立 5xx 與訂單編號 capacity/exhausted 告警已進入 shadow routing，等待 production canary review 後再決定是否升級通知。
 
@@ -28,11 +28,14 @@
 - Trading 第一版以 manifest-bound current-run PNL、跨重啟 completed-cycle 統計、唯讀 process probe 與 scrubbed error logs 為核心；authoritative position/risk metrics 留給後續原生 `/metrics`。
 - Production probe 強制使用 Trading repo 的 run manifest 與可驗證 done marker，缺少 contract 時 fail closed，不以最新 mtime 猜測 current run。
 - Running manifest 的 PID、executable、instance 與 log binding 有效時，磁碟 config drift 只以 `config_snapshot_match=0` 揭露並維持 shadow binding alert，不解除既有 run 的 P&L/log 可觀測性，也不改寫 manifest 快照。
+- Trading 原始 `tnauqquant_*` metrics 維持穩定，中央以 `trading_target_info` inventory 與 `trading_strategy_*` recording rules 提供多策略介面；alert 不再 hard-code server/strategy。
+- Linux 已有 Alloy 的主機使用 config directory 加入 `trading.alloy` fragment，重用既有 `central` receivers；不覆寫其他產品 pipeline，也不新增 ingestion port。
+- Current-run P&L 只能在同一策略列中呈現；不同 run 起始時間沒有共同 accounting window，因此 fleet 不顯示加總損益。
 - Owner 已核准：TQ human foreground launch、`real_pnl_usdt` primary PNL、development/production target IDs、Trading runtime contract 修改，以及 operator-only Grafana access。
 - 新增告警一律先帶 `notification_mode="shadow"`，通過 canary review 後才可移除 shadow routing。
 
 ## 待辦 / 下一步
 
-- 觀察 Trading production shadow alerts 與 dashboard 訊號品質，完成 canary review 後另案決定是否啟用通知。
+- 觀察兩個 Trading production targets 的 shadow alerts、Linux coexistence 與 fleet/detail dashboard 訊號品質，完成 canary review 後另案決定是否啟用通知。
 - 設定 Cloudflare service token 到期通知，並在到期前完成可獨立回復的 rotation。
 - 觀察 LinkCourt 付款 shadow 告警，完成 canary review 後另案決定是否啟用通知。

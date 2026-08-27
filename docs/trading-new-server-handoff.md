@@ -1,6 +1,6 @@
-# TNAUQQuant new server monitoring handoff
+# TNAUQQuant server monitoring handoff
 
-This is the self-contained, non-secret contract for the production Trading Mac.
+This is the self-contained, non-secret contract for production Trading hosts. The original section covers the two-exchange macOS target; the Linux coexistence section covers Trading01 and future hosts with an existing Alloy pipeline.
 
 ## Fixed identities
 
@@ -91,6 +91,45 @@ sed -n '1,240p' "$(brew --prefix)/var/lib/alloy/trading-textfile/tnauqquant.prom
 ```
 
 Central acceptance requires logs, probe metrics, stable Real PNL equality, correct Running/Completed/Critical state, path scrubbing and zero external notifications while shadowed. Observe one complete Trading cycle before requesting paging.
+
+## Linux coexistence target: Trading01
+
+| Field | Value |
+|---|---|
+| `product` | `tnauqquant` |
+| `environment` | `production` |
+| `server_id` | `trading01` |
+| `strategy` / `instance_id` | `lighter-robinhood-btc-canary` |
+| executor mapping | `lighter-robinhood-main=lighter` |
+| sidecar required | `0` |
+| repo root | `/home/ubuntu/tnauqquant` |
+
+Trading01 already runs Alloy for ZenIncome. Do not run the generic Linux installer that overwrites `/etc/alloy/config.alloy`, and do not define another central remote-write or Loki sink. Copy `deployment-linux.env.example` to `/etc/skyeye-trading/config.env` with mode `0600`, then render the coexistence artifacts:
+
+```bash
+render_dir="$(mktemp -d /tmp/skyeye-trading-render.XXXXXX)"
+agents/alloy/trading/setup-linux.sh \
+  --env-file /etc/skyeye-trading/config.env \
+  --render-only "$render_dir"
+
+validate_dir="$(mktemp -d /tmp/skyeye-alloy-validate.XXXXXX)"
+sudo cp /etc/alloy/*.alloy "$validate_dir/"
+cp "$render_dir/trading.alloy" "$validate_dir/"
+alloy validate "$validate_dir"
+```
+
+The full installer changes Alloy's `CONFIG_FILE` to `/etc/alloy`, installs `trading.alloy`, and adds only the read-only `skyeye-trading-probe` systemd timer. It validates the combined directory before restarting Alloy and prints the `/etc/default/alloy` backup path. The textfile directory is setgid `ubuntu:alloy` mode `2770`, probe output is `0640`, and Alloy receives only the ACL permissions needed to discover/read raw logs.
+
+Before and after installation record:
+
+```bash
+pgrep -af '/home/ubuntu/tnauqquant/quant' || true
+tmux list-panes -a -F '#{session_name} #{pane_pid} #{pane_current_command}'
+systemctl is-active alloy
+systemctl is-active skyeye-trading-probe.timer
+```
+
+The installer must not start, stop, or restart the trading process. If `current.json` still says `running` after that process exited and no bound done marker exists, leave the files unchanged: SkyEye should surface ProcessDown and stale telemetry in shadow mode.
 
 ## Rotation, revocation and retirement
 
