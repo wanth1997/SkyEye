@@ -8,12 +8,16 @@ TEMPLATE="$TRADING_DIR/config-macos.alloy.tmpl"
 ENV_EXAMPLE="$TRADING_DIR/deployment.env.example"
 SETUP="$TRADING_DIR/setup-macos.sh"
 PLIST_TEMPLATE="$TRADING_DIR/com.wanbrain.skyeye-trading-probe.plist.tmpl"
+HISTORY_PLIST_TEMPLATE="$TRADING_DIR/com.wanbrain.skyeye-trading-pnl-history.plist.tmpl"
+HISTORY_BUILDER="$TRADING_DIR/pnl-history.sh"
 
 for required_file in \
   "$TEMPLATE" \
   "$ENV_EXAMPLE" \
   "$SETUP" \
   "$PLIST_TEMPLATE" \
+  "$HISTORY_PLIST_TEMPLATE" \
+  "$HISTORY_BUILDER" \
   "$TRADING_DIR/README.md"
 do
   if [[ ! -f "$required_file" ]]; then
@@ -24,6 +28,10 @@ done
 
 if [[ ! -x "$SETUP" ]]; then
   printf 'FAIL: setup script is not executable\n' >&2
+  exit 1
+fi
+if [[ ! -x "$HISTORY_BUILDER" ]]; then
+  printf 'FAIL: P&L history builder is not executable\n' >&2
   exit 1
 fi
 
@@ -115,6 +123,9 @@ export TQ_POC_RUN_EXPECTED=1
 export TQ_REQUIRE_RUNTIME_CONTRACT=1
 export TQ_TIMEZONE=Asia/Taipei
 export TQ_TEXTFILE_DIR=$TEST_ROOT/textfile
+export TQ_PNL_HISTORY_CACHE_DIR=$TEST_ROOT/pnl-history-cache
+export TQ_PNL_HISTORY_DAYS=30
+export TQ_PNL_HISTORY_MAX_CURRENT_DAY_CYCLES=500
 export LOKI_PUSH_URL=https://loki.invalid/loki/api/v1/push
 export PROM_PUSH_URL=https://prom.invalid/api/v1/write
 export CF_ACCESS_CLIENT_ID=fake-client-id
@@ -126,6 +137,7 @@ chmod 600 "$ENV_FILE"
 
 RENDERED_CONFIG="$RENDERED/config.alloy"
 RENDERED_PLIST="$RENDERED/com.wanbrain.skyeye-trading-probe.plist"
+RENDERED_HISTORY_PLIST="$RENDERED/com.wanbrain.skyeye-trading-pnl-history.plist"
 [[ -f "$RENDERED_CONFIG" ]] || {
   printf 'FAIL: rendered Alloy config is missing\n' >&2
   exit 1
@@ -134,11 +146,23 @@ RENDERED_PLIST="$RENDERED/com.wanbrain.skyeye-trading-probe.plist"
   printf 'FAIL: rendered launchd plist is missing\n' >&2
   exit 1
 }
+[[ -x "$RENDERED/pnl-history.sh" ]] || {
+  printf 'FAIL: rendered P&L history builder is missing or not executable\n' >&2
+  exit 1
+}
+[[ -f "$RENDERED_HISTORY_PLIST" ]] || {
+  printf 'FAIL: rendered P&L history launchd plist is missing\n' >&2
+  exit 1
+}
 
 assert_contains "$RENDERED_CONFIG" 'sys.env\("CF_ACCESS_CLIENT_SECRET"\)'
 assert_not_contains "$RENDERED_CONFIG" 'fake-client-secret'
 assert_not_contains "$RENDERED_PLIST" 'fake-client-secret'
+assert_not_contains "$RENDERED_HISTORY_PLIST" 'fake-client-secret'
+assert_contains "$RENDERED_HISTORY_PLIST" 'com.wanbrain.skyeye-trading-pnl-history'
+assert_contains "$RENDERED_HISTORY_PLIST" '<integer>60</integer>'
 plutil -lint "$RENDERED_PLIST" >/dev/null
+plutil -lint "$RENDERED_HISTORY_PLIST" >/dev/null
 
 if command -v alloy >/dev/null 2>&1; then
   alloy fmt "$RENDERED_CONFIG" >/dev/null

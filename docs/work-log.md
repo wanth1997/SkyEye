@@ -33,6 +33,22 @@
 
 ---
 
+## 2026-08-27 19:06 — 建立跨 round 的 30 天 accumulated Real P&L
+
+**改動摘要：** 新增與 15 秒 safety probe 隔離的每分鐘歷史 builder，以 per-run cache 加總 authoritative completed-cycle delta，並將 Grafana 主圖改成跨 run、跨日連續的真實時間階梯圖。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/pnl-history.sh`、`com.wanbrain.skyeye-trading-pnl-history.plist.tmpl` — 只重掃變更過的 raw logs，保留輪替後摘要，以 atomic bounded metrics 輸出 history value、timestamp 與 coverage
+- `agents/alloy/trading/setup-macos.sh`、`deployment.env.example`、`README.md` — 安裝、驗證並說明獨立 60 秒 launchd job 與 mode-`0700` cache
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 以 `point` join P&L／timestamp，轉為 Timeseries `stepAfter`，新增 build age、coverage start 與 skipped legacy 顯示
+- `tests/trading/test-pnl-history.sh`、`test-log-pipeline.sh`、`test-central-config.sh` — 固定跨 round／跨日基線、去重、cache reuse、rotation retention、conflict/bound fail-closed 與 dashboard contract
+- `docs/trading-accumulated-pnl-development-plan.md`、Trading contract 文件與 `project-brief.md` — 記錄 owner 決議、資料語意與部署界線
+
+**原因/備註：** `real_pnl_usdt` 是 session cumulative，跨 round 不能直接相加；history 只加總 rebate-adjusted `cycle_real_pnl_usdt`。舊 completed-looking record 缺 `cycle_id` 或 delta 時不猜測，改由 coverage start 與 skipped count 明示。以正式 raw-log glob、隔離 temp cache 做唯讀 smoke test時，首次掃描 67 個約 33.8 MB logs 為 5.71 秒，第二次全 cache 命中為 0.82 秒；辨識 382 個 authoritative cycles、排除 43 個 legacy records。Herdr code review 另發現 hard kill／reboot 殘留 lock 可能永久卡住 job，已補上 10 分鐘 stale-lock recovery、fresh-lock mutual exclusion 測試，並將 Prometheus metric families 改為 canonical grouped output。這次只完成 Git 中的實作與驗證，不部署、不操作真實 trading process。
+
+---
+
 ## 2026-08-12 16:20 — Config drift 時保留 Trading P&L telemetry
 
 **改動摘要：** 將 runtime manifest 的 config snapshot 比對改為獨立可觀測信號；目前執行中的 PID、executable、instance 與 log binding 仍有效時，即使 config 檔案在 run 中被改動，probe 仍持續輸出該 run 的 P&L、cycle、position 與 log telemetry。
