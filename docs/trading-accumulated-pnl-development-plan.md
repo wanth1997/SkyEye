@@ -82,6 +82,12 @@ identities. The display cardinality is bounded to
 current-day cycles. Exceeding the bound or finding a conflict fails closed and
 preserves the last atomic `.prom` file.
 
+A fresh cache-local lock serializes overlapping jobs. A lock older than 10 minutes is
+reclaimed as hard-kill or reboot residue so launchd cannot remain permanently wedged.
+Raw-log basenames are immutable run identities: completed logs may move out of the
+glob, but the same content must not be copied or renamed to another in-glob
+`*.raw.log` basename.
+
 At the current host evidence (67 raw logs, about 34 MB total, largest about 3.1 MB),
 bootstrap reads about 34 MB once. Steady state stats all known paths once per minute
 and rescans only the growing current log, so work is bounded by that log's size rather

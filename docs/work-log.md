@@ -45,7 +45,7 @@
 - `tests/trading/test-pnl-history.sh`、`test-log-pipeline.sh`、`test-central-config.sh` — 固定跨 round／跨日基線、去重、cache reuse、rotation retention、conflict/bound fail-closed 與 dashboard contract
 - `docs/trading-accumulated-pnl-development-plan.md`、Trading contract 文件與 `project-brief.md` — 記錄 owner 決議、資料語意與部署界線
 
-**原因/備註：** `real_pnl_usdt` 是 session cumulative，跨 round 不能直接相加；history 只加總 rebate-adjusted `cycle_real_pnl_usdt`。舊 completed-looking record 缺 `cycle_id` 或 delta 時不猜測，改由 coverage start 與 skipped count 明示。以正式 raw-log glob、隔離 temp cache 做唯讀 smoke test時，首次掃描 67 個約 33.8 MB logs 為 5.71 秒，第二次全 cache 命中為 0.82 秒；辨識 382 個 authoritative cycles、排除 43 個 legacy records。這次只完成 Git 中的實作與驗證，不部署、不操作真實 trading process。
+**原因/備註：** `real_pnl_usdt` 是 session cumulative，跨 round 不能直接相加；history 只加總 rebate-adjusted `cycle_real_pnl_usdt`。舊 completed-looking record 缺 `cycle_id` 或 delta 時不猜測，改由 coverage start 與 skipped count 明示。以正式 raw-log glob、隔離 temp cache 做唯讀 smoke test時，首次掃描 67 個約 33.8 MB logs 為 5.71 秒，第二次全 cache 命中為 0.82 秒；辨識 382 個 authoritative cycles、排除 43 個 legacy records。Herdr code review 另發現 hard kill／reboot 殘留 lock 可能永久卡住 job，已補上 10 分鐘 stale-lock recovery、fresh-lock mutual exclusion 測試，並將 Prometheus metric families 改為 canonical grouped output。這次只完成 Git 中的實作與驗證，不部署、不操作真實 trading process。
 
 ---
 

@@ -40,6 +40,7 @@ time=2026-08-25T23:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_compl
 time=2026-08-26T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=cycle.1 cycle_real_pnl_usdt=2 real_pnl_usdt=12
 time=2026-08-26T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=cycle.1 cycle_real_pnl_usdt=2 real_pnl_usdt=12
 time=2026-08-26T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true real_pnl_usdt=11
+time=2026-08-26T10:30:00+08:00 level=INFO msg=pnl_status stable=true real_pnl_usdt=11
 EOF
 
 cat >"$RAW_DIR/run-b.raw.log" <<'EOF'
@@ -92,8 +93,12 @@ checksum() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
 
-printf 'case: cross-run and cross-day accumulation\n'
+printf 'case: stale lock recovery\n'
+mkdir -p "$CACHE_DIR/.lock"
+touch -t 202001010000 "$CACHE_DIR/.lock"
 "$BUILDER"
+
+printf 'case: cross-run and cross-day accumulation\n'
 [[ -f "$METRICS_PATH" ]] || {
   printf 'FAIL: metrics file was not created\n' >&2
   exit 1
@@ -104,7 +109,7 @@ assert_point 1 11 1787760000
 assert_point 2 14 1787792400
 assert_point 3 13.5 1787796000
 assert_metric tnauqquant_pnl_history_cached_cycles 5
-assert_metric tnauqquant_pnl_history_skipped_legacy_events 1
+assert_metric tnauqquant_pnl_history_skipped_legacy_events 2
 assert_metric tnauqquant_pnl_history_first_supported_event_timestamp_seconds 1787670000
 assert_metric tnauqquant_pnl_history_last_event_timestamp_seconds 1787796000
 assert_metric tnauqquant_pnl_history_build_timestamp_seconds "$TQ_PNL_HISTORY_NOW_SECONDS"
@@ -128,6 +133,30 @@ fi
   printf 'FAIL: metrics file must have mode 600\n' >&2
   exit 1
 }
+last_value_line="$(rg -n '^tnauqquant_pnl_history_point_value_usdt\{' "$METRICS_PATH" | tail -n 1 | cut -d: -f1)"
+timestamp_help_line="$(rg -n '^# HELP tnauqquant_pnl_history_point_timestamp_seconds ' "$METRICS_PATH" | cut -d: -f1)"
+[[ "$last_value_line" -lt "$timestamp_help_line" ]] || {
+  printf 'FAIL: point metric families must be emitted in canonical groups\n' >&2
+  exit 1
+}
+if find "$TEXTFILE_DIR" "$CACHE_DIR" \
+    \( -name '.tnauqquant-pnl-history.prom.*' -o -name '.pnl-history-*' \) | rg -q .; then
+  printf 'FAIL: successful build left temporary history files behind\n' >&2
+  exit 1
+fi
+
+printf 'case: a fresh lock protects an active build\n'
+metrics_before_fresh_lock="$(checksum "$METRICS_PATH")"
+mkdir "$CACHE_DIR/.lock"
+if "$BUILDER"; then
+  printf 'FAIL: builder should respect a fresh lock\n' >&2
+  exit 1
+fi
+[[ "$(checksum "$METRICS_PATH")" == "$metrics_before_fresh_lock" ]] || {
+  printf 'FAIL: fresh-lock refusal replaced the last good metrics\n' >&2
+  exit 1
+}
+rmdir "$CACHE_DIR/.lock"
 
 printf 'case: unchanged logs reuse their cached summaries\n'
 RUN_A_CACHE="$CACHE_DIR/runs/run-a.events"

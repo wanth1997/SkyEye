@@ -114,11 +114,21 @@ install -d -m 700 "$TQ_TEXTFILE_DIR" "$TQ_PNL_HISTORY_CACHE_DIR" \
   "$TQ_PNL_HISTORY_CACHE_DIR/runs"
 
 lock_dir="$TQ_PNL_HISTORY_CACHE_DIR/.lock"
-mkdir "$lock_dir" 2>/dev/null || die "another history build is already running"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+  lock_mtime="$(stat -f '%m' "$lock_dir" 2>/dev/null || \
+    stat -c '%Y' "$lock_dir" 2>/dev/null || printf '0')"
+  if [[ "$lock_mtime" =~ ^[0-9]+$ && "$lock_mtime" -gt 0 ]] && \
+      (( now_seconds - lock_mtime > 600 )); then
+    rm -rf "$lock_dir"
+    mkdir "$lock_dir" 2>/dev/null || die "another history build is already running"
+  else
+    die "another history build is already running"
+  fi
+fi
 work_files=()
 cleanup() {
   rm -rf "$lock_dir"
-  if [[ "${#work_files[@]}" -gt 0 ]]; then
+  if [[ -n "${work_files[*]:-}" ]]; then
     rm -f "${work_files[@]}"
   fi
 }
@@ -151,7 +161,12 @@ scan_log() {
       msg = value_for("msg")
       stable = value_for("stable")
       completed = value_for("cycle_completed")
-      if (msg != "pnl_status" || stable != "true" || completed != "true") next
+      if (msg != "pnl_status" || stable != "true") next
+      if (completed == "") {
+        print "L"
+        next
+      }
+      if (completed != "true") next
       timestamp = value_for("time")
       cycle = value_for("cycle_id")
       delta = value_for("cycle_real_pnl_usdt")
@@ -358,12 +373,16 @@ base_labels="product=\"$TQ_PRODUCT\",environment=\"$TQ_ENVIRONMENT\",server_id=\
     printf 'tnauqquant_pnl_history_last_event_timestamp_seconds{%s} %s\n' "$base_labels" "$last_epoch"
     printf '# HELP tnauqquant_pnl_history_point_value_usdt Cross-run accumulated real P&L in USDT at a bounded display point.\n'
     printf '# TYPE tnauqquant_pnl_history_point_value_usdt gauge\n'
-    printf '# HELP tnauqquant_pnl_history_point_timestamp_seconds Unix time represented by a bounded P&L display point.\n'
-    printf '# TYPE tnauqquant_pnl_history_point_timestamp_seconds gauge\n'
     point=0
     while IFS=$'\t' read -r point_timestamp point_value; do
       printf 'tnauqquant_pnl_history_point_value_usdt{%s,point="%s"} %s\n' \
         "$base_labels" "$point" "$point_value"
+      point=$((point + 1))
+    done <"$points"
+    printf '# HELP tnauqquant_pnl_history_point_timestamp_seconds Unix time represented by a bounded P&L display point.\n'
+    printf '# TYPE tnauqquant_pnl_history_point_timestamp_seconds gauge\n'
+    point=0
+    while IFS=$'\t' read -r point_timestamp _point_value; do
       printf 'tnauqquant_pnl_history_point_timestamp_seconds{%s,point="%s"} %s\n' \
         "$base_labels" "$point" "$point_timestamp"
       point=$((point + 1))
