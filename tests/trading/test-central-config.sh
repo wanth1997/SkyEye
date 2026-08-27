@@ -142,14 +142,55 @@ then
   exit 1
 fi
 
-for production_value in production tnauqquant-prod-1 toobit-mexc-btc; do
-  for target_file in "$PROM_RULES" "$PROM_TARGET" "$LOKI_RULES"; do
-    rg -q -- "$production_value" "$target_file" || {
-      printf 'FAIL: %s is missing production identity %s\n' \
-        "$target_file" "$production_value" >&2
-      exit 1
-    }
-  done
+for production_value in \
+  production \
+  tnauqquant-prod-1 \
+  toobit-mexc-btc \
+  trading01 \
+  lighter-robinhood-btc-canary
+do
+  rg -q -- "$production_value" "$PROM_TARGET" || {
+    printf 'FAIL: inventory is missing production identity %s\n' \
+      "$production_value" >&2
+    exit 1
+  }
+done
+
+rg -q 'record:[[:space:]]+trading_target_info' "$PROM_TARGET" || {
+  printf 'FAIL: generic trading_target_info inventory is missing\n' >&2
+  exit 1
+}
+
+for recording_rule in \
+  trading_strategy_process_count \
+  trading_strategy_binding_ok \
+  trading_strategy_current_real_pnl_usdt \
+  trading_strategy_current_net_position_btc \
+  trading_strategy_current_run_exchange_volume_usd \
+  trading_strategy_risk_stopped
+do
+  rg -q -- "record:[[:space:]]+$recording_rule" "$PROM_RULES" || {
+    printf 'FAIL: generic recording rule is missing: %s\n' "$recording_rule" >&2
+    exit 1
+  }
+done
+
+if rg -q 'tnauqquant-prod-1|toobit-mexc-btc|trading01|lighter-robinhood-btc-canary' \
+  "$PROM_RULES" "$LOKI_RULES"
+then
+  printf 'FAIL: generic Trading rules still hard-code a server or strategy\n' >&2
+  exit 1
+fi
+
+for generic_selector in 'product="tnauqquant"' 'environment="production"'; do
+  rg -q -- "$generic_selector" "$PROM_RULES" || {
+    printf 'FAIL: Prometheus rules are missing selector %s\n' "$generic_selector" >&2
+    exit 1
+  }
+  rg -q -- "$generic_selector" "$LOKI_RULES" || {
+    printf 'FAIL: Loki rules are missing selector %s\n' "$generic_selector" >&2
+    exit 1
+  }
 done
 
 prom_alert_count="$(rg -c '^[[:space:]]+- alert: Trading' "$PROM_RULES")"

@@ -1,15 +1,180 @@
 groups:
-  - name: tnauqquant-trading
+  - name: trading-strategy-recording
+    interval: 30s
+    rules:
+      - record: trading_strategy_process_count
+        expr: |
+          tnauqquant_process_count{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_run_expected
+        expr: |
+          tnauqquant_run_expected{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_runtime_contract_available
+        expr: |
+          tnauqquant_runtime_contract_available{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_binding_ok
+        expr: |
+          min by (product, environment, server_id, strategy) (
+            {
+              __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok)",
+              product="tnauqquant",
+              environment="production"
+            }
+          )
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_sidecar_required
+        expr: |
+          tnauqquant_sidecar_required{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_sidecar_up
+        expr: |
+          tnauqquant_sidecar_up{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_sidecar_identity_ok
+        expr: |
+          tnauqquant_sidecar_identity_ok{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_probe_timestamp_seconds
+        expr: |
+          tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_log_mtime_seconds
+        expr: |
+          tnauqquant_log_mtime_seconds{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_pnl_valid
+        expr: |
+          tnauqquant_current_pnl_valid{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_position_valid
+        expr: |
+          tnauqquant_current_position_valid{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_pnl_sample_timestamp_seconds
+        expr: |
+          tnauqquant_pnl_sample_timestamp_seconds{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_run_started_timestamp_seconds
+        expr: |
+          tnauqquant_current_run_started_timestamp_seconds{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_risk_stopped
+        expr: |
+          tnauqquant_risk_stopped{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_real_pnl_usdt
+        expr: |
+          tnauqquant_current_real_pnl_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_cash_pnl_usdt
+        expr: |
+          tnauqquant_current_cash_pnl_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_rebate_usdt
+        expr: |
+          tnauqquant_current_rebate_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_risk_pnl_usdt
+        expr: |
+          tnauqquant_current_risk_pnl_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_cycles_completed
+        expr: |
+          tnauqquant_current_cycles_completed{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_completed_cycles_today
+        expr: |
+          tnauqquant_completed_cycles_today{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_last_cycle_real_pnl_usdt
+        expr: |
+          tnauqquant_last_cycle_real_pnl_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_last_completed_cycle_timestamp_seconds
+        expr: |
+          tnauqquant_last_completed_cycle_timestamp_seconds{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_cycle_cumulative_real_pnl_usdt
+        expr: |
+          tnauqquant_cycle_cumulative_real_pnl_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_net_position_btc
+        expr: |
+          tnauqquant_current_net_position_btc{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_position_btc
+        expr: |
+          tnauqquant_current_position_btc{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_run_exchange_volume_usd
+        expr: |
+          tnauqquant_current_run_exchange_volume_usd{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_done_marker
+        expr: |
+          tnauqquant_done_marker{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+  - name: trading-strategy-alerts
     interval: 30s
     rules:
       - alert: TradingDuplicateProcess
-        expr: |
-          tnauqquant_process_count{
-            product="tnauqquant",
-            environment="production",
-            server_id="tnauqquant-prod-1",
-            strategy="toobit-mexc-btc"
-          } > 1
+        expr: trading_strategy_process_count > 1
         for: 30s
         labels:
           severity: High
@@ -21,26 +186,12 @@ groups:
       - alert: TradingUnexpectedProcess
         expr: |
           (
-            tnauqquant_run_expected{
-              product="tnauqquant",
-              environment="production",
-              server_id="tnauqquant-prod-1",
-              strategy="toobit-mexc-btc"
-            } == 0
+            trading_strategy_run_expected == 0
             and on (product, environment, server_id, strategy)
-            tnauqquant_process_count{
-              product="tnauqquant",
-              environment="production",
-              server_id="tnauqquant-prod-1",
-              strategy="toobit-mexc-btc"
-            } > 0
+            trading_strategy_process_count > 0
           )
           unless on (product, environment, server_id, strategy)
-          tnauqquant_done_marker{
-            product="tnauqquant",
-            environment="production",
-            server_id="tnauqquant-prod-1",
-            strategy="toobit-mexc-btc",
+          trading_strategy_done_marker{
             reason=~"risk_halt|max_cycles_drain_failed|unknown"
           } == 1
         for: 2m
@@ -54,39 +205,12 @@ groups:
       - alert: TradingProcessDown
         expr: |
           (
-            tnauqquant_run_expected{
-              product="tnauqquant",
-              environment="production",
-              server_id="tnauqquant-prod-1",
-              strategy="toobit-mexc-btc"
-            } == 1
+            trading_strategy_run_expected == 1
             and on (product, environment, server_id, strategy)
-            tnauqquant_process_count{
-              product="tnauqquant",
-              environment="production",
-              server_id="tnauqquant-prod-1",
-              strategy="toobit-mexc-btc"
-            } == 0
+            trading_strategy_process_count == 0
           )
           unless on (product, environment, server_id, strategy)
-          (
-            tnauqquant_runtime_contract_available{
-              product="tnauqquant",
-              environment="production",
-              server_id="tnauqquant-prod-1",
-              strategy="toobit-mexc-btc"
-            } == 1
-            and on (product, environment, server_id, strategy)
-            min by (product, environment, server_id, strategy) (
-              {
-                __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok)",
-                product="tnauqquant",
-                environment="production",
-                server_id="tnauqquant-prod-1",
-                strategy="toobit-mexc-btc"
-              }
-            ) == 0
-          )
+          trading_strategy_binding_ok == 0
         for: 2m
         labels:
           severity: High
@@ -97,11 +221,7 @@ groups:
 
       - alert: TradingCriticalSafetyState
         expr: |
-          tnauqquant_done_marker{
-            product="tnauqquant",
-            environment="production",
-            server_id="tnauqquant-prod-1",
-            strategy="toobit-mexc-btc",
+          trading_strategy_done_marker{
             reason=~"risk_halt|max_cycles_drain_failed|unknown"
           } == 1
         for: 0m
@@ -112,24 +232,21 @@ groups:
           summary: "{{ $labels.server_id }} {{ $labels.strategy }} terminal state is {{ $labels.reason }}"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md"
 
+      - alert: TradingRiskStopped
+        expr: trading_strategy_risk_stopped == 1
+        for: 0m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} reports risk_stopped"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md"
+
       - alert: TradingRunBindingInvalid
         expr: |
-          tnauqquant_runtime_contract_available{
-            product="tnauqquant",
-            environment="production",
-            server_id="tnauqquant-prod-1",
-            strategy="toobit-mexc-btc"
-          } == 1
+          trading_strategy_runtime_contract_available == 1
           and on (product, environment, server_id, strategy)
-          min by (product, environment, server_id, strategy) (
-            {
-              __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok)",
-              product="tnauqquant",
-              environment="production",
-              server_id="tnauqquant-prod-1",
-              strategy="toobit-mexc-btc"
-            }
-          ) == 0
+          trading_strategy_binding_ok == 0
         for: 1m
         labels:
           severity: High
@@ -138,14 +255,53 @@ groups:
           summary: "{{ $labels.server_id }} {{ $labels.strategy }} run binding is invalid"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md"
 
+      - alert: TradingSidecarUnavailable
+        expr: |
+          trading_strategy_sidecar_required == 1
+          and on (product, environment, server_id, strategy)
+          (
+            trading_strategy_sidecar_up == 0
+            or
+            trading_strategy_sidecar_identity_ok == 0
+          )
+        for: 2m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} required sidecar is unavailable or invalid"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md"
+
+      - alert: TradingPnlTelemetryStale
+        expr: |
+          trading_strategy_run_expected == 1
+          and on (product, environment, server_id, strategy)
+          (
+            trading_strategy_current_pnl_valid == 0
+            or
+            time() - trading_strategy_pnl_sample_timestamp_seconds > 300
+          )
+        for: 3m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} P&L telemetry is invalid or stale"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md"
+
       - alert: TradingTelemetryMissing
         expr: |
-          absent_over_time(
+          sum by (product, environment, server_id, strategy) (
+            trading_target_info{
+              product="tnauqquant",
+              environment="production"
+            }
+          )
+          unless on (product, environment, server_id, strategy)
+          max_over_time(
             tnauqquant_probe_timestamp_seconds{
               product="tnauqquant",
-              environment="production",
-              server_id="tnauqquant-prod-1",
-              strategy="toobit-mexc-btc"
+              environment="production"
             }[3m]
           )
         for: 0m

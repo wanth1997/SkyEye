@@ -1,4 +1,5 @@
 rule_files:
+  - ../trading-targets.yml
   - ../trading.yml
 
 evaluation_interval: 30s
@@ -8,6 +9,8 @@ tests:
     interval: 30s
     input_series:
       - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
         values: '0+30x10'
       - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
         values: '1x10'
@@ -149,3 +152,97 @@ tests:
             exp_annotations:
               summary: 'tnauqquant-prod-1 toobit-mexc-btc telemetry is missing'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: trading01
+              strategy: lighter-robinhood-btc-canary
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'trading01 lighter-robinhood-btc-canary telemetry is missing'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
+
+  - name: Trading01 stale running manifest surfaces process down without sidecar noise
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1x10'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1x10'
+      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1x10'
+      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1x10'
+      - series: 'tnauqquant_config_snapshot_match{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1x10'
+      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1x10'
+      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1x10'
+      - series: 'tnauqquant_sidecar_required{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_sidecar_up{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_sidecar_identity_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TradingProcessDown
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: trading01
+              strategy: lighter-robinhood-btc-canary
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'trading01 lighter-robinhood-btc-canary trading process is down'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-process-down.md'
+      - eval_time: 3m
+        alertname: TradingSidecarUnavailable
+        exp_alerts: []
+
+  - name: Trading01 risk stop fires shadow and generic recordings retain dimensions
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0+30x5'
+      - series: 'tnauqquant_risk_stopped{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1x5'
+      - series: 'tnauqquant_current_real_pnl_usdt{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '1.4083x5'
+      - series: 'tnauqquant_current_net_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0x5'
+      - series: 'tnauqquant_current_run_exchange_volume_usd{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary",exchange="lighter"}'
+        values: '68610.97x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: TradingRiskStopped
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: trading01
+              strategy: lighter-robinhood-btc-canary
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'trading01 lighter-robinhood-btc-canary reports risk_stopped'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md'
+    promql_expr_test:
+      - expr: 'trading_strategy_current_real_pnl_usdt{server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'trading_strategy_current_real_pnl_usdt{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+            value: 1.4083
+      - expr: 'trading_strategy_current_run_exchange_volume_usd{server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'trading_strategy_current_run_exchange_volume_usd{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary",exchange="lighter"}'
+            value: 68610.97
