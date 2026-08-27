@@ -252,6 +252,10 @@ alloy validate "$STAGING_CONFIG"
 
 install -d -m 755 "$ALLOY_CONFIG_DIR" "$INSTALL_ROOT" "$INSTALL_ENV_DIR"
 install -d -o "$TQ_PROBE_USER" -g "$TQ_ALLOY_GROUP" -m 2770 "$TQ_TEXTFILE_DIR"
+runuser -u "$TQ_PROBE_USER" -- test -x "$TQ_TEXTFILE_DIR" || \
+  die "probe user cannot traverse textfile directory: $TQ_TEXTFILE_DIR"
+runuser -u "$TQ_PROBE_USER" -- test -w "$TQ_TEXTFILE_DIR" || \
+  die "probe user cannot write textfile directory: $TQ_TEXTFILE_DIR"
 install -m 755 "$RENDER_ROOT/probe.sh" "$INSTALL_ROOT/probe.sh"
 install -m 600 "$ENV_FILE" "$INSTALL_ENV"
 install -m 644 "$RENDER_ROOT/trading.alloy" "$ALLOY_FRAGMENT"
