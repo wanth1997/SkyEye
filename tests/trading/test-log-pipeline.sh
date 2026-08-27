@@ -57,6 +57,7 @@ assert_contains "$TEMPLATE" 'stage.replace'
 assert_contains "$TEMPLATE" 'TQ_REPO_ROOT_REGEX'
 assert_contains "$TEMPLATE" '\\[EMAIL\\]'
 assert_contains "$TEMPLATE" '\\[ORDER_REF\\]'
+assert_contains "$TEMPLATE" '\\[TRACE_REF\\]'
 assert_contains "$TEMPLATE" 'stage.label_drop'
 assert_contains "$TEMPLATE" 'stage.label_keep'
 assert_contains "$TEMPLATE" 'prometheus.exporter.unix "trading_textfile"'
@@ -65,6 +66,8 @@ assert_contains "$TEMPLATE" 'sys.env\("CF_ACCESS_CLIENT_ID"\)'
 assert_contains "$TEMPLATE" 'sys.env\("CF_ACCESS_CLIENT_SECRET"\)'
 assert_not_contains "$TEMPLATE" 'order_id[[:space:]]*='
 assert_not_contains "$TEMPLATE" 'client_action_id[[:space:]]*='
+assert_not_contains "$TEMPLATE" 'attempt_id[[:space:]]*='
+assert_not_contains "$TEMPLATE" 'reservation_id[[:space:]]*='
 
 label_keep_line="$(rg 'values = \["product", "environment", "server_id", "strategy", "run_id", "level"\]' "$TEMPLATE" || true)"
 if [[ -z "$label_keep_line" ]]; then

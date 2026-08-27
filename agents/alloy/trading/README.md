@@ -1,4 +1,4 @@
-# Trading monitoring agent for macOS
+# Trading monitoring agent for macOS and Linux
 
 This directory installs two source-host components:
 
@@ -11,6 +11,11 @@ Neither component starts, stops, signals, or attaches to the trading process.
 
 | File | Purpose |
 |---|---|
+| config-linux.alloy.tmpl | Coexistence fragment that reuses an existing Linux Alloy deployment's central receivers |
+| deployment-linux.env.example | Trading01/Lighter Linux contract without central credentials |
+| setup-linux.sh | Render, validate and install the Alloy fragment plus systemd probe timer |
+| skyeye-trading-probe.service.tmpl | Linux read-only oneshot probe |
+| skyeye-trading-probe.timer.tmpl | 15-second Linux timer |
 | `config-macos.alloy.tmpl` | Logfmt pipeline, source-side scrub, Loki push and Prometheus remote write |
 | `deployment.env.example` | Complete host-specific deployment contract without real secrets |
 | `probe.sh` | Read-only process/manifest/marker/log probe |
@@ -48,6 +53,54 @@ Neither component starts, stops, signals, or attaches to the trading process.
    launchctl print "gui/$(id -u)/com.wanbrain.skyeye-trading-probe"
    ```
 
+## Linux install alongside an existing Alloy config
+
+The Linux path does not replace the base config or define another remote-write
+sink. It switches the existing Alloy service to directory mode and installs
+/etc/alloy/trading.alloy, which references the existing central Prometheus and
+Loki receivers. This preserves other product pipelines such as ZenIncome.
+
+1. Copy and edit the non-secret environment contract:
+
+   ~~~bash
+   sudo install -d -m 755 /etc/skyeye-trading
+   sudo install -m 600 agents/alloy/trading/deployment-linux.env.example \
+     /etc/skyeye-trading/config.env
+   ~~~
+
+2. Render and validate without changing services:
+
+   ~~~bash
+   render_dir="$(mktemp -d /tmp/skyeye-trading-render.XXXXXX)"
+   agents/alloy/trading/setup-linux.sh \
+     --env-file /etc/skyeye-trading/config.env \
+     --render-only "$render_dir"
+
+   validate_dir="$(mktemp -d /tmp/skyeye-alloy-validate.XXXXXX)"
+   cp /etc/alloy/*.alloy "$validate_dir/"
+   cp "$render_dir/trading.alloy" "$validate_dir/"
+   alloy validate "$validate_dir"
+   ~~~
+
+3. Install after the combined directory validates:
+
+   ~~~bash
+   sudo agents/alloy/trading/setup-linux.sh \
+     --env-file /etc/skyeye-trading/config.env
+   systemctl status alloy skyeye-trading-probe.timer
+   journalctl -u skyeye-trading-probe.service -n 50 --no-pager
+   ~~~
+
+The installer requires setfacl. It grants Alloy read/traverse only on the
+raw-log directory and traverse-only access on the exact parent chain under the
+probe user's home. It does not add Alloy to the user's group. The textfile
+directory is setgid probe-user:alloy mode 2770; probe output is 0640.
+
+To roll back, disable skyeye-trading-probe.timer, remove
+/etc/alloy/trading.alloy, restore the printed /etc/default/alloy backup,
+validate the remaining Alloy configuration, and restart Alloy. This rollback
+does not touch the trading process.
+
 ## Secret and access requirements
 
 - `config.env` must remain mode `0600` and outside Git.
@@ -65,6 +118,8 @@ Another server agent changes environment values only:
 - `TQ_INSTANCE_ID` matching the Trading config
 - one capture-group `TQ_REPO_ROOT_REGEX` matching the canonical root
 - a production-host-specific Cloudflare service token
+- an executor-to-exchange map such as lighter-robinhood-main=lighter
+- sidecar-required set to zero when the strategy has no sidecar
 - `TQ_TIMEZONE=Asia/Taipei` for the daily completed-cycle boundary
 
 Central labels, dashboard queries and rules must not be changed to accommodate a different filesystem path.

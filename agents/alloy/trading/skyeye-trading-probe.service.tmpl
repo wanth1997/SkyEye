@@ -1,0 +1,14 @@
+[Unit]
+Description=SkyEye trading telemetry probe
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=@@PROBE_USER@@
+Group=@@PROBE_GROUP@@
+EnvironmentFile=@@ENV_FILE@@
+ExecStart=@@PROBE_PATH@@
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

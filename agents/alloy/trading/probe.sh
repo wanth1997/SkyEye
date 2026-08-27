@@ -21,7 +21,11 @@ valid_label_value() {
 
 file_mtime() {
   local path="$1"
-  stat -f '%m' "$path" 2>/dev/null || stat -c '%Y' "$path"
+  if stat -c '%Y' "$path" >/dev/null 2>&1; then
+    stat -c '%Y' "$path"
+  else
+    stat -f '%m' "$path"
+  fi
 }
 
 is_number() {
@@ -139,11 +143,52 @@ completed_cycle_pnl_series() {
   ' "$log_path"
 }
 
-current_run_exchange_volumes() {
+mapped_executor_volumes() {
   local log_path="$1"
-  awk '
+  local latest_line volume_snapshot
+  latest_line="$(latest_pnl_line "$log_path" 0)"
+  volume_snapshot="$(logfmt_value "$latest_line" volume_usd_by_executor)"
+
+  awk -v mapping="$TQ_EXECUTOR_MAP" -v snapshot="$volume_snapshot" '
     function valid_number(value) {
       return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
+    }
+    function format_number(value, formatted) {
+      formatted = sprintf("%.10f", value)
+      sub(/0+$/, "", formatted)
+      sub(/[.]$/, "", formatted)
+      return formatted == "" ? "0" : formatted
+    }
+    BEGIN {
+      mapping_count = split(mapping, mapping_entries, ",")
+      for (i = 1; i <= mapping_count; i++) {
+        equals = index(mapping_entries[i], "=")
+        executor = substr(mapping_entries[i], 1, equals - 1)
+        exchange = substr(mapping_entries[i], equals + 1)
+        executor_exchange[executor] = exchange
+        if (!(exchange in exchange_seen)) {
+          exchange_seen[exchange] = 1
+          exchange_order[++exchange_count] = exchange
+        }
+      }
+
+      if (snapshot != "") {
+        snapshot_count = split(snapshot, snapshot_entries, ",")
+        for (i = 1; i <= snapshot_count; i++) {
+          colon = index(snapshot_entries[i], ":")
+          executor = substr(snapshot_entries[i], 1, colon - 1)
+          volume = substr(snapshot_entries[i], colon + 1)
+          exchange = executor_exchange[executor]
+          if (colon > 1 && exchange != "" && valid_number(volume) && volume + 0 >= 0) {
+            exchange_volume[exchange] += volume
+          }
+        }
+        for (i = 1; i <= exchange_count; i++) {
+          exchange = exchange_order[i]
+          print exchange "\t" format_number(exchange_volume[exchange] + 0)
+        }
+        exit
+      }
     }
     {
       message = ""
@@ -165,21 +210,24 @@ current_run_exchange_volumes() {
         next
       }
 
-      if (executor == "toobit-main") {
-        toobit_volume += volume_usd
-      } else if (executor == "mexc-ui") {
-        mexc_volume += volume_usd
+      exchange = executor_exchange[executor]
+      if (exchange != "") {
+        exchange_volume[exchange] += volume_usd
       }
     }
     END {
-      printf "%.2f\t%.2f\n", toobit_volume + 0, mexc_volume + 0
+      if (snapshot != "") exit
+      for (i = 1; i <= exchange_count; i++) {
+        exchange = exchange_order[i]
+        print exchange "\t" format_number(exchange_volume[exchange] + 0)
+      }
     }
   ' "$log_path"
 }
 
 latest_position_snapshot() {
   local log_path="$1"
-  awk '
+  awk -v mapping="$TQ_EXECUTOR_MAP" '
     function valid_number(value) {
       return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
     }
@@ -188,6 +236,14 @@ latest_position_snapshot() {
       if (value == "Short") return "short"
       if (value == "Flat") return "flat"
       return ""
+    }
+    BEGIN {
+      mapping_count = split(mapping, mapping_entries, ",")
+      for (i = 1; i <= mapping_count; i++) {
+        equals = index(mapping_entries[i], "=")
+        executor = substr(mapping_entries[i], 1, equals - 1)
+        mapped_executor[executor] = 1
+      }
     }
     {
       projection = ""
@@ -214,16 +270,49 @@ latest_position_snapshot() {
       }
 
       if (projection != "coordinator_book" ||
+          !mapped_executor[initiator_venue] || !mapped_executor[carrier_venue] ||
           initiator_side == "" || carrier_side == "" ||
           !valid_number(initiator_qty) || !valid_number(carrier_qty) ||
           initiator_qty + 0 < 0 || carrier_qty + 0 < 0) {
         next
       }
 
-      if (initiator_venue == "toobit-main" && carrier_venue == "mexc-ui") {
-        latest = initiator_qty "\t" initiator_side "\t" carrier_qty "\t" carrier_side
-      } else if (initiator_venue == "mexc-ui" && carrier_venue == "toobit-main") {
-        latest = carrier_qty "\t" carrier_side "\t" initiator_qty "\t" initiator_side
+      latest = initiator_venue "\t" initiator_side "\t" initiator_qty "\t" \
+        carrier_venue "\t" carrier_side "\t" carrier_qty
+    }
+    END { if (latest != "") print latest }
+  ' "$log_path"
+}
+
+latest_net_position_snapshot() {
+  local log_path="$1"
+  awk '
+    function valid_number(value) {
+      return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
+    }
+    function normalize_side(value) {
+      if (value == "Long") return "long"
+      if (value == "Short") return "short"
+      if (value == "Flat") return "flat"
+      return ""
+    }
+    {
+      projection = ""
+      net_side = ""
+      net_qty = ""
+      for (i = 1; i <= NF; i++) {
+        equals = index($i, "=")
+        if (equals == 0) continue
+        key = substr($i, 1, equals - 1)
+        value = substr($i, equals + 1)
+        gsub(/^"|"$/, "", value)
+        if (key == "portfolio_projection") projection = value
+        if (key == "net_side") net_side = normalize_side(value)
+        if (key == "net_qty_btc") net_qty = value
+      }
+      if (projection == "coordinator_book" && net_side != "" &&
+          valid_number(net_qty) && net_qty + 0 >= 0) {
+        latest = net_side "\t" net_qty
       }
     }
     END { if (latest != "") print latest }
@@ -247,6 +336,57 @@ logfmt_value() {
       }
     }
   ' <<<"$line"
+}
+
+exchange_for_executor() {
+  local wanted="$1"
+  local entry executor exchange
+  local old_ifs="$IFS"
+  IFS=','
+  for entry in $TQ_EXECUTOR_MAP; do
+    executor="${entry%%=*}"
+    exchange="${entry#*=}"
+    if [[ "$executor" == "$wanted" ]]; then
+      printf '%s\n' "$exchange"
+      IFS="$old_ifs"
+      return 0
+    fi
+  done
+  IFS="$old_ifs"
+  return 1
+}
+
+executor_map_size() {
+  awk -F, '{ print NF }' <<<"$TQ_EXECUTOR_MAP"
+}
+
+first_mapped_exchange() {
+  local first_entry="${TQ_EXECUTOR_MAP%%,*}"
+  printf '%s\n' "${first_entry#*=}"
+}
+
+signed_position() {
+  local side="$1"
+  local quantity="$2"
+  awk -v side="$side" -v quantity="$quantity" 'BEGIN {
+    if (side == "short") quantity = -quantity
+    if (side == "flat") quantity = 0
+    printf "%.10f", quantity
+  }' | sed -E 's/0+$//; s/[.]$//; s/^-0$/0/'
+}
+
+sum_signed_position_series() {
+  awk -F '\t' '
+    $2 == "long" { total += $3 }
+    $2 == "short" { total -= $3 }
+    END {
+      formatted = sprintf("%.10f", total)
+      sub(/0+$/, "", formatted)
+      sub(/[.]$/, "", formatted)
+      if (formatted == "" || formatted == "-0") formatted = "0"
+      print formatted
+    }
+  '
 }
 
 config_instance_id() {
@@ -339,11 +479,42 @@ case "$TQ_REQUIRE_RUNTIME_CONTRACT" in
   *) die "TQ_REQUIRE_RUNTIME_CONTRACT must be 0 or 1" ;;
 esac
 
+TQ_EXECUTOR_MAP="${TQ_EXECUTOR_MAP:-toobit-main=toobit,mexc-ui=mexc}"
+TQ_SIDECAR_REQUIRED="${TQ_SIDECAR_REQUIRED:-1}"
+TQ_TEXTFILE_MODE="${TQ_TEXTFILE_MODE:-600}"
+
+case "$TQ_SIDECAR_REQUIRED" in
+  0|1) ;;
+  *) die "TQ_SIDECAR_REQUIRED must be 0 or 1" ;;
+esac
+
+case "$TQ_TEXTFILE_MODE" in
+  600|640) ;;
+  *) die "TQ_TEXTFILE_MODE must be 600 or 640" ;;
+esac
+
+executor_entries=()
+old_ifs="$IFS"
+IFS=',' read -r -a executor_entries <<<"$TQ_EXECUTOR_MAP"
+IFS="$old_ifs"
+[[ "${#executor_entries[@]}" -gt 0 ]] || die "TQ_EXECUTOR_MAP must not be empty"
+seen_executors=","
+for executor_entry in "${executor_entries[@]}"; do
+  [[ "$executor_entry" == *=* ]] || die "invalid TQ_EXECUTOR_MAP entry: $executor_entry"
+  executor_name="${executor_entry%%=*}"
+  exchange_name="${executor_entry#*=}"
+  valid_label_value "$executor_name" || die "invalid executor name: $executor_name"
+  valid_label_value "$exchange_name" || die "invalid exchange label: $exchange_name"
+  [[ "$seen_executors" != *",$executor_name,"* ]] || die "duplicate executor mapping: $executor_name"
+  seen_executors+="$executor_name,"
+done
+
 [[ "$TQ_TIMEZONE" =~ ^[A-Za-z0-9_+./-]+$ ]] || die "invalid TQ_TIMEZONE"
 
 for absolute_path in \
   "$TQ_REPO_ROOT" \
   "$TQ_CONFIG_PATH" \
+  "$TQ_RAW_LOG_GLOB" \
   "$TQ_RUN_MANIFEST" \
   "$TQ_DONE_MARKER" \
   "$TQ_TEXTFILE_DIR"
@@ -437,12 +608,10 @@ LAST_COMPLETED_CYCLE_TIMESTAMP=""
 LAST_COMPLETED_CYCLE_REAL_PNL=""
 COMPLETED_CYCLE_PNL_SERIES=""
 CURRENT_POSITION_VALID=0
-CURRENT_TOOBIT_POSITION_BTC=""
-CURRENT_TOOBIT_POSITION_SIDE=""
-CURRENT_MEXC_POSITION_BTC=""
-CURRENT_MEXC_POSITION_SIDE=""
-CURRENT_TOOBIT_VOLUME_USD=""
-CURRENT_MEXC_VOLUME_USD=""
+CURRENT_POSITION_SERIES=""
+CURRENT_NET_POSITION_BTC=""
+CURRENT_EXCHANGE_VOLUMES=""
+RISK_STOPPED=0
 
 if [[ "$ACTUAL_INSTANCE_ID" == "$TQ_INSTANCE_ID" ]]; then
   STRATEGY_IDENTITY_OK=1
@@ -522,8 +691,7 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       CURRENT_RUN_ID="$MANIFEST_RUN_ID"
       CURRENT_RUN_STARTED_TIMESTAMP="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
       COMPLETED_CYCLE_PNL_SERIES="$(completed_cycle_pnl_series "$MANIFEST_LOG_PATH")"
-      IFS=$'\t' read -r CURRENT_TOOBIT_VOLUME_USD CURRENT_MEXC_VOLUME_USD \
-        <<<"$(current_run_exchange_volumes "$MANIFEST_LOG_PATH")"
+      CURRENT_EXCHANGE_VOLUMES="$(mapped_executor_volumes "$MANIFEST_LOG_PATH")"
 
       CURRENT_PNL_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 0)"
       if [[ -n "$CURRENT_PNL_LINE" ]]; then
@@ -538,10 +706,12 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
           current_rebate="$(logfmt_value "$CURRENT_PNL_LINE" rebate_usdt)"
           current_risk_pnl="$(logfmt_value "$CURRENT_PNL_LINE" risk_pnl_usdt)"
           current_cycles_completed="$(logfmt_value "$CURRENT_PNL_LINE" cycles_completed)"
+          current_risk_stopped="$(logfmt_value "$CURRENT_PNL_LINE" risk_stopped)"
           is_number "$current_cash_pnl" && CURRENT_CASH_PNL="$current_cash_pnl"
           is_number "$current_rebate" && CURRENT_REBATE="$current_rebate"
           is_number "$current_risk_pnl" && CURRENT_RISK_PNL="$current_risk_pnl"
           is_number "$current_cycles_completed" && CURRENT_CYCLES_COMPLETED="$current_cycles_completed"
+          [[ "$current_risk_stopped" == "true" ]] && RISK_STOPPED=1
         fi
       fi
 
@@ -557,21 +727,39 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       POSITION_SNAPSHOT="$(latest_position_snapshot "$MANIFEST_LOG_PATH")"
       if [[ -n "$POSITION_SNAPSHOT" ]]; then
         IFS=$'\t' read -r \
-          current_toobit_position_btc \
-          current_toobit_position_side \
-          current_mexc_position_btc \
-          current_mexc_position_side <<<"$POSITION_SNAPSHOT"
+          current_initiator_venue \
+          current_initiator_side \
+          current_initiator_qty \
+          current_carrier_venue \
+          current_carrier_side \
+          current_carrier_qty <<<"$POSITION_SNAPSHOT"
 
-        if is_number "$current_toobit_position_btc" &&
-           is_number "$current_mexc_position_btc" &&
-           [[ "$current_toobit_position_side" =~ ^(long|short|flat)$ ]] &&
-           [[ "$current_mexc_position_side" =~ ^(long|short|flat)$ ]]
+        current_initiator_exchange="$(exchange_for_executor "$current_initiator_venue" || true)"
+        current_carrier_exchange="$(exchange_for_executor "$current_carrier_venue" || true)"
+        if [[ -n "$current_initiator_exchange" && -n "$current_carrier_exchange" ]] &&
+           is_number "$current_initiator_qty" &&
+           is_number "$current_carrier_qty" &&
+           [[ "$current_initiator_side" =~ ^(long|short|flat)$ ]] &&
+           [[ "$current_carrier_side" =~ ^(long|short|flat)$ ]]
         then
           CURRENT_POSITION_VALID=1
-          CURRENT_TOOBIT_POSITION_BTC="$current_toobit_position_btc"
-          CURRENT_TOOBIT_POSITION_SIDE="$current_toobit_position_side"
-          CURRENT_MEXC_POSITION_BTC="$current_mexc_position_btc"
-          CURRENT_MEXC_POSITION_SIDE="$current_mexc_position_side"
+          CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n%s\t%s\t%s\n' \
+            "$current_initiator_exchange" "$current_initiator_side" "$current_initiator_qty" \
+            "$current_carrier_exchange" "$current_carrier_side" "$current_carrier_qty")"
+          CURRENT_NET_POSITION_BTC="$(sum_signed_position_series <<<"$CURRENT_POSITION_SERIES")"
+        fi
+      fi
+
+      NET_POSITION_SNAPSHOT="$(latest_net_position_snapshot "$MANIFEST_LOG_PATH")"
+      if [[ -n "$NET_POSITION_SNAPSHOT" ]]; then
+        IFS=$'\t' read -r current_net_side current_net_qty <<<"$NET_POSITION_SNAPSHOT"
+        if [[ "$current_net_side" =~ ^(long|short|flat)$ ]] && is_number "$current_net_qty"; then
+          CURRENT_POSITION_VALID=1
+          CURRENT_NET_POSITION_BTC="$(signed_position "$current_net_side" "$current_net_qty")"
+          if [[ "$(executor_map_size)" -eq 1 ]]; then
+            CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n' \
+              "$(first_mapped_exchange)" "$current_net_side" "$current_net_qty")"
+          fi
         fi
       fi
     fi
@@ -660,7 +848,8 @@ EOF
 
 SIDECAR_UP=0
 SIDECAR_IDENTITY_OK=0
-if [[ -x "$TQ_TMUX_PATH" ]] &&
+if [[ "$TQ_SIDECAR_REQUIRED" -eq 1 ]] &&
+   [[ -x "$TQ_TMUX_PATH" ]] &&
    "$TQ_TMUX_PATH" has-session -t "$TQ_SIDECAR_SESSION" 2>/dev/null
 then
   SIDECAR_UP=1
@@ -686,7 +875,6 @@ METRIC_LABELS="product=\"$TQ_PRODUCT\",environment=\"$TQ_ENVIRONMENT\",server_id
 PROBE_TIMESTAMP="$(date +%s)"
 
 mkdir -p "$TQ_TEXTFILE_DIR"
-chmod 700 "$TQ_TEXTFILE_DIR"
 umask 077
 TEMP_METRICS="$(mktemp "$TQ_TEXTFILE_DIR/.tnauqquant.prom.XXXXXX")"
 
@@ -706,11 +894,13 @@ trap cleanup_temp EXIT HUP INT TERM
   emit_gauge tnauqquant_config_snapshot_match "Whether the on-disk config matches the running manifest snapshot." "$CONFIG_SNAPSHOT_MATCH"
   emit_gauge tnauqquant_log_binding_ok "Whether the current log belongs to the current run." "$LOG_BINDING_OK"
   emit_gauge tnauqquant_marker_binding_ok "Whether the terminal marker belongs to the current run." "$MARKER_BINDING_OK"
+  emit_gauge tnauqquant_sidecar_required "Whether this strategy requires the managed sidecar." "$TQ_SIDECAR_REQUIRED"
   emit_gauge tnauqquant_sidecar_up "Whether the managed sidecar session exists." "$SIDECAR_UP"
   emit_gauge tnauqquant_sidecar_identity_ok "Whether sidecar runtime identity and health match." "$SIDECAR_IDENTITY_OK"
   emit_gauge tnauqquant_probe_timestamp_seconds "Unix timestamp of the latest successful probe." "$PROBE_TIMESTAMP"
   emit_gauge tnauqquant_log_mtime_seconds "Unix mtime of the current bound log, or zero." "$LATEST_LOG_MTIME"
   emit_gauge tnauqquant_current_pnl_valid "Whether current-run stable PNL is available." "$CURRENT_PNL_VALID"
+  emit_gauge tnauqquant_risk_stopped "Whether the latest stable current-run PNL reports a risk stop." "$RISK_STOPPED"
   emit_gauge tnauqquant_current_position_valid "Whether a current-run coordinator position snapshot is available." "$CURRENT_POSITION_VALID"
   emit_gauge tnauqquant_completed_cycles_today "Completed cycles today across all runs in the configured timezone." "$TODAY_COMPLETED_CYCLES"
   if [[ -n "$CURRENT_RUN_ID" ]]; then
@@ -735,21 +925,22 @@ trap cleanup_temp EXIT HUP INT TERM
         "$METRIC_LABELS" "$cycle" "$cumulative_real_pnl"
     done <<<"$COMPLETED_CYCLE_PNL_SERIES"
   fi
-  if [[ "$CURRENT_POSITION_VALID" -eq 1 ]]; then
+  if [[ -n "$CURRENT_POSITION_SERIES" ]]; then
     printf '# HELP tnauqquant_current_position_btc Latest coordinator-reported position quantity by exchange and side.\n'
     printf '# TYPE tnauqquant_current_position_btc gauge\n'
-    printf 'tnauqquant_current_position_btc{%s,exchange="toobit",side="%s"} %s\n' \
-      "$METRIC_LABELS" "$CURRENT_TOOBIT_POSITION_SIDE" "$CURRENT_TOOBIT_POSITION_BTC"
-    printf 'tnauqquant_current_position_btc{%s,exchange="mexc",side="%s"} %s\n' \
-      "$METRIC_LABELS" "$CURRENT_MEXC_POSITION_SIDE" "$CURRENT_MEXC_POSITION_BTC"
+    while IFS=$'\t' read -r exchange side quantity; do
+      printf 'tnauqquant_current_position_btc{%s,exchange="%s",side="%s"} %s\n' \
+        "$METRIC_LABELS" "$exchange" "$side" "$quantity"
+    done <<<"$CURRENT_POSITION_SERIES"
   fi
-  if [[ -n "$CURRENT_TOOBIT_VOLUME_USD" && -n "$CURRENT_MEXC_VOLUME_USD" ]]; then
-    printf '# HELP tnauqquant_current_run_exchange_volume_usd Sum of trade_status volume_usd for the current manifest-bound run by exchange.\n'
+  [[ -n "$CURRENT_NET_POSITION_BTC" ]] && emit_gauge tnauqquant_current_net_position_btc "Signed net BTC position from the latest coordinator book." "$CURRENT_NET_POSITION_BTC"
+  if [[ -n "$CURRENT_EXCHANGE_VOLUMES" ]]; then
+    printf '# HELP tnauqquant_current_run_exchange_volume_usd Latest stable current-run volume by mapped exchange.\n'
     printf '# TYPE tnauqquant_current_run_exchange_volume_usd gauge\n'
-    printf 'tnauqquant_current_run_exchange_volume_usd{%s,exchange="toobit"} %s\n' \
-      "$METRIC_LABELS" "$CURRENT_TOOBIT_VOLUME_USD"
-    printf 'tnauqquant_current_run_exchange_volume_usd{%s,exchange="mexc"} %s\n' \
-      "$METRIC_LABELS" "$CURRENT_MEXC_VOLUME_USD"
+    while IFS=$'\t' read -r exchange volume_usd; do
+      printf 'tnauqquant_current_run_exchange_volume_usd{%s,exchange="%s"} %s\n' \
+        "$METRIC_LABELS" "$exchange" "$volume_usd"
+    done <<<"$CURRENT_EXCHANGE_VOLUMES"
   fi
   if [[ -n "$DONE_REASON" ]]; then
     printf '# HELP tnauqquant_done_marker Bound terminal marker by normalized reason.\n'
@@ -758,6 +949,6 @@ trap cleanup_temp EXIT HUP INT TERM
   fi
 } >"$TEMP_METRICS"
 
-chmod 600 "$TEMP_METRICS"
+chmod "$TQ_TEXTFILE_MODE" "$TEMP_METRICS"
 mv "$TEMP_METRICS" "$TQ_TEXTFILE_DIR/tnauqquant.prom"
 TEMP_METRICS=""

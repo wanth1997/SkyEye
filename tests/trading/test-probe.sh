@@ -53,7 +53,7 @@ cat >"$LOG_PATH" <<EOF
 time=${today_local}T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.1 session_cycle=1 real_pnl_usdt=10 cash_pnl_usdt=8 rebate_usdt=2 risk_pnl_usdt=9 cycles_completed=1 cycle_real_pnl_usdt=10
 time=${today_local}T09:30:00+08:00 level=INFO msg=pnl_status stable=false cycle_completed=false cycle_id=current.pending real_pnl_usdt=999 cash_pnl_usdt=999 rebate_usdt=0 risk_pnl_usdt=999 cycles_completed=1
 time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
-time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5 risk_stopped=false
 time=${today_local}T10:01:00+08:00 level=INFO msg=trade_status state=settled initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.125 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.125 portfolio_projection=coordinator_book
 time=${today_local}T10:02:00+08:00 level=INFO msg=coordinated_signal_skipped initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.103 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.103 portfolio_projection=coordinator_book
 time=${today_local}T10:03:00+08:00 level=INFO msg=invalid_snapshot initiator_venue=unknown initiator_side=Short initiator_qty_btc=99 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=99 portfolio_projection=coordinator_book
@@ -83,6 +83,9 @@ export TQ_POC_RUN_EXPECTED=1
 export TQ_REQUIRE_RUNTIME_CONTRACT=1
 export TQ_TIMEZONE=Asia/Taipei
 export TQ_TEXTFILE_DIR="$TEXTFILE_DIR"
+export TQ_EXECUTOR_MAP=toobit-main=toobit,mexc-ui=mexc
+export TQ_SIDECAR_REQUIRED=1
+export TQ_TEXTFILE_MODE=600
 export TQ_SIDECAR_SESSION=skyeye-fixture-missing
 export TQ_SIDECAR_IDENTITY_FILE="$TEST_ROOT/missing-sidecar.identity"
 export TQ_SIDECAR_HEALTH_URL=http://127.0.0.1:9/health
@@ -236,6 +239,7 @@ assert_metric tnauqquant_config_snapshot_match 0
 assert_metric tnauqquant_log_binding_ok 1
 assert_metric tnauqquant_sidecar_up 0
 assert_metric tnauqquant_sidecar_identity_ok 0
+assert_metric tnauqquant_sidecar_required 1
 
 printf 'case: duplicate process\n'
 start_quant
@@ -281,8 +285,10 @@ fi
 assert_metric tnauqquant_current_position_valid 1
 assert_metric tnauqquant_current_position_btc 0.103 'exchange="toobit",side="short"'
 assert_metric tnauqquant_current_position_btc 0.103 'exchange="mexc",side="long"'
+assert_metric tnauqquant_current_net_position_btc 0
 assert_metric tnauqquant_current_run_exchange_volume_usd 100.25 'exchange="toobit"'
 assert_metric tnauqquant_current_run_exchange_volume_usd 99.75 'exchange="mexc"'
+assert_metric tnauqquant_risk_stopped 0
 
 printf 'case: running config drift remains observable\n'
 config_before_drift="$TEST_ROOT/config.before-drift"
@@ -346,9 +352,85 @@ if [[ -n "$(metric_value tnauqquant_done_marker)" ]]; then
   exit 1
 fi
 
+printf 'case: single-exchange Lighter contract\n'
+stop_quant "$pid_one"
+
+LIGHTER_CONFIG_PATH="$FAKE_REPO/config/lighter_robinhood_btc_config.yaml"
+LIGHTER_LOG_PATH="$FAKE_REPO/logs/live-runs/20260826_235524_lighter_robinhood_btc_config.raw.log"
+LIGHTER_MANIFEST_PATH="$FAKE_REPO/run-state/lighter-robinhood-btc-canary/current.json"
+LIGHTER_MARKER_PATH="$FAKE_REPO/run-state/lighter-robinhood-btc-canary/current.done.json"
+mkdir -p "$(dirname "$LIGHTER_MANIFEST_PATH")"
+cat >"$LIGHTER_CONFIG_PATH" <<'EOF'
+instance_id: "lighter-robinhood-btc-canary"
+max_cycles: 500
+EOF
+cat >"$LIGHTER_LOG_PATH" <<EOF
+time=${today_local}T11:12:11+08:00 level=INFO msg=pnl_status stable=false cycle_completed=false real_pnl_usdt=999 volume_usd_by_executor=lighter-robinhood-main:999
+time=${today_local}T11:14:06+08:00 level=WARN msg=coordinator_domain_fenced_signal_skipped attempt_id=44 reservation_id=1268 linked_reservation_id=0 recovery_group_id=0 initiator_venue=lighter-robinhood-main initiator_side=Short initiator_qty_btc=0.00231 net_side=Short net_qty_btc=0.00231 portfolio_projection=coordinator_book
+time=${today_local}T11:14:14+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true session_cycle=196 real_pnl_usdt=1.4083 cash_pnl_usdt=1.4083 rebate_usdt=0 risk_pnl_usdt=1.4083 cycles_completed=195 cycle_real_pnl_usdt=-0.0151 risk_stopped=false volume_usd_by_executor=lighter-robinhood-main:68610.97
+EOF
+
+export TQ_STRATEGY=lighter-robinhood-btc-canary
+export TQ_INSTANCE_ID=lighter-robinhood-btc-canary
+export TQ_CONFIG_PATH="$LIGHTER_CONFIG_PATH"
+export TQ_RUN_MANIFEST="$LIGHTER_MANIFEST_PATH"
+export TQ_DONE_MARKER="$LIGHTER_MARKER_PATH"
+export TQ_EXECUTOR_MAP=lighter-robinhood-main=lighter
+export TQ_SIDECAR_REQUIRED=0
+export TQ_TEXTFILE_MODE=640
+
+lighter_config_sha="$(shasum -a 256 "$LIGHTER_CONFIG_PATH" | awk '{print $1}')"
+jq -n \
+  --arg run_id "20260826_235524_lighter_robinhood_btc_config" \
+  --arg strategy "$TQ_STRATEGY" \
+  --arg instance_id "$TQ_INSTANCE_ID" \
+  --arg config_sha256 "$lighter_config_sha" \
+  --arg executable "$FAKE_REPO/quant" \
+  --arg config_path "$LIGHTER_CONFIG_PATH" \
+  --arg log_path "$LIGHTER_LOG_PATH" \
+  --arg done_marker_path "$LIGHTER_MARKER_PATH" \
+  '{
+    schema_version: 1,
+    run_id: $run_id,
+    strategy: $strategy,
+    instance_id: $instance_id,
+    pid: 999999,
+    config_sha256: $config_sha256,
+    process_started_at: "2026-08-26T23:55:24Z",
+    executable: $executable,
+    config_path: $config_path,
+    log_path: $log_path,
+    done_marker_path: $done_marker_path,
+    state: "running"
+  }' >"$LIGHTER_MANIFEST_PATH"
+
+run_probe
+assert_metric tnauqquant_process_count 0
+assert_metric tnauqquant_run_expected 1
+assert_metric tnauqquant_current_real_pnl_usdt 1.4083
+assert_metric tnauqquant_current_run_exchange_volume_usd 68610.97 'exchange="lighter"'
+assert_metric tnauqquant_current_position_valid 1
+assert_metric tnauqquant_current_position_btc 0.00231 'exchange="lighter",side="short"'
+assert_metric tnauqquant_current_net_position_btc -0.00231
+assert_metric tnauqquant_sidecar_required 0
+assert_metric tnauqquant_risk_stopped 0
+
+printf 'case: single-exchange flat and long net positions\n'
+printf 'time=%sT11:15:00+08:00 level=INFO msg=position_update net_side=Flat net_qty_btc=0 portfolio_projection=coordinator_book\n' \
+  "$today_local" >>"$LIGHTER_LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_position_btc 0 'exchange="lighter",side="flat"'
+assert_metric tnauqquant_current_net_position_btc 0
+
+printf 'time=%sT11:16:00+08:00 level=INFO msg=position_update net_side=Long net_qty_btc=0.003 portfolio_projection=coordinator_book\n' \
+  "$today_local" >>"$LIGHTER_LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_position_btc 0.003 'exchange="lighter",side="long"'
+assert_metric tnauqquant_current_net_position_btc 0.003
+
 mode="$(stat -f '%Lp' "$METRICS_PATH" 2>/dev/null || stat -c '%a' "$METRICS_PATH")"
-if [[ "$mode" != "600" ]]; then
-  printf 'FAIL: metrics mode expected=600 actual=%s\n' "$mode" >&2
+if [[ "$mode" != "640" ]]; then
+  printf 'FAIL: metrics mode expected=640 actual=%s\n' "$mode" >&2
   exit 1
 fi
 
