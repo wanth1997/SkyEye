@@ -15,6 +15,24 @@
 ---
 -->
 
+## 2026-08-27 20:13 — 納管 Trading01 並建立多策略 Trading dashboards
+
+**改動摘要：** 將 Trading01 的單交易所 Lighter／Robinhood 策略接入既有 SkyEye，新增跨 server 的策略 inventory、recording rules、shadow alerts、fleet／detail dashboards，並修復 Linux probe textfile 目錄權限問題後完成 production 驗收。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/` — 泛化 executor mapping、單／雙交易所 metrics、source-side correlation ID scrub，新增 Linux Alloy coexistence fragment、systemd installer 與可存取的 `/var/lib/skyeye-trading/textfile` 預設值
+- `prometheus/rules/trading-targets.yml`、`prometheus/rules/trading.yml`、`prometheus/rules/tests/trading.test.yml` — 新增 Trading01 inventory、27 條多策略 recording rules、9 條 generic shadow alerts 與 rule tests
+- `loki/rules/fake/tnauqquant.yml` — 將 Trading log alerts 泛化為 product／environment selectors 並維持 shadow routing
+- `grafana/dashboards/Trading/trading-strategy-fleet.json`、`grafana/dashboards/Trading/trading-strategy-detail.json` — 新增每策略一列的 fleet dashboard 與 server／strategy detail dashboard
+- `tests/trading/` — 固定單交易所 probe、Linux 共存部署、scrub、dashboard 與中央規則 contract
+- `docs/`、`agents/alloy/trading/README.md` — 記錄跨 server contract、部署手冊、設計／implementation plan 與 production 驗收
+- `docs/work-log.md` — 記錄 PR #27、hotfix PR #28 與端到端 rollout 結果
+
+**原因/備註：** PR #27（`a69bce2`）與 textfile hotfix PR #28（`521ffba`）已合併部署。Trading01 Alloy 1.16 與既有 ZenIncome pipeline 共存，兩條 ZenIncome `up` 仍為 `1`；probe timer 與 oneshot service 正常，metrics file 為 `ubuntu:alloy` mode `0640`。中央收到 current-run Real P&L `1.4083 USDT`、195 cycles、Lighter volume `68,610.97 USD`、net position `0 BTC`，Loki 已收到 logs；實體 repo path、order/client/attempt/reservation IDs 均為 0 命中，scrub placeholders 有命中。Grafana 11.2 database health 為 ok，兩個 dashboard UID 均已 provision，啟動後 error 為 0；本次 session 沒有可用的 in-app browser，未能截取正式畫面。Trading01 本來就沒有 `quant` PID，但 manifest 仍標示 running，因此 `TradingProcessDown` 正確 firing 且 `notification_mode=shadow`；未修改／重啟 trading process，tmux pane PID、config 與 manifest checksum 均維持不變。
+
+---
+
 ## 2026-08-12 16:20 — Config drift 時保留 Trading P&L telemetry
 
 **改動摘要：** 將 runtime manifest 的 config snapshot 比對改為獨立可觀測信號；目前執行中的 PID、executable、instance 與 log binding 仍有效時，即使 config 檔案在 run 中被改動，probe 仍持續輸出該 run 的 P&L、cycle、position 與 log telemetry。
