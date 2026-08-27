@@ -1,0 +1,1147 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "apps",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Trading Fleet",
+      "type": "link",
+      "url": "/d/trading-strategy-fleet/trading-strategy-fleet"
+    }
+  ],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Text and color both indicate whether exactly one or more strategy processes are present.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "DOWN"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "RUNNING"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "noValue": "NO TELEMETRY",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_process_count{server_id=\"$server_id\",strategy=\"$strategy\"} > bool 0",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "PROCESS",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Minimum manifest, process identity, config snapshot, log, and terminal-marker binding state.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "INVALID"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "VALID"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "noValue": "NO CONTRACT",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_binding_ok{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "BINDING",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Latest stable P&L risk-stop state.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "CLEAR"
+                },
+                "1": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "STOPPED"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "noValue": "UNKNOWN",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_risk_stopped{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "RISK",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Latest stable real P&L for this manifest-bound run. It is not a daily or fleet aggregate.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 4,
+          "noValue": "NO STABLE P&L",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_real_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "CURRENT RUN P&L",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Completed cycles reported by the current manifest-bound run.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#B8C7E0",
+            "mode": "fixed"
+          },
+          "decimals": 0,
+          "noValue": "NO CYCLES",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_cycles_completed{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "COMPLETED CYCLES",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "FRESH means the source probe reported within 120 seconds.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "STALE"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "FRESH"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "noValue": "MISSING",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "time() - trading_strategy_probe_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"} < bool 120",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "TELEMETRY",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "X is the completed session cycle; Y is cumulative real P&L for this current manifest-bound run.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#5794F2",
+            "mode": "fixed"
+          },
+          "custom": {
+            "axisBorderShow": true,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisGridShow": true,
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineWidth": 2,
+            "pointSize": {
+              "fixed": 7
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "show": "points+lines"
+          },
+          "decimals": 4,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cumulative Real P&L"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Cumulative Real P&L (USDT)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cycle"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "Cycle"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 16,
+        "x": 0,
+        "y": 4
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "mapping": "auto",
+        "series": [
+          {
+            "name": {
+              "fixed": "Completed cycles"
+            }
+          }
+        ],
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_cycle_cumulative_real_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "REAL P&L · CYCLE XY",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "includeByName": {
+              "Value": true,
+              "cycle": true
+            },
+            "indexByName": {
+              "Value": 1,
+              "cycle": 0
+            },
+            "renameByName": {
+              "Value": "Cumulative Real P&L",
+              "cycle": "Cycle"
+            }
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "targetField": "Cycle"
+              }
+            ],
+            "fields": {}
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "desc": false,
+                "field": "Cycle"
+              }
+            ]
+          }
+        }
+      ],
+      "type": "xychart"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Signed BTC position by mapped exchange and side, plus coordinator-book net. Long is positive, short is negative, and flat is zero.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 8,
+          "noValue": "NO SNAPSHOT",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          },
+          "unit": "suffix: BTC"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 8,
+        "x": 16,
+        "y": 4
+      },
+      "id": 8,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"long\"})",
+          "instant": true,
+          "legendFormat": "{{exchange}} · LONG",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "-sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"short\"})",
+          "instant": true,
+          "legendFormat": "{{exchange}} · SHORT",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"flat\"})",
+          "instant": true,
+          "legendFormat": "{{exchange}} · FLAT",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_net_position_btc{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "NET",
+          "range": false,
+          "refId": "D"
+        }
+      ],
+      "title": "CURRENT POSITIONS · SIGNED",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Latest stable current-run P&L components. These values share the same source snapshot.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 4,
+          "noValue": "NO STABLE P&L",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 13
+      },
+      "id": 9,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_real_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "REAL",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_cash_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "CASH",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_rebate_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "REBATE",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_risk_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "RISK",
+          "range": false,
+          "refId": "D"
+        }
+      ],
+      "title": "P&L COMPONENTS",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Authoritative latest stable current-run volume grouped by executor-to-exchange mapping.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "fixedColor": "#5794F2",
+            "mode": "fixed"
+          },
+          "decimals": 2,
+          "noValue": "NO COMPLETED TRADES",
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 13
+      },
+      "id": 10,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_run_exchange_volume_usd{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "{{exchange}} · VOLUME",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "CURRENT RUN VOLUME · BY EXCHANGE",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "Real P&L delta and completion time of the latest completed cycle in the current run.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 4,
+          "noValue": "NO COMPLETED CYCLE",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1e-12
+              }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "COMPLETED AT"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#B8C7E0",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 13
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_last_cycle_real_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "CYCLE P&L",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_last_completed_cycle_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"} * 1000",
+          "instant": true,
+          "legendFormat": "COMPLETED AT",
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "title": "LATEST COMPLETED CYCLE",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "Source-scrubbed strategy logs. Order, client-action, and execution correlation identifiers are removed before Loki.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "id": 12,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "direction": "backward",
+          "editorMode": "code",
+          "expr": "{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "maxLines": 100,
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "STRATEGY LOGS · SCRUBBED",
+      "type": "logs"
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": [
+    "layer:business",
+    "product:tnauqquant",
+    "provisioned",
+    "trading"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(trading_target_info{product=\"tnauqquant\",environment=\"production\"}, server_id)",
+        "includeAll": false,
+        "label": "Server",
+        "multi": false,
+        "name": "server_id",
+        "options": [],
+        "query": {
+          "query": "label_values(trading_target_info{product=\"tnauqquant\",environment=\"production\"}, server_id)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(trading_target_info{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\"}, strategy)",
+        "includeAll": false,
+        "label": "Strategy",
+        "multi": false,
+        "name": "strategy",
+        "options": [],
+        "query": {
+          "query": "label_values(trading_target_info{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\"}, strategy)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now/d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "Asia/Taipei",
+  "title": "Trading · Strategy Detail",
+  "uid": "trading-strategy-detail",
+  "version": 1,
+  "weekStart": "monday"
+}
