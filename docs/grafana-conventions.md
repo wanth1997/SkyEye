@@ -12,6 +12,7 @@ SkyEye hosts Grafana for all wanbrain products. This file is the source of truth
 | **Edge** | Caddy / Cloudflare / DNS / external API probes | `Edge — Caddy`, `Edge — External API health` |
 | **SkyEye** | Self-monitoring: Prometheus TSDB, Loki ingestion, Alertmanager pipeline, Grafana itself | `SkyEye — Stack health` |
 | **Utilities** | Ad-hoc, experimental, or tooling dashboards | `Utilities — Blackbox probe explorer` |
+| **Trading** | Strategy detail and cross-strategy operations dashboards | Trading · Strategy Detail, Trading · Strategy Fleet |
 
 Folders are **auto-created** from the filesystem layout under `grafana/dashboards/`. Creating a new folder = `mkdir grafana/dashboards/{Folder}/` and drop a JSON file inside.
 
@@ -53,6 +54,13 @@ $instance   — query: label_values(<any metric>{product="$product",server_id="$
 ```
 
 A dashboard hard-coded to a single product should omit `$product` and note the binding in the description.
+
+Trading dashboards use trading_target_info as the selector inventory.
+The reusable detail view exposes server_id then strategy, in that order.
+Fleet views use one row per globally unique strategy slug and link that row to
+the detail view with both variables. Current-run P&L must stay per strategy;
+do not display a fleet sum unless every strategy first exposes a shared
+accounting-period contract.
 
 ## Required panels for overview dashboards
 
@@ -96,5 +104,7 @@ TODO (low priority): add a pre-commit hook that runs `jq` against every dashboar
 | SkyEye | SkyEye — Stack health | `skyeye-stack-health` | Built in-house — meta-monitoring: Prom TSDB / Loki ingest / AM notifications / Grafana HTTP / blackbox |
 | enyoung | enyoung — 日誌總覽 | `enyoung-logs-overview` | Log-derived observability: LogQL regexp parser extracts method/status/duration from Go chi access log. Stand-in until enyoung exposes `/metrics`. |
 | ZenIncome | ZenIncome — 日誌總覽 | `zenincome-logs-overview` | Log-derived: log level / business event / symbol / source file breakdown. Go Bitfinex funding-rate bot, no /metrics yet. |
+| Trading | Trading · Strategy Detail | trading-strategy-detail | Reusable server/strategy drill-down using generic trading strategy recording rules. |
+| Trading | Trading · Strategy Fleet | trading-strategy-fleet | One row per strategy with current-run P&L, runtime state, telemetry freshness, and detail navigation. |
 
 Add a row here each time a new dashboard is committed.

@@ -4,11 +4,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/tnauqquant-trading-overview.json"
+DETAIL_DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/trading-strategy-detail.json"
+FLEET_DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/trading-strategy-fleet.json"
 PROM_RULES="$REPO_ROOT/prometheus/rules/trading.yml"
 PROM_TARGET="$REPO_ROOT/prometheus/rules/trading-targets.yml"
 LOKI_RULES="$REPO_ROOT/loki/rules/fake/tnauqquant.yml"
 
-for required_file in "$DASHBOARD" "$PROM_RULES" "$PROM_TARGET" "$LOKI_RULES"; do
+for required_file in \
+  "$DASHBOARD" \
+  "$DETAIL_DASHBOARD" \
+  "$FLEET_DASHBOARD" \
+  "$PROM_RULES" \
+  "$PROM_TARGET" \
+  "$LOKI_RULES"
+do
   [[ -f "$required_file" ]] || {
     printf 'FAIL: missing central Trading config: %s\n' "$required_file" >&2
     exit 1
@@ -16,6 +25,8 @@ for required_file in "$DASHBOARD" "$PROM_RULES" "$PROM_TARGET" "$LOKI_RULES"; do
 done
 
 jq empty "$DASHBOARD"
+jq empty "$DETAIL_DASHBOARD"
+jq empty "$FLEET_DASHBOARD"
 jq -e '
   .uid == "tnauqquant-trading-overview" and
   .timezone == "Asia/Taipei" and
@@ -135,6 +146,75 @@ jq -e '
   ))
 ' "$DASHBOARD" >/dev/null
 
+jq -e '
+  .uid == "trading-strategy-detail" and
+  .timezone == "Asia/Taipei" and
+  .refresh == "15s" and
+  ([.templating.list[].name] == ["server_id", "strategy"]) and
+  (.templating.list[0].definition | contains("trading_target_info")) and
+  (.templating.list[1].definition |
+    contains("trading_target_info") and contains("server_id=\"$server_id\"")) and
+  ([.panels[].type] | index("xychart") != null) and
+  ([.panels[].type] | index("logs") != null) and
+  ([.panels[] | select(.type == "logs") |
+    .datasource.uid == "loki" and
+    (.targets[0].expr | contains("server_id=\"$server_id\"") and contains("strategy=\"$strategy\""))
+  ] == [true]) and
+  ([.panels[] | select(.title == "CURRENT RUN VOLUME · BY EXCHANGE") |
+    (.targets | length == 1) and
+    .targets[0].legendFormat == "{{exchange}} · VOLUME" and
+    (.targets[0].expr | contains("trading_strategy_current_run_exchange_volume_usd"))
+  ] == [true]) and
+  ([.panels[] | select(.title == "PROCESS") |
+    .fieldConfig.defaults.mappings[0].options["0"].text == "DOWN" and
+    .fieldConfig.defaults.mappings[0].options["1"].text == "RUNNING"
+  ] == [true]) and
+  ([.panels[] | select(.title == "BINDING") |
+    .fieldConfig.defaults.mappings[0].options["0"].text == "INVALID" and
+    .fieldConfig.defaults.mappings[0].options["1"].text == "VALID"
+  ] == [true]) and
+  ([.. | objects | .datasource?.uid? | select(. != null)] |
+    all(. == "prometheus" or . == "loki" or . == "alertmanager")) and
+  ([.panels[].targets[].expr] |
+    map(select(startswith("{") | not)) |
+    all(contains("trading_strategy_"))) and
+  ((tostring | contains("tnauqquant-prod-1")) | not) and
+  ((tostring | contains("toobit-mexc-btc")) | not) and
+  ((tostring | contains("trading01")) | not) and
+  ((tostring | contains("lighter-robinhood-btc-canary")) | not)
+' "$DETAIL_DASHBOARD" >/dev/null
+
+jq -e '
+  .uid == "trading-strategy-fleet" and
+  .timezone == "Asia/Taipei" and
+  .refresh == "15s" and
+  (.templating.list | length == 0) and
+  ([.panels[] | select(.type == "table")] | length == 1) and
+  ([.panels[] | select(.type == "table") |
+    (.targets[0].expr | contains("trading_target_info")) and
+    ([.transformations[].id] == ["joinByField", "organize"]) and
+    .transformations[0].options.byField == "strategy" and
+    .transformations[0].options.mode == "outer" and
+    (.fieldConfig.overrides | map(.matcher.options) |
+      contains(["Process", "Binding", "Risk", "Telemetry"])) and
+    ([.fieldConfig.overrides[].properties[]? |
+      select(.id == "links") | .value[].url |
+      contains("/d/trading-strategy-detail/") and
+      contains("var-server_id=") and
+      contains("var-strategy=")
+    ] == [true])
+  ] == [true]) and
+  ([.panels[].targets[].expr] |
+    map(select(contains("trading_strategy_current_real_pnl_usdt"))) |
+    all((startswith("sum(") or startswith("sum by")) | not)) and
+  ([.. | objects | .datasource?.uid? | select(. != null)] |
+    all(. == "prometheus" or . == "loki" or . == "alertmanager")) and
+  ((tostring | contains("tnauqquant-prod-1")) | not) and
+  ((tostring | contains("toobit-mexc-btc")) | not) and
+  ((tostring | contains("trading01")) | not) and
+  ((tostring | contains("lighter-robinhood-btc-canary")) | not)
+' "$FLEET_DASHBOARD" >/dev/null
+
 if rg -q 'development|tnauqquant-dev-mac|mexc-toobit-btc' \
   "$DASHBOARD" "$PROM_RULES" "$PROM_TARGET" "$LOKI_RULES"
 then
@@ -142,14 +222,55 @@ then
   exit 1
 fi
 
-for production_value in production tnauqquant-prod-1 toobit-mexc-btc; do
-  for target_file in "$PROM_RULES" "$PROM_TARGET" "$LOKI_RULES"; do
-    rg -q -- "$production_value" "$target_file" || {
-      printf 'FAIL: %s is missing production identity %s\n' \
-        "$target_file" "$production_value" >&2
-      exit 1
-    }
-  done
+for production_value in \
+  production \
+  tnauqquant-prod-1 \
+  toobit-mexc-btc \
+  trading01 \
+  lighter-robinhood-btc-canary
+do
+  rg -q -- "$production_value" "$PROM_TARGET" || {
+    printf 'FAIL: inventory is missing production identity %s\n' \
+      "$production_value" >&2
+    exit 1
+  }
+done
+
+rg -q 'record:[[:space:]]+trading_target_info' "$PROM_TARGET" || {
+  printf 'FAIL: generic trading_target_info inventory is missing\n' >&2
+  exit 1
+}
+
+for recording_rule in \
+  trading_strategy_process_count \
+  trading_strategy_binding_ok \
+  trading_strategy_current_real_pnl_usdt \
+  trading_strategy_current_net_position_btc \
+  trading_strategy_current_run_exchange_volume_usd \
+  trading_strategy_risk_stopped
+do
+  rg -q -- "record:[[:space:]]+$recording_rule" "$PROM_RULES" || {
+    printf 'FAIL: generic recording rule is missing: %s\n' "$recording_rule" >&2
+    exit 1
+  }
+done
+
+if rg -q 'tnauqquant-prod-1|toobit-mexc-btc|trading01|lighter-robinhood-btc-canary' \
+  "$PROM_RULES" "$LOKI_RULES"
+then
+  printf 'FAIL: generic Trading rules still hard-code a server or strategy\n' >&2
+  exit 1
+fi
+
+for generic_selector in 'product="tnauqquant"' 'environment="production"'; do
+  rg -q -- "$generic_selector" "$PROM_RULES" || {
+    printf 'FAIL: Prometheus rules are missing selector %s\n' "$generic_selector" >&2
+    exit 1
+  }
+  rg -q -- "$generic_selector" "$LOKI_RULES" || {
+    printf 'FAIL: Loki rules are missing selector %s\n' "$generic_selector" >&2
+    exit 1
+  }
 done
 
 prom_alert_count="$(rg -c '^[[:space:]]+- alert: Trading' "$PROM_RULES")"

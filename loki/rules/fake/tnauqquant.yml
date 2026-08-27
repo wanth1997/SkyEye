@@ -4,7 +4,7 @@ groups:
       rules:
         - alert: TradingCriticalLogEvent
           expr: |-
-            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production", server_id="tnauqquant-prod-1", strategy="toobit-mexc-btc", level=~"ERROR|FATAL"}[1m])) > 0)
+            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production", level=~"ERROR|FATAL"}[1m])) > 0)
           labels:
             notification_mode: shadow
             severity: High
@@ -13,7 +13,7 @@ groups:
             summary: '{{ $labels.server_id }} {{ $labels.strategy }} emitted ERROR/FATAL logs'
         - alert: TradingCriticalWarnEvent
           expr: |-
-            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production", server_id="tnauqquant-prod-1", strategy="toobit-mexc-btc", level="WARN"} | logfmt | msg=~"emergency_exit|unhedged_exposure"[1m])) > 0)
+            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production", level="WARN"} | logfmt | msg=~"emergency_exit|unhedged_exposure"[1m])) > 0)
           labels:
             notification_mode: shadow
             severity: High

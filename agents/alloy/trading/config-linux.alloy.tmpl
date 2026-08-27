@@ -1,0 +1,118 @@
+// SkyEye trading fragment for a Linux host with an existing Alloy deployment.
+// The central write receivers are defined by the host's base Alloy config.
+
+loki.source.file "skyeye_trading_raw" {
+  targets = [
+    {
+      __path__    = "@@RAW_LOG_GLOB@@",
+      product     = "@@PRODUCT@@",
+      environment = "@@ENVIRONMENT@@",
+      server_id   = "@@SERVER_ID@@",
+      strategy    = "@@STRATEGY@@",
+    },
+  ]
+
+  tail_from_end           = false
+  on_positions_file_error = "restart_from_end"
+  forward_to              = [loki.process.skyeye_trading.receiver]
+
+  file_match {
+    enabled           = true
+    sync_period       = "10s"
+    ignore_older_than = "24h"
+  }
+}
+
+loki.process "skyeye_trading" {
+  forward_to = [loki.write.central.receiver]
+
+  stage.logfmt {
+    mapping = {
+      time                   = "",
+      level                  = "",
+      msg                    = "",
+      stable                 = "",
+      cycle_completed        = "",
+      cycle_id               = "",
+      real_pnl_usdt          = "",
+      cash_pnl_usdt          = "",
+      rebate_usdt            = "",
+      risk_pnl_usdt          = "",
+      cycles_completed       = "",
+      cycles_completed_today = "",
+      process_latency_ms     = "",
+    }
+  }
+
+  stage.timestamp {
+    source            = "time"
+    format            = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+
+  stage.regex {
+    source     = "filename"
+    expression = "^.*/(?P<run_id>[^/]+)\\.raw\\.log$"
+  }
+
+  stage.labels {
+    values = {
+      level  = "",
+      run_id = "",
+    }
+  }
+
+  stage.replace {
+    expression = "@@REPO_ROOT_REGEX@@"
+    replace    = "[REPO_ROOT]"
+  }
+
+  stage.replace {
+    expression = "([A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,})"
+    replace    = "[EMAIL]"
+  }
+
+  stage.replace {
+    expression = "(?i)authorization[=:][[:space:]]*([^[:space:]]+)"
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = "(?i)token=([^[:space:]]+)"
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = "(?i)(order_id|client_action_id)=([^[:space:]]+)"
+    replace    = "[ORDER_REF]"
+  }
+
+  stage.replace {
+    expression = "(?i)(attempt_id|parent_attempt_id|reservation_id|linked_reservation_id|recovery_group_id)=([^[:space:]]+)"
+    replace    = "[TRACE_REF]"
+  }
+
+  stage.label_drop {
+    values = ["filename"]
+  }
+
+  stage.label_keep {
+    values = ["product", "environment", "server_id", "strategy", "run_id", "level"]
+  }
+}
+
+prometheus.exporter.unix "skyeye_trading_textfile" {
+  set_collectors = ["textfile"]
+
+  textfile {
+    directory = "@@TEXTFILE_DIR@@"
+  }
+}
+
+prometheus.scrape "skyeye_trading_probe" {
+  targets         = prometheus.exporter.unix.skyeye_trading_textfile.targets
+  forward_to      = [prometheus.remote_write.central.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  job_name        = "tnauqquant-trading-probe"
+}

@@ -90,6 +90,11 @@ loki.process "trading" {
     replace    = "[ORDER_REF]"
   }
 
+  stage.replace {
+    expression = "(?i)(attempt_id|parent_attempt_id|reservation_id|linked_reservation_id|recovery_group_id)=([^[:space:]]+)"
+    replace    = "[TRACE_REF]"
+  }
+
   stage.label_drop {
     values = ["filename"]
   }
