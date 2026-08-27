@@ -80,4 +80,3 @@ Tests cover log fixtures for both executor layouts, Linux rendering/coexistence,
 Before and after the remote rollout, record the trading PID state and confirm the installer did not start or restart it. Confirm ZenIncome series remain present. Trading01 is expected to appear as down if its manifest still declares a run but no trading process exists; this is a real state to surface, not normalize away.
 
 New alerts remain `notification_mode=shadow`. Paging is enabled only after a separate canary review establishes expected telemetry cadence and false-positive behavior.
-
