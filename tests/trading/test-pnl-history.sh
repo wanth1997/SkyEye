@@ -114,6 +114,7 @@ assert_metric tnauqquant_pnl_history_first_supported_event_timestamp_seconds 178
 assert_metric tnauqquant_pnl_history_last_event_timestamp_seconds 1787796000
 assert_metric tnauqquant_pnl_history_build_timestamp_seconds "$TQ_PNL_HISTORY_NOW_SECONDS"
 assert_metric tnauqquant_pnl_history_valid 1
+assert_metric tnauqquant_pnl_history_current_value_usdt 13.5
 
 point_count="$(awk 'index($0, "tnauqquant_pnl_history_point_value_usdt{") == 1 { count++ } END { print count + 0 }' "$METRICS_PATH")"
 [[ "$point_count" == "4" ]] || {
@@ -210,6 +211,28 @@ fi
   exit 1
 }
 
+printf 'case: coverage begins with the first supported value, not synthetic zeroes\n'
+COVERAGE_ROOT="$TEST_ROOT/coverage"
+mkdir -p "$COVERAGE_ROOT/raw" "$COVERAGE_ROOT/textfile"
+cat >"$COVERAGE_ROOT/raw/run-coverage.raw.log" <<'EOF'
+time=2026-08-27T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=coverage.1 cycle_real_pnl_usdt=3 real_pnl_usdt=3
+EOF
+export TQ_RAW_LOG_GLOB="$COVERAGE_ROOT/raw/*.raw.log"
+export TQ_TEXTFILE_DIR="$COVERAGE_ROOT/textfile"
+export TQ_PNL_HISTORY_CACHE_DIR="$COVERAGE_ROOT/cache"
+export TQ_PNL_HISTORY_DAYS=2
+export TQ_PNL_HISTORY_MAX_CURRENT_DAY_CYCLES=10
+"$BUILDER"
+METRICS_PATH="$COVERAGE_ROOT/textfile/tnauqquant-pnl-history.prom"
+assert_point 0 3 1787792400
+assert_metric tnauqquant_pnl_history_current_value_usdt 3
+coverage_point_count="$(awk 'index($0, "tnauqquant_pnl_history_point_value_usdt{") == 1 { count++ } END { print count + 0 }' "$METRICS_PATH")"
+[[ "$coverage_point_count" == "1" ]] || {
+  printf 'FAIL: unsupported pre-coverage days must not emit synthetic points; got %s\n' \
+    "$coverage_point_count" >&2
+  exit 1
+}
+
 printf 'case: empty source emits validity metadata without a fake point\n'
 EMPTY_ROOT="$TEST_ROOT/empty"
 mkdir -p "$EMPTY_ROOT/raw" "$EMPTY_ROOT/textfile"
@@ -222,6 +245,10 @@ METRICS_PATH="$EMPTY_ROOT/textfile/tnauqquant-pnl-history.prom"
 assert_metric tnauqquant_pnl_history_valid 0
 if rg -q '^tnauqquant_pnl_history_point_' "$METRICS_PATH"; then
   printf 'FAIL: empty history must not emit a fabricated P&L point\n' >&2
+  exit 1
+fi
+if rg -q '^tnauqquant_pnl_history_current_value_usdt' "$METRICS_PATH"; then
+  printf 'FAIL: empty history must not emit a fabricated current P&L value\n' >&2
   exit 1
 fi
 

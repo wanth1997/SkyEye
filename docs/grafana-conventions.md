@@ -12,7 +12,7 @@ SkyEye hosts Grafana for all wanbrain products. This file is the source of truth
 | **Edge** | Caddy / Cloudflare / DNS / external API probes | `Edge — Caddy`, `Edge — External API health` |
 | **SkyEye** | Self-monitoring: Prometheus TSDB, Loki ingestion, Alertmanager pipeline, Grafana itself | `SkyEye — Stack health` |
 | **Utilities** | Ad-hoc, experimental, or tooling dashboards | `Utilities — Blackbox probe explorer` |
-| **Trading** | Strategy detail and cross-strategy operations dashboards | Trading · Strategy Detail, Trading · Strategy Fleet |
+| **Trading** | Strategy detail and cross-strategy operations dashboards | Trading · 策略詳情, Trading · 策略總覽 |
 
 Folders are **auto-created** from the filesystem layout under `grafana/dashboards/`. Creating a new folder = `mkdir grafana/dashboards/{Folder}/` and drop a JSON file inside.
 
@@ -82,7 +82,8 @@ An "Overview" dashboard (anything in the `Overview/` folder) should have at mini
 ## Workflow — modifying a provisioned dashboard
 
 - UI edits DO persist until the next provisioning poll (~60 s) — then they get reverted to the committed JSON.
-- To persist: UI edit → Share → Export → Save to file → git commit.
+- For dashboards with `editable=false`, edit a temporary copy outside the provisioned folder, export it, apply the resulting model to the Git JSON, then delete the temporary copy.
+- To persist: export → validate the JSON and datasource UIDs → update the Git JSON → git commit. Git remains the authoritative source.
 - Never "Save as" inside the provisioned folder — creates a DB-only copy that conflicts with provisioning.
 
 ## CI / validation
@@ -104,7 +105,8 @@ TODO (low priority): add a pre-commit hook that runs `jq` against every dashboar
 | SkyEye | SkyEye — Stack health | `skyeye-stack-health` | Built in-house — meta-monitoring: Prom TSDB / Loki ingest / AM notifications / Grafana HTTP / blackbox |
 | enyoung | enyoung — 日誌總覽 | `enyoung-logs-overview` | Log-derived observability: LogQL regexp parser extracts method/status/duration from Go chi access log. Stand-in until enyoung exposes `/metrics`. |
 | ZenIncome | ZenIncome — 日誌總覽 | `zenincome-logs-overview` | Log-derived: log level / business event / symbol / source file breakdown. Go Bitfinex funding-rate bot, no /metrics yet. |
-| Trading | Trading · Strategy Detail | trading-strategy-detail | Reusable server/strategy drill-down using generic trading strategy recording rules. |
-| Trading | Trading · Strategy Fleet | trading-strategy-fleet | One row per strategy with current-run P&L, runtime state, telemetry freshness, and detail navigation. |
+| Trading | Trading · 即時營運 | tnauqquant-trading-overview | PnL-first production view with cross-round accumulated Real PnL and compact health summary. |
+| Trading | Trading · 策略詳情 | trading-strategy-detail | Reusable server/strategy drill-down using generic trading strategy recording rules. |
+| Trading | Trading · 策略總覽 | trading-strategy-fleet | One row per strategy with PnL first, exact process state, telemetry freshness, active shadow alerts, and detail navigation. |
 
 Add a row here each time a new dashboard is committed.

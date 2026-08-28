@@ -15,12 +15,37 @@
       }
     ]
   },
-  "description": "Compact production view for TNAUQQuant. The main chart carries authoritative cycle_real_pnl_usdt deltas across run and day boundaries into a bounded 30-day accumulated Real P&L history; coverage metadata makes excluded legacy records and builder age visible. Positions, volume and status remain scoped to the latest manifest-bound run; logs are scrubbed before Loki.",
+  "description": "以損益為主的 TNAUQQuant 營運頁面。主圖呈現跨輪、跨日連續的 30 日累積實現損益；右側集中顯示損益與監控摘要。持倉、成交額與日誌只代表目前 manifest 綁定的 run。歷史資料起點與被排除的舊格式事件會獨立揭露。",
   "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "apps",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "策略總覽",
+      "tooltip": "查看所有受監控策略",
+      "type": "link",
+      "url": "/d/trading-strategy-fleet/trading-strategy-fleet"
+    },
+    {
+      "asDropdown": false,
+      "icon": "drilldown",
+      "includeVars": false,
+      "keepTime": true,
+      "tags": [],
+      "targetBlank": false,
+      "title": "策略詳情",
+      "tooltip": "查看目前策略的本輪診斷",
+      "type": "link",
+      "url": "/d/trading-strategy-detail/trading-strategy-detail?var-server_id=tnauqquant-prod-1&var-strategy=toobit-mexc-btc"
+    }
+  ],
   "liveNow": false,
   "panels": [
     {
@@ -28,7 +53,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Cross-run accumulated Real P&L for the rolling 30-day display window. The local history builder emits one baseline, completed-day closes, and current-day cycle points. Grafana joins bounded point ordinals to explicit event timestamps and renders the resulting real time field as a step-after line.",
+      "description": "只加總具完整 cycle_id 與 cycle_real_pnl_usdt contract 的完成週期。已完成日期壓縮為隔日零點收盤值，當日保留每個週期點；資料涵蓋開始前不畫假零值。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -78,7 +103,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "noValue": "尚無可用歷史損益"
         },
         "overrides": [
           {
@@ -108,8 +134,8 @@
         ]
       },
       "gridPos": {
-        "h": 9,
-        "w": 16,
+        "h": 10,
+        "w": 18,
         "x": 0,
         "y": 0
       },
@@ -153,7 +179,7 @@
           "refId": "B"
         }
       ],
-      "title": "ACCUMULATED REAL P&L · 30D",
+      "title": "跨輪累積實現損益 · 近 30 日",
       "transformations": [
         {
           "id": "joinByField",
@@ -211,7 +237,395 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Current positions from the latest coordinator snapshot. Each exchange name explicitly shows LONG, SHORT, or FLAT; long is green and positive, short is red and negative, flat is neutral, and NET is the signed sum.",
+      "description": "跨輪累積損益來自歷史 builder；本輪與最近週期損益只代表目前 manifest 綁定的 run。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 4,
+          "noValue": "等待損益資料",
+          "unit": "suffix: USDT",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1E-12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 49,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_pnl_history_current_value_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "跨輪累積",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_current_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "本輪",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "tnauqquant_last_cycle_real_pnl_usdt{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "最近週期",
+          "range": false,
+          "refId": "C"
+        }
+      ],
+      "title": "損益摘要",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "程序是精確數量：0=停止、1=運行中、2 以上=重複程序。資料綁定代表 process、config、log 與 marker 是否屬於同一個 run；風控狀態代表策略是否回報 risk_stopped；資料與歷史更新超過 180 秒即視為過期。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "無資料",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "程序"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "未知"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "停止"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "運行中"
+                      }
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 2,
+                      "to": 1000000000,
+                      "result": {
+                        "color": "red",
+                        "index": 2,
+                        "text": "重複程序"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "資料綁定"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "未知"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "異常"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "正常"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "風控狀態"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "未知"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "正常"
+                      },
+                      "1": {
+                        "color": "red",
+                        "index": 1,
+                        "text": "已觸發停機"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "資料更新"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "無資料"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "過期"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "正常"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "歷史更新"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "無資料"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "過期"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "正常"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
+      "id": 50,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_process_count{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "程序",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_binding_ok{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "資料綁定",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_risk_stopped{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "風控狀態",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "time() - trading_strategy_probe_timestamp_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} < bool 180",
+          "instant": true,
+          "legendFormat": "資料更新",
+          "range": false,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "(time() - tnauqquant_pnl_history_build_timestamp_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} < bool 180) * on (product, environment, server_id, strategy) tnauqquant_pnl_history_valid{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "歷史更新",
+          "range": false,
+          "refId": "E"
+        }
+      ],
+      "title": "監控摘要",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "目前 coordinator snapshot 的 signed BTC 持倉。多單為正、空單為負、空倉為零，NET 是所有交易所的淨部位。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -227,7 +641,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "TOOBIT · LONG"
+              "options": "TOOBIT · 多"
             },
             "properties": [
               {
@@ -242,7 +656,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "MEXC · LONG"
+              "options": "MEXC · 多"
             },
             "properties": [
               {
@@ -257,7 +671,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "TOOBIT · SHORT"
+              "options": "TOOBIT · 空"
             },
             "properties": [
               {
@@ -272,7 +686,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "MEXC · SHORT"
+              "options": "MEXC · 空"
             },
             "properties": [
               {
@@ -287,7 +701,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "TOOBIT · FLAT"
+              "options": "TOOBIT · 空倉"
             },
             "properties": [
               {
@@ -302,7 +716,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "MEXC · FLAT"
+              "options": "MEXC · 空倉"
             },
             "properties": [
               {
@@ -317,7 +731,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "NET"
+              "options": "淨部位"
             },
             "properties": [
               {
@@ -341,7 +755,7 @@
                     },
                     {
                       "color": "#73BF69",
-                      "value": 1e-12
+                      "value": 1E-12
                     }
                   ]
                 }
@@ -351,10 +765,10 @@
         ]
       },
       "gridPos": {
-        "h": 9,
+        "h": 7,
         "w": 8,
-        "x": 16,
-        "y": 0
+        "x": 0,
+        "y": 10
       },
       "id": 40,
       "options": {
@@ -383,7 +797,7 @@
           "editorMode": "code",
           "expr": "sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"long\"})",
           "instant": true,
-          "legendFormat": "TOOBIT · LONG",
+          "legendFormat": "TOOBIT · 多",
           "range": false,
           "refId": "A"
         },
@@ -395,7 +809,7 @@
           "editorMode": "code",
           "expr": "-sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"short\"})",
           "instant": true,
-          "legendFormat": "TOOBIT · SHORT",
+          "legendFormat": "TOOBIT · 空",
           "range": false,
           "refId": "B"
         },
@@ -407,7 +821,7 @@
           "editorMode": "code",
           "expr": "sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\",side=\"flat\"})",
           "instant": true,
-          "legendFormat": "TOOBIT · FLAT",
+          "legendFormat": "TOOBIT · 空倉",
           "range": false,
           "refId": "C"
         },
@@ -419,7 +833,7 @@
           "editorMode": "code",
           "expr": "sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"long\"})",
           "instant": true,
-          "legendFormat": "MEXC · LONG",
+          "legendFormat": "MEXC · 多",
           "range": false,
           "refId": "D"
         },
@@ -431,7 +845,7 @@
           "editorMode": "code",
           "expr": "-sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"short\"})",
           "instant": true,
-          "legendFormat": "MEXC · SHORT",
+          "legendFormat": "MEXC · 空",
           "range": false,
           "refId": "E"
         },
@@ -443,7 +857,7 @@
           "editorMode": "code",
           "expr": "sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\",side=\"flat\"})",
           "instant": true,
-          "legendFormat": "MEXC · FLAT",
+          "legendFormat": "MEXC · 空倉",
           "range": false,
           "refId": "F"
         },
@@ -455,123 +869,12 @@
           "editorMode": "code",
           "expr": "(sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",side=\"long\"}) or vector(0)) - (sum(tnauqquant_current_position_btc{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",side=\"short\"}) or vector(0))",
           "instant": true,
-          "legendFormat": "NET",
+          "legendFormat": "淨部位",
           "range": false,
           "refId": "G"
         }
       ],
-      "title": "CURRENT POSITIONS · SIGNED",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Filesystem modification time of the current manifest-bound raw log, plus its current age.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "fixedColor": "#B8C7E0",
-            "mode": "fixed"
-          },
-          "decimals": 0,
-          "mappings": [],
-          "noValue": "No bound log",
-          "unit": "dateTimeAsLocal"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Age"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "s"
-              },
-              {
-                "id": "color",
-                "value": {
-                  "mode": "thresholds"
-                }
-              },
-              {
-                "id": "thresholds",
-                "value": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "yellow",
-                      "value": 45
-                    },
-                    {
-                      "color": "red",
-                      "value": 120
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 0,
-        "y": 9
-      },
-      "id": 44,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_log_mtime_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} * 1000",
-          "instant": true,
-          "legendFormat": "Updated",
-          "range": false,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "time() - tnauqquant_log_mtime_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
-          "instant": true,
-          "legendFormat": "Age",
-          "range": false,
-          "refId": "B"
-        }
-      ],
-      "title": "LATEST LOG UPDATE",
+      "title": "目前持倉 · 多空方向",
       "type": "stat"
     },
     {
@@ -579,12 +882,12 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Five newest scrubbed lines from the current manifest-bound strategy log, newest first.",
+      "description": "來源端已去除訂單、client action、execution correlation 與本機路徑等敏感資訊；只查最近六小時並由新到舊顯示。",
       "gridPos": {
         "h": 7,
         "w": 16,
         "x": 8,
-        "y": 9
+        "y": 10
       },
       "id": 45,
       "options": {
@@ -612,15 +915,16 @@
           "refId": "A"
         }
       ],
-      "title": "LATEST 5 LOG LINES",
-      "type": "logs"
+      "title": "最新 5 筆策略日誌",
+      "type": "logs",
+      "timeFrom": "6h"
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Current manifest-bound run turnover by execution venue. Each value is the sum of volume_usd from trade_status records with an actual Toobit or MEXC executor; skipped signals and settlement-only records are excluded.",
+      "description": "目前 manifest 綁定 run 的實際成交額，單位為 USD；不跨 run 累積。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -629,7 +933,7 @@
           },
           "decimals": 2,
           "mappings": [],
-          "noValue": "No completed trades",
+          "noValue": "尚無完成交易",
           "unit": "currencyUSD"
         },
         "overrides": [
@@ -667,9 +971,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 10,
+        "w": 8,
         "x": 0,
-        "y": 16
+        "y": 17
       },
       "id": 47,
       "options": {
@@ -698,7 +1002,7 @@
           "editorMode": "code",
           "expr": "tnauqquant_current_run_exchange_volume_usd{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"toobit\"}",
           "instant": true,
-          "legendFormat": "TOOBIT VOLUME",
+          "legendFormat": "TOOBIT 成交額",
           "range": false,
           "refId": "A"
         },
@@ -710,12 +1014,12 @@
           "editorMode": "code",
           "expr": "tnauqquant_current_run_exchange_volume_usd{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\",exchange=\"mexc\"}",
           "instant": true,
-          "legendFormat": "MEXC VOLUME",
+          "legendFormat": "MEXC 成交額",
           "range": false,
           "refId": "B"
         }
       ],
-      "title": "CURRENT RUN VOLUME · BY EXCHANGE",
+      "title": "本輪成交額 · 依交易所",
       "type": "stat"
     },
     {
@@ -723,7 +1027,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Health and completeness of the independent 30-day P&L history builder. AGE shows time since the last successful atomic build, COVERAGE START is the first retained authoritative cycle, and LEGACY SKIPPED counts completed-looking records excluded because cycle_id or cycle_real_pnl_usdt was absent.",
+      "description": "更新秒數是距離最近一次成功 history build 的時間；資料起點是第一筆具完整 contract 的 authoritative cycle；排除舊資料是因缺少 cycle_id 或 cycle_real_pnl_usdt 而未納入的事件數。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -732,14 +1036,14 @@
           },
           "decimals": 0,
           "mappings": [],
-          "noValue": "No history",
+          "noValue": "尚無歷史資料",
           "unit": "dateTimeAsLocal"
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "AGE"
+              "options": "更新秒數"
             },
             "properties": [
               {
@@ -767,7 +1071,7 @@
                     },
                     {
                       "color": "red",
-                      "value": 300
+                      "value": 180
                     }
                   ]
                 }
@@ -777,7 +1081,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "LEGACY SKIPPED"
+              "options": "排除舊資料"
             },
             "properties": [
               {
@@ -790,9 +1094,9 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 10,
-        "y": 16
+        "w": 16,
+        "x": 8,
+        "y": 17
       },
       "id": 48,
       "options": {
@@ -821,7 +1125,7 @@
           "editorMode": "code",
           "expr": "time() - tnauqquant_pnl_history_build_timestamp_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
           "instant": true,
-          "legendFormat": "AGE",
+          "legendFormat": "更新秒數",
           "range": false,
           "refId": "A"
         },
@@ -833,7 +1137,7 @@
           "editorMode": "code",
           "expr": "tnauqquant_pnl_history_first_supported_event_timestamp_seconds{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} * 1000",
           "instant": true,
-          "legendFormat": "COVERAGE START",
+          "legendFormat": "資料起點",
           "range": false,
           "refId": "B"
         },
@@ -845,100 +1149,12 @@
           "editorMode": "code",
           "expr": "tnauqquant_pnl_history_skipped_legacy_events{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
           "instant": true,
-          "legendFormat": "LEGACY SKIPPED",
+          "legendFormat": "排除舊資料",
           "range": false,
           "refId": "C"
         }
       ],
-      "title": "P&L HISTORY COVERAGE",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "RUNNING means at least one process exactly matches the configured trading executable and config. SHUTDOWN means no matching process. Missing monitoring data is shown as UNKNOWN, not as a false shutdown.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "SHUTDOWN"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "RUNNING"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "UNKNOWN",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 8,
-        "x": 16,
-        "y": 16
-      },
-      "id": 46,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "tnauqquant_process_count{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} > bool 0",
-          "instant": true,
-          "legendFormat": "STATUS",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "STRATEGY STATUS",
+      "title": "資料涵蓋範圍",
       "type": "stat"
     }
   ],
@@ -967,8 +1183,8 @@
     ]
   },
   "timezone": "Asia/Taipei",
-  "title": "Trading · Live Operations",
+  "title": "Trading · 即時營運",
   "uid": "tnauqquant-trading-overview",
-  "version": 1,
+  "version": 15,
   "weekStart": "monday"
 }

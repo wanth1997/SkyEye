@@ -45,6 +45,38 @@ tests:
         alertname: TradingTelemetryMissing
         exp_alerts: []
 
+  - name: frozen probe timestamps alert even while stale textfiles keep scraping
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0x10'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TradingTelemetryMissing
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: tnauqquant-prod-1
+              strategy: toobit-mexc-btc
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc telemetry is missing or stale'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: trading01
+              strategy: lighter-robinhood-btc-canary
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'trading01 lighter-robinhood-btc-canary telemetry is missing or stale'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
+
   - name: duplicate production process fires a shadow alert
     interval: 30s
     input_series:
@@ -150,7 +182,7 @@ tests:
               severity: High
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc telemetry is missing'
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc telemetry is missing or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
           - exp_labels:
               product: tnauqquant
@@ -160,7 +192,7 @@ tests:
               severity: High
               notification_mode: shadow
             exp_annotations:
-              summary: 'trading01 lighter-robinhood-btc-canary telemetry is missing'
+              summary: 'trading01 lighter-robinhood-btc-canary telemetry is missing or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
 
   - name: Trading01 stale running manifest surfaces process down without sidecar noise
@@ -246,3 +278,82 @@ tests:
         exp_samples:
           - labels: 'trading_strategy_current_run_exchange_volume_usd{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary",exchange="lighter"}'
             value: 68610.97
+
+  - name: healthy PnL history remains quiet
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TradingPnlHistoryUnavailable
+        exp_alerts: []
+
+  - name: frozen PnL history builder alerts through capability inventory
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0x12'
+      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TradingPnlHistoryUnavailable
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: tnauqquant-prod-1
+              strategy: toobit-mexc-btc
+              quote_currency: USDT
+              history_capable: "true"
+              severity: Medium
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc P&L history is unavailable or stale'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#pnl-history-unavailable'
+
+  - name: invalid PnL history alerts while build timestamps advance
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x12'
+      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0x12'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TradingPnlHistoryUnavailable
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: tnauqquant-prod-1
+              strategy: toobit-mexc-btc
+              quote_currency: USDT
+              history_capable: "true"
+              severity: Medium
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc P&L history is unavailable or stale'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#pnl-history-unavailable'
+
+  - name: absent PnL history metrics alert only for capable targets
+    interval: 30s
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TradingPnlHistoryUnavailable
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: tnauqquant-prod-1
+              strategy: toobit-mexc-btc
+              quote_currency: USDT
+              history_capable: "true"
+              severity: Medium
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc P&L history is unavailable or stale'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#pnl-history-unavailable'

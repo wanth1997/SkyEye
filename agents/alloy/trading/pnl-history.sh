@@ -314,17 +314,26 @@ if [[ "$cached_cycles" -gt 0 ]]; then
       cumulative = 0
       event_index = 1
       point = 0
+      has_supported_value = 0
       while (event_index <= event_count && event_epoch[event_index] < boundary[1]) {
         cumulative += event_delta[event_index++]
+        has_supported_value = 1
       }
-      printf "%d\t%.15g\n", boundary[1], cumulative
-      point++
+      if (has_supported_value) {
+        printf "%d\t%.15g\n", boundary[1], cumulative
+        point++
+      }
       for (b = 2; b <= boundary_count; b++) {
+        boundary_has_event = 0
         while (event_index <= event_count && event_epoch[event_index] < boundary[b]) {
           cumulative += event_delta[event_index++]
+          boundary_has_event = 1
+          has_supported_value = 1
         }
-        printf "%d\t%.15g\n", boundary[b], cumulative
-        point++
+        if (boundary_has_event || point > 0) {
+          printf "%d\t%.15g\n", boundary[b], cumulative
+          point++
+        }
       }
       today_count = 0
       while (event_index <= event_count) {
@@ -371,6 +380,11 @@ base_labels="product=\"$TQ_PRODUCT\",environment=\"$TQ_ENVIRONMENT\",server_id=\
     printf '# HELP tnauqquant_pnl_history_last_event_timestamp_seconds Unix time of the latest authoritative cycle retained in history.\n'
     printf '# TYPE tnauqquant_pnl_history_last_event_timestamp_seconds gauge\n'
     printf 'tnauqquant_pnl_history_last_event_timestamp_seconds{%s} %s\n' "$base_labels" "$last_epoch"
+    current_value="$(awk -F '\t' 'END { print $2 }' "$points")"
+    [[ -n "$current_value" ]] || die "valid history did not produce a current value"
+    printf '# HELP tnauqquant_pnl_history_current_value_usdt Latest cross-run accumulated real P&L represented by the bounded history.\n'
+    printf '# TYPE tnauqquant_pnl_history_current_value_usdt gauge\n'
+    printf 'tnauqquant_pnl_history_current_value_usdt{%s} %s\n' "$base_labels" "$current_value"
     printf '# HELP tnauqquant_pnl_history_point_value_usdt Cross-run accumulated real P&L in USDT at a bounded display point.\n'
     printf '# TYPE tnauqquant_pnl_history_point_value_usdt gauge\n'
     point=0
