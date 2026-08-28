@@ -21,6 +21,7 @@ groups:
           strategy: toobit-mexc-btc
           notification_mode: shadow
           quote_currency: USDT
+          history_capable: "true"
 
       - record: trading_target_info
         expr: vector(1)

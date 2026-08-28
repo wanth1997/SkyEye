@@ -24,6 +24,75 @@ do
   }
 done
 
+jq -e '
+  .uid == "tnauqquant-trading-overview" and
+  .title == "Trading · 即時營運" and
+  .editable == false and
+  ([.panels[].title] | contains([
+    "跨輪累積實現損益 · 近 30 日",
+    "損益摘要",
+    "監控摘要",
+    "目前持倉 · 多空方向",
+    "最新 5 筆策略日誌",
+    "本輪成交額 · 依交易所",
+    "資料涵蓋範圍"
+  ])) and
+  ([.panels[] | select(.title == "損益摘要") | .targets[].expr] |
+    any(contains("tnauqquant_pnl_history_current_value_usdt"))) and
+  ([.panels[] | select(.title == "最新 5 筆策略日誌") | .timeFrom] == ["6h"]) and
+  ([.links[].url] | any(contains("trading-strategy-fleet")))
+' "$DASHBOARD" >/dev/null
+
+jq -e '
+  .uid == "trading-strategy-detail" and
+  .title == "Trading · 策略詳情" and
+  .editable == false and
+  ([.templating.list[].name] == ["server_id", "strategy"]) and
+  ([.templating.list[].label] == ["伺服器", "策略"]) and
+  ([.panels[].title] | contains([
+    "本輪實現損益",
+    "最近完成週期",
+    "已完成週期",
+    "監控摘要",
+    "本輪實現損益 · 週期走勢",
+    "目前持倉 · 多空方向",
+    "損益組成",
+    "本輪成交額 · 依交易所",
+    "最新策略日誌 · 已去識別"
+  ])) and
+  ([.panels[] | select(.title == "監控摘要") | .targets[].legendFormat] ==
+    ["程序", "資料綁定", "風控狀態", "資料更新"]) and
+  ([.panels[] | select(.title == "監控摘要") |
+    [.fieldConfig.overrides[] |
+      select(any(.properties[]; .id == "noValue")) |
+      .matcher.options]
+  ] == [["程序", "資料綁定", "風控狀態", "資料更新"]]) and
+  ([.panels[] | select(.title == "監控摘要") |
+    .fieldConfig.overrides[] |
+    select(.matcher.options == "程序") |
+    .properties[] | select(.id == "mappings") | .value[] |
+    select(.type == "range") | (.options.from == 2 and .options.to > 1000)
+  ] == [true])
+' "$DETAIL_DASHBOARD" >/dev/null
+
+jq -e '
+  .uid == "trading-strategy-fleet" and
+  .title == "Trading · 策略總覽" and
+  .editable == false and
+  (.panels | length == 2) and
+  ([.panels[].title] == ["監控摘要", "策略損益與運行狀態 · 點選策略查看詳情"]) and
+  ([.panels[] | select(.title == "監控摘要") | .targets[].legendFormat] ==
+    ["監控策略", "資料過期", "程序異常", "SHADOW 告警"]) and
+  ([.panels[] | select(.title == "監控摘要") | .targets[].expr] |
+    any(contains("trading_target_info") and contains("unless on") and contains("< 180"))) and
+  ([.panels[] | select(.type == "table") | .targets[].expr] |
+    any(contains("ALERTS") and contains("pending|firing") and contains("count by (strategy)"))) and
+  ([.panels[] | select(.type == "table") |
+    [.fieldConfig.overrides[].properties[]? |
+      select(.id == "displayName") | .value]] |
+    any(contains(["告警", "本輪實現損益", "資料更新"])))
+' "$FLEET_DASHBOARD" >/dev/null
+
 jq empty "$DASHBOARD"
 jq empty "$DETAIL_DASHBOARD"
 jq empty "$FLEET_DASHBOARD"
@@ -33,7 +102,7 @@ jq -e '
   .time.from == "now-30d" and
   (.templating.list | length == 0) and
   (.panels | length == 7) and
-  ([.panels[].id] | sort == [2, 40, 44, 45, 46, 47, 48]) and
+  ([.panels[].id] | sort == [2, 40, 45, 47, 48, 49, 50]) and
   ([.panels[].type] | sort == ["logs", "stat", "stat", "stat", "stat", "stat", "timeseries"]) and
   ([.. | objects | select(.mode? == "fixedColor")] | length == 0) and
   ([.. | objects | select(.mode? == "fixed") |
@@ -68,15 +137,18 @@ jq -e '
      .transformations[2].options.conversions[0].destinationType == "time" and
      .transformations[3].options.sort[0].field == "Time" and
      .transformations[3].options.sort[0].desc == false and
-     (.description | contains("Cross-run accumulated Real P&L")) and
-     (.description | contains("step-after")))
+     ([.targets[].expr] | all(
+       (contains("tnauqquant_current_real_pnl_usdt") or
+        contains("tnauqquant_last_cycle_real_pnl_usdt") or
+        contains("tnauqquant_cycle_cumulative_real_pnl_usdt")) | not
+     )))
   ] == [true]) and
   ([.panels[] | select(.id == 40) |
     (.type == "stat" and
      (.targets | length) == 7 and
      ([.targets[].legendFormat] == [
-       "TOOBIT · LONG", "TOOBIT · SHORT", "TOOBIT · FLAT",
-       "MEXC · LONG", "MEXC · SHORT", "MEXC · FLAT", "NET"
+       "TOOBIT · 多", "TOOBIT · 空", "TOOBIT · 空倉",
+       "MEXC · 多", "MEXC · 空", "MEXC · 空倉", "淨部位"
      ]) and
      (.targets[0:3] | map(.expr) | all(contains("exchange=\"toobit\""))) and
      (.targets[3:6] | map(.expr) | all(contains("exchange=\"mexc\""))) and
@@ -87,83 +159,88 @@ jq -e '
      (.targets[6].expr | contains("exchange=\"toobit\"") | not) and
      (.targets[6].expr | contains("exchange=\"mexc\"") | not) and
      ([.fieldConfig.overrides[] |
-       select(.matcher.options == "TOOBIT · LONG" or .matcher.options == "MEXC · LONG") |
+       select(.matcher.options == "TOOBIT · 多" or .matcher.options == "MEXC · 多") |
        .properties[] | select(.id == "color") | .value.fixedColor
      ] == ["#73BF69", "#73BF69"]) and
      ([.fieldConfig.overrides[] |
-       select(.matcher.options == "TOOBIT · SHORT" or .matcher.options == "MEXC · SHORT") |
+       select(.matcher.options == "TOOBIT · 空" or .matcher.options == "MEXC · 空") |
        .properties[] | select(.id == "color") | .value.fixedColor
      ] == ["#F2495C", "#F2495C"]) and
-     ([.fieldConfig.overrides[] | select(.matcher.options == "NET") |
+     ([.fieldConfig.overrides[] | select(.matcher.options == "淨部位") |
        .properties[] | select(.id == "color") | .value.mode
-     ] == ["thresholds"]) and
-     ((.description | ascii_downcase) | contains("long is green")) and
-     ((.description | ascii_downcase) | contains("short is red")))
+     ] == ["thresholds"]))
   ] == [true]) and
-  ([.panels[] | select(.id == 44) | .targets[].expr | contains("tnauqquant_log_mtime_seconds")] == [true, true]) and
   ([.panels[] | select(.id == 45) |
     (.type == "logs" and
      .datasource.type == "loki" and
      .targets[0].datasource.type == "loki" and
      .targets[0].maxLines == 5 and
      .targets[0].direction == "backward" and
-     .options.sortOrder == "Descending")
+     .options.sortOrder == "Descending" and
+     .timeFrom == "6h")
   ] == [true]) and
-  ([.panels[] | select(.id == 46) |
+  ([.panels[] | select(.id == 49) |
     (.type == "stat" and
-     .gridPos.y == 16 and
-     .gridPos.x == 16 and
-     .fieldConfig.defaults.mappings[0].options["0"].text == "SHUTDOWN" and
-     .fieldConfig.defaults.mappings[0].options["1"].text == "RUNNING" and
-     (.targets[0].expr | contains("tnauqquant_process_count")) and
-     (.targets[0].expr | contains("> bool 0")))
+     .fieldConfig.defaults.unit == "suffix: USDT" and
+     ([.targets[].legendFormat] == ["跨輪累積", "本輪", "最近週期"]) and
+     (.targets[0].expr | contains("tnauqquant_pnl_history_current_value_usdt")) and
+     (.targets[1].expr | contains("tnauqquant_current_real_pnl_usdt")) and
+     (.targets[2].expr | contains("tnauqquant_last_cycle_real_pnl_usdt")))
+  ] == [true]) and
+  ([.panels[] | select(.id == 50) |
+    (.type == "stat" and
+     ([.targets[].legendFormat] == ["程序", "資料綁定", "風控狀態", "資料更新", "歷史更新"]) and
+     (.targets[0].expr | contains("trading_strategy_process_count") and
+       (contains("> bool 0") | not)) and
+     ([.fieldConfig.overrides[] |
+       select(any(.properties[]; .id == "noValue")) | .matcher.options] ==
+       ["程序", "資料綁定", "風控狀態", "資料更新", "歷史更新"]) and
+     ([.fieldConfig.overrides[] | select(.matcher.options == "程序") |
+       .properties[] | select(.id == "mappings") | .value[] |
+       select(.type == "range") | (.options.from == 2 and .options.to > 1000)] == [true]))
   ] == [true]) and
   ([.panels[] | select(.id == 47) |
     (.type == "stat" and
-     .gridPos.y == 16 and
+     .gridPos.y == 17 and
      .gridPos.x == 0 and
-     .gridPos.w == 10 and
+     .gridPos.w == 8 and
      .fieldConfig.defaults.unit == "currencyUSD" and
      (.targets | length) == 2 and
-     ([.targets[].legendFormat] == ["TOOBIT VOLUME", "MEXC VOLUME"]) and
+     ([.targets[].legendFormat] == ["TOOBIT 成交額", "MEXC 成交額"]) and
      ([.targets[].expr] | all(contains("tnauqquant_current_run_exchange_volume_usd"))) and
      (.targets[0].expr | contains("exchange=\"toobit\"")) and
      (.targets[1].expr | contains("exchange=\"mexc\"")) and
      ([.targets[].instant] == [true, true]) and
-     ([.targets[].range] == [false, false]) and
-     ((.description | ascii_downcase) | contains("current manifest-bound run")))
+     ([.targets[].range] == [false, false]))
   ] == [true]) and
   ([.panels[] | select(.id == 48) |
     (.type == "stat" and
-     .gridPos.y == 16 and
-     .gridPos.x == 10 and
-     .gridPos.w == 6 and
-     ([.targets[].legendFormat] == ["AGE", "COVERAGE START", "LEGACY SKIPPED"]) and
+     .gridPos.y == 17 and
+     .gridPos.x == 8 and
+     .gridPos.w == 16 and
+     ([.targets[].legendFormat] == ["更新秒數", "資料起點", "排除舊資料"]) and
      (.targets[0].expr | contains("tnauqquant_pnl_history_build_timestamp_seconds")) and
      (.targets[1].expr | contains("tnauqquant_pnl_history_first_supported_event_timestamp_seconds")) and
      (.targets[2].expr | contains("tnauqquant_pnl_history_skipped_legacy_events")) and
      ([.targets[].instant] == [true, true, true]) and
-     ([.targets[].range] == [false, false, false]) and
-     (.description | contains("cycle_id or cycle_real_pnl_usdt was absent")))
+     ([.targets[].range] == [false, false, false]))
   ] == [true]) and
   ([.panels[].targets[].expr] | all(
     contains("environment=\"production\"") and
     contains("server_id=\"tnauqquant-prod-1\"") and
     contains("strategy=\"toobit-mexc-btc\"")
   )) and
-  ([.panels[].targets[].expr] | all(contains("tnauqquant_cycle_cumulative_real_pnl_usdt") | not)) and
-  ([.panels[].targets[].expr] | all(
-    (contains("tnauqquant_current_real_pnl_usdt") or
-     contains("tnauqquant_last_cycle_real_pnl_usdt") or
-     contains("tnauqquant_completed_cycles_today")) | not
-  ))
+  ([.panels[].targets[].expr] | all(contains("tnauqquant_cycle_cumulative_real_pnl_usdt") | not))
 ' "$DASHBOARD" >/dev/null
 
 jq -e '
   .uid == "trading-strategy-detail" and
   .timezone == "Asia/Taipei" and
   .refresh == "15s" and
+  .editable == false and
+  (.panels | length == 9) and
   ([.templating.list[].name] == ["server_id", "strategy"]) and
+  ([.templating.list[].label] == ["伺服器", "策略"]) and
   (.templating.list[0].definition | contains("trading_target_info")) and
   (.templating.list[1].definition |
     contains("trading_target_info") and contains("server_id=\"$server_id\"")) and
@@ -173,19 +250,23 @@ jq -e '
     .datasource.uid == "loki" and
     (.targets[0].expr | contains("server_id=\"$server_id\"") and contains("strategy=\"$strategy\""))
   ] == [true]) and
-  ([.panels[] | select(.title == "CURRENT RUN VOLUME · BY EXCHANGE") |
+  ([.panels[] | select(.title == "本輪成交額 · 依交易所") |
     (.targets | length == 1) and
-    .targets[0].legendFormat == "{{exchange}} · VOLUME" and
+    .targets[0].legendFormat == "{{exchange}} · 成交額" and
     (.targets[0].expr | contains("trading_strategy_current_run_exchange_volume_usd"))
   ] == [true]) and
-  ([.panels[] | select(.title == "PROCESS") |
-    .fieldConfig.defaults.mappings[0].options["0"].text == "DOWN" and
-    .fieldConfig.defaults.mappings[0].options["1"].text == "RUNNING"
+  ([.panels[] | select(.title == "監控摘要") |
+    ([.targets[].legendFormat] == ["程序", "資料綁定", "風控狀態", "資料更新"]) and
+    (.targets[0].expr | contains("trading_strategy_process_count") and
+      (contains("> bool 0") | not)) and
+    ([.fieldConfig.overrides[] |
+      select(any(.properties[]; .id == "noValue")) | .matcher.options] ==
+      ["程序", "資料綁定", "風控狀態", "資料更新"])
   ] == [true]) and
-  ([.panels[] | select(.title == "BINDING") |
-    .fieldConfig.defaults.mappings[0].options["0"].text == "INVALID" and
-    .fieldConfig.defaults.mappings[0].options["1"].text == "VALID"
-  ] == [true]) and
+  ([.panels[] | select(.title == "本輪實現損益" or .title == "損益組成") |
+    .fieldConfig.defaults.unit] | all(. == "suffix: USDT")) and
+  ([.panels[] | select(.title == "本輪實現損益 · 週期走勢") |
+    .fieldConfig.overrides[].properties[] | select(.id == "unit") | .value] == ["suffix: USDT"]) and
   ([.. | objects | .datasource?.uid? | select(. != null)] |
     all(. == "prometheus" or . == "loki" or . == "alertmanager")) and
   ([.panels[].targets[].expr] |
@@ -201,7 +282,18 @@ jq -e '
   .uid == "trading-strategy-fleet" and
   .timezone == "Asia/Taipei" and
   .refresh == "15s" and
+  .editable == false and
   (.templating.list | length == 0) and
+  (.panels | length == 2) and
+  ([.panels[] | select(.title == "監控摘要") |
+    .gridPos == {h: 3, w: 24, x: 0, y: 0} and
+    ([.targets[].legendFormat] == ["監控策略", "資料過期", "程序異常", "SHADOW 告警"]) and
+    (.targets[1].expr | contains("trading_target_info") and contains("unless on") and contains("< 180")) and
+    (.targets[2].expr | contains("trading_strategy_run_expected") and contains("!= bool")) and
+    (.targets[3].expr | contains("pending|firing")) and
+    ([.fieldConfig.overrides[] | select(.matcher.options != "監控策略") |
+      .properties[] | select(.id == "thresholds") | .value.steps[1].value] == [1, 1, 1])
+  ] == [true]) and
   ([.panels[] | select(.type == "table")] | length == 1) and
   ([.panels[] | select(.type == "table") |
     (.targets[0].expr | contains("trading_target_info")) and
@@ -209,7 +301,29 @@ jq -e '
     .transformations[0].options.byField == "strategy" and
     .transformations[0].options.mode == "outer" and
     (.fieldConfig.overrides | map(.matcher.options) |
-      contains(["Process", "Binding", "Risk", "Telemetry"])) and
+      contains(["Process", "Binding", "Risk", "Telemetry", "Alerts"])) and
+    (.targets[5].expr | contains("trading_strategy_process_count") and
+      (contains("> bool 0") | not)) and
+    ([.targets[] | select(.refId == "H") | .expr] |
+      (length == 1 and (.[0] | contains("trading_strategy_risk_stopped")))) and
+    .transformations[1].options.renameByName["Value #H"] == "Risk" and
+    ([.fieldConfig.overrides[] | select(.matcher.options == "Risk") |
+      .properties[] | select(.id == "displayName") | .value] == ["風控狀態"]) and
+    ([.targets[] | select(.refId == "I") | .expr] |
+      (length == 1 and (.[0] | contains("trading_strategy_probe_timestamp_seconds < bool 180")))) and
+    .transformations[1].options.renameByName["Value #I"] == "Telemetry" and
+    ([.fieldConfig.overrides[] | select(.matcher.options == "Telemetry") |
+      .properties[] | select(.id == "displayName") | .value] == ["資料更新"]) and
+    (.targets[11].expr |
+      contains("count by (strategy)") and
+      contains("pending|firing") and
+      contains("0 * max by (strategy) (trading_target_info")) and
+    ([.fieldConfig.overrides[] | select(.matcher.options == "Process") |
+      .properties[] | select(.id == "mappings") | .value[] |
+      select(.type == "range") | (.options.from == 2 and .options.to > 1000)] == [true]) and
+    ([.fieldConfig.overrides[].properties[]? |
+      select(.id == "displayName") | .value] |
+      contains(["策略", "伺服器", "本輪實現損益", "最近週期損益", "程序", "資料綁定", "風控狀態", "資料更新", "告警"])) and
     ([.fieldConfig.overrides[].properties[]? |
       select(.id == "links") | .value[].url |
       contains("/d/trading-strategy-detail/") and
@@ -248,6 +362,19 @@ do
     exit 1
   }
 done
+
+rg -q 'history_capable:[[:space:]]+"true"' "$PROM_TARGET" || {
+  printf 'FAIL: history-capable Trading inventory contract is missing\n' >&2
+  exit 1
+}
+rg -q 'alert:[[:space:]]+TradingPnlHistoryUnavailable' "$PROM_RULES" || {
+  printf 'FAIL: P&L history health alert is missing\n' >&2
+  exit 1
+}
+rg -U -q 'tnauqquant_probe_timestamp_seconds\{[^}]*\}[[:space:]]*< 180' "$PROM_RULES" || {
+  printf 'FAIL: Trading telemetry freshness threshold must be 180 seconds\n' >&2
+  exit 1
+}
 
 rg -q 'record:[[:space:]]+trading_target_info' "$PROM_TARGET" || {
   printf 'FAIL: generic trading_target_info inventory is missing\n' >&2

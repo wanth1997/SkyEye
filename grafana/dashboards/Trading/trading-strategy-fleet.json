@@ -2,8 +2,8 @@
   "annotations": {
     "list": []
   },
-  "description": "One row per monitored strategy. P&L is current-run and intentionally not summed across strategies because run windows differ.",
-  "editable": true,
+  "description": "每個受監控策略一列。損益只代表各策略目前 run，因 accounting window 不同而不做跨策略總和；上方摘要的健康基準為資料過期、程序異常與 Shadow 告警皆為 0。",
+  "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
@@ -15,7 +15,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Strategies declared in the version-controlled trading inventory.",
+      "description": "監控策略是 inventory 總數；資料過期包含 probe timestamp 缺失或超過 180 秒；程序異常表示實際數量不符合 run_expected；Shadow 告警包含 pending 與 firing。健康基準是後三項皆為 0。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -26,11 +26,149 @@
           "noValue": "0",
           "unit": "short"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "監控策略"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "0"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#B8C7E0",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "資料過期"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "0"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "程序異常"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "0"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SHADOW 告警"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "0"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 4,
-        "w": 6,
+        "h": 3,
+        "w": 24,
         "x": 0,
         "y": 0
       },
@@ -47,7 +185,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value"
+        "textMode": "value_and_name"
       },
       "pluginVersion": "11.2.0",
       "targets": [
@@ -59,215 +197,48 @@
           "editorMode": "code",
           "expr": "count(trading_target_info{product=\"tnauqquant\",environment=\"production\"})",
           "instant": true,
+          "legendFormat": "監控策略",
           "range": false,
           "refId": "A"
-        }
-      ],
-      "title": "MONITORED STRATEGIES",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Strategies whose probe sample is less than 120 seconds old.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 6,
-        "y": 0
-      },
-      "id": 2,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(time() - trading_strategy_probe_timestamp_seconds < bool 120)",
+          "expr": "count(trading_target_info{product=\"tnauqquant\",environment=\"production\"} unless on (product, environment, server_id, strategy) (time() - trading_strategy_probe_timestamp_seconds < 180)) or vector(0)",
           "instant": true,
+          "legendFormat": "資料過期",
           "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "REPORTING FRESH",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Strategies with at least one matching runtime process.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
+          "refId": "B"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 12,
-        "y": 0
-      },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(trading_strategy_process_count > bool 0)",
+          "expr": "sum(((trading_strategy_process_count != bool 1) and on (product, environment, server_id, strategy) (trading_strategy_run_expected == 1)) or ((trading_strategy_process_count != bool 0) and on (product, environment, server_id, strategy) (trading_strategy_run_expected == 0))) or vector(0)",
           "instant": true,
+          "legendFormat": "程序異常",
           "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "RUNNING NOW",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Current shadow alert instances. This rollout does not page.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
+          "refId": "C"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 6,
-        "x": 18,
-        "y": 0
-      },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "count(ALERTS{alertstate=\"firing\",alertname=~\"Trading.*\",notification_mode=\"shadow\"})",
+          "expr": "count(ALERTS{alertname=~\"Trading.*\",alertstate=~\"pending|firing\",notification_mode=\"shadow\"}) or vector(0)",
           "instant": true,
+          "legendFormat": "SHADOW 告警",
           "range": false,
-          "refId": "A"
+          "refId": "D"
         }
       ],
-      "title": "SHADOW ALERTS FIRING",
+      "title": "監控摘要",
       "type": "stat"
     },
     {
@@ -275,7 +246,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Operations view: one row per globally unique strategy slug. Current-run P&L is shown per row and is never aggregated into a fleet total. Select a strategy name to drill into its detail dashboard.",
+      "description": "每列是一個 globally unique strategy slug。本輪實現損益不跨策略加總；程序顯示精確狀態，資料更新超過 180 秒為過期。告警欄讓上方非零 Shadow 告警可定位到策略。",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -295,7 +266,7 @@
                 "value": [
                   {
                     "targetBlank": false,
-                    "title": "Open strategy detail",
+                    "title": "查看策略詳情",
                     "url": "/d/trading-strategy-detail/trading-strategy-detail?var-server_id=${__data.fields.Server}&var-strategy=${__value.raw}"
                   }
                 ]
@@ -303,6 +274,10 @@
               {
                 "id": "custom.width",
                 "value": 250
+              },
+              {
+                "id": "displayName",
+                "value": "策略"
               }
             ]
           },
@@ -315,6 +290,10 @@
               {
                 "id": "custom.width",
                 "value": 150
+              },
+              {
+                "id": "displayName",
+                "value": "伺服器"
               }
             ]
           },
@@ -335,21 +314,41 @@
                 "id": "mappings",
                 "value": [
                   {
+                    "type": "value",
                     "options": {
                       "0": {
                         "color": "red",
                         "index": 0,
-                        "text": "DOWN"
+                        "text": "停止"
                       },
                       "1": {
                         "color": "green",
                         "index": 1,
-                        "text": "RUNNING"
+                        "text": "運行中"
                       }
-                    },
-                    "type": "value"
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 2,
+                      "to": 1000000000,
+                      "result": {
+                        "color": "red",
+                        "index": 2,
+                        "text": "重複程序"
+                      }
+                    }
                   }
                 ]
+              },
+              {
+                "id": "displayName",
+                "value": "程序"
+              },
+              {
+                "id": "noValue",
+                "value": "未知"
               }
             ]
           },
@@ -370,21 +369,29 @@
                 "id": "mappings",
                 "value": [
                   {
+                    "type": "value",
                     "options": {
                       "0": {
                         "color": "red",
                         "index": 0,
-                        "text": "INVALID"
+                        "text": "異常"
                       },
                       "1": {
                         "color": "green",
                         "index": 1,
-                        "text": "VALID"
+                        "text": "正常"
                       }
-                    },
-                    "type": "value"
+                    }
                   }
                 ]
+              },
+              {
+                "id": "displayName",
+                "value": "資料綁定"
+              },
+              {
+                "id": "noValue",
+                "value": "未知"
               }
             ]
           },
@@ -405,21 +412,29 @@
                 "id": "mappings",
                 "value": [
                   {
+                    "type": "value",
                     "options": {
                       "0": {
                         "color": "green",
                         "index": 0,
-                        "text": "CLEAR"
+                        "text": "正常"
                       },
                       "1": {
                         "color": "red",
                         "index": 1,
-                        "text": "STOPPED"
+                        "text": "已觸發停機"
                       }
-                    },
-                    "type": "value"
+                    }
                   }
                 ]
+              },
+              {
+                "id": "displayName",
+                "value": "風控狀態"
+              },
+              {
+                "id": "noValue",
+                "value": "未知"
               }
             ]
           },
@@ -440,21 +455,29 @@
                 "id": "mappings",
                 "value": [
                   {
+                    "type": "value",
                     "options": {
                       "0": {
                         "color": "red",
                         "index": 0,
-                        "text": "STALE"
+                        "text": "過期"
                       },
                       "1": {
                         "color": "green",
                         "index": 1,
-                        "text": "FRESH"
+                        "text": "正常"
                       }
-                    },
-                    "type": "value"
+                    }
                   }
                 ]
+              },
+              {
+                "id": "displayName",
+                "value": "資料更新"
+              },
+              {
+                "id": "noValue",
+                "value": "無資料"
               }
             ]
           },
@@ -490,14 +513,22 @@
                     },
                     {
                       "color": "yellow",
-                      "value": 45
+                      "value": 120
                     },
                     {
                       "color": "red",
-                      "value": 120
+                      "value": 180
                     }
                   ]
                 }
+              },
+              {
+                "id": "displayName",
+                "value": "更新秒數"
+              },
+              {
+                "id": "noValue",
+                "value": "無資料"
               }
             ]
           },
@@ -509,7 +540,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "currencyUSD"
+                "value": "suffix: USDT"
               },
               {
                 "id": "decimals",
@@ -537,10 +568,18 @@
                     },
                     {
                       "color": "green",
-                      "value": 1e-12
+                      "value": 1E-12
                     }
                   ]
                 }
+              },
+              {
+                "id": "displayName",
+                "value": "本輪實現損益"
+              },
+              {
+                "id": "noValue",
+                "value": "等待首筆損益"
               }
             ]
           },
@@ -552,11 +591,19 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "currencyUSD"
+                "value": "suffix: USDT"
               },
               {
                 "id": "decimals",
                 "value": 4
+              },
+              {
+                "id": "displayName",
+                "value": "最近週期損益"
+              },
+              {
+                "id": "noValue",
+                "value": "尚無完成週期"
               }
             ]
           },
@@ -573,6 +620,10 @@
               {
                 "id": "decimals",
                 "value": 0
+              },
+              {
+                "id": "displayName",
+                "value": "完成週期"
               }
             ]
           },
@@ -589,6 +640,10 @@
               {
                 "id": "decimals",
                 "value": 2
+              },
+              {
+                "id": "displayName",
+                "value": "本輪成交額"
               }
             ]
           },
@@ -605,16 +660,67 @@
               {
                 "id": "decimals",
                 "value": 8
+              },
+              {
+                "id": "displayName",
+                "value": "淨部位"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Alerts"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "告警"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "noValue",
+                "value": "0"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
               }
             ]
           }
         ]
       },
       "gridPos": {
-        "h": 13,
+        "h": 14,
         "w": 24,
         "x": 0,
-        "y": 4
+        "y": 3
       },
       "id": 5,
       "options": {
@@ -692,7 +798,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (strategy) (trading_strategy_process_count > bool 0)",
+          "expr": "max by (strategy) (trading_strategy_process_count)",
           "format": "table",
           "instant": true,
           "range": false,
@@ -728,7 +834,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (strategy) (time() - trading_strategy_probe_timestamp_seconds < bool 120)",
+          "expr": "max by (strategy) (time() - trading_strategy_probe_timestamp_seconds < bool 180)",
           "format": "table",
           "instant": true,
           "range": false,
@@ -757,9 +863,21 @@
           "instant": true,
           "range": false,
           "refId": "K"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "count by (strategy) (ALERTS{alertname=~\"Trading.*\",alertstate=~\"pending|firing\",notification_mode=\"shadow\"}) or on (strategy) (0 * max by (strategy) (trading_target_info{product=\"tnauqquant\",environment=\"production\"}))",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "L"
         }
       ],
-      "title": "STRATEGY OPERATIONS MATRIX · SELECT A STRATEGY TO DRILL DOWN",
+      "title": "策略損益與運行狀態 · 點選策略查看詳情",
       "transformations": [
         {
           "id": "joinByField",
@@ -786,24 +904,29 @@
               "Value #A": true,
               "__name__": true,
               "environment": true,
-              "product": true
+              "product": true,
+              "Time 11": true
             },
             "indexByName": {
-              "Value #B": 7,
-              "Value #C": 9,
-              "Value #D": 10,
-              "Value #E": 11,
-              "Value #F": 2,
-              "Value #G": 3,
-              "Value #H": 4,
-              "Value #I": 5,
-              "Value #J": 6,
-              "Value #K": 8,
+              "strategy": 0,
               "server_id": 1,
-              "strategy": 0
+              "Value #B": 2,
+              "Value #K": 3,
+              "Value #C": 4,
+              "Value #D": 5,
+              "Value #E": 6,
+              "Value #F": 7,
+              "Value #G": 8,
+              "Value #H": 9,
+              "Value #I": 10,
+              "Value #J": 11,
+              "Value #L": 12
             },
             "renameByName": {
+              "strategy": "Strategy",
+              "server_id": "Server",
               "Value #B": "Current run P&L",
+              "Value #K": "Last cycle P&L",
               "Value #C": "Cycles",
               "Value #D": "Run volume",
               "Value #E": "Net position",
@@ -812,9 +935,7 @@
               "Value #H": "Risk",
               "Value #I": "Telemetry",
               "Value #J": "Telemetry age",
-              "Value #K": "Last cycle P&L",
-              "server_id": "Server",
-              "strategy": "Strategy"
+              "Value #L": "Alerts"
             }
           }
         }
@@ -840,8 +961,8 @@
   },
   "timepicker": {},
   "timezone": "Asia/Taipei",
-  "title": "Trading · Strategy Fleet",
+  "title": "Trading · 策略總覽",
   "uid": "trading-strategy-fleet",
-  "version": 1,
+  "version": 2,
   "weekStart": "monday"
 }

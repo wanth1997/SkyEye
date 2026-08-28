@@ -375,6 +375,7 @@ Marker 只有在 `run_id`、PID、config hash 與 manifest 相符時才能影響
 | `tnauqquant_log_mtime_seconds` | gauge | current log 最後修改時間 |
 | `tnauqquant_pnl_history_point_value_usdt{point}` | gauge | bounded point 的跨 run accumulated Real P&L；`point` 為固定 ordinal，不含時間 |
 | `tnauqquant_pnl_history_point_timestamp_seconds{point}` | gauge | 同一 bounded point 的實際事件／day-boundary 時間，作 metric value 而非 label |
+| `tnauqquant_pnl_history_current_value_usdt` | gauge | bounded history 最後一筆 accumulated Real P&L，供摘要 stat 使用；無有效 history 時不輸出 |
 | `tnauqquant_pnl_history_build_timestamp_seconds` | gauge | 最近一次成功 atomic history build 時間 |
 | `tnauqquant_pnl_history_first_supported_event_timestamp_seconds` | gauge | cache 中第一筆完整 authoritative event |
 | `tnauqquant_pnl_history_skipped_legacy_events` | gauge | 因缺 `cycle_id` 或 `cycle_real_pnl_usdt` 而排除的 completed-looking records |
@@ -392,9 +393,10 @@ Marker 只有在 `run_id`、PID、config hash 與 manifest 相符時才能影響
 | 當輪 safe reason 且 process 不存在 | Completed | 無 ProcessDown |
 | reason=`risk_halt`/`max_cycles_drain_failed`/`unknown` | Critical | `TradingCriticalSafetyState`, High |
 | contract available=1 且 manifest/config snapshot/log/marker identity 不一致 | Binding invalid | `TradingRunBindingInvalid`, High |
-| inventory target 缺少 probe series 超過 3m | Telemetry missing | `TradingTelemetryMissing`, High |
+| inventory target 缺少 probe series，或 probe timestamp 凍結超過 180 秒 | Telemetry missing/stale | `TradingTelemetryMissing`, High |
+| `history_capable="true"` target 缺有效 history，或 build timestamp 超過 180 秒 | PnL history unavailable | `TradingPnlHistoryUnavailable`, Medium shadow |
 
-Telemetry missing 必須從中央 inventory 檢查，不依賴同一 agent 的 `run_expected`。Prometheus 的 `absent_over_time()` 專門用於偵測指定 series 消失；多 target 版本以 inventory `unless` probe series 實作。參考：[Prometheus query functions](https://prometheus.io/docs/prometheus/latest/querying/functions/#absent_over_time)。
+Telemetry missing 必須從中央 inventory 檢查，不依賴同一 agent 的 `run_expected`。多 target 版本以 inventory `unless` freshness-filtered probe timestamp 實作，因此 series 存在但停止更新也會被偵測。History alert 只由 inventory 的 `history_capable` label opt in，沒有 history builder 的策略不會誤報。參考：[Prometheus query operators](https://prometheus.io/docs/prometheus/latest/querying/operators/)。
 
 ---
 
@@ -404,7 +406,7 @@ Dashboard identity：
 
 ```text
 Folder: Trading
-Title:  Trading — tnauqquant overview
+Title:  Trading · 即時營運
 UID:    tnauqquant-trading-overview
 Tags:   layer:business, product:tnauqquant, provisioned
 Default range: Last 30 days
@@ -415,11 +417,12 @@ Variables: none; production selector is provisioned and fixed
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ [Accumulated Real P&L · 30D................] [Positions]     │
+│ [跨輪累積實現損益 · 近 30 日........] [損益摘要............]│
+│ [...................................] [監控摘要............]│
 ├─────────────────────────────────────────────────────────────┤
-│ [Latest log update] [Latest 5 scrubbed log lines............]│
+│ [目前部位] [最近 5 筆已去識別化日誌.........................]│
 ├─────────────────────────────────────────────────────────────┤
-│ [Current-run volume] [P&L history coverage] [Strategy status]│
+│ [本輪成交額] [歷史資料涵蓋範圍.............................]│
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -427,7 +430,7 @@ Variables: none; production selector is provisioned and fixed
 
 目前 production 主圖已由 current-run trend 升級為 30 天跨 run accumulated Real P&L。獨立 60 秒 history builder 只加總 `stable=true`、`cycle_completed=true` 且同時具有 `time`、process-scoped `cycle_id`、`cycle_real_pnl_usdt` 的事件。Identity 是 `(raw-log basename, cycle_id)`；因此不同 run 可安全重用 process-scoped cycle ID，單一 run 內的完全相同重複事件會去重，衝突則保留上一份有效 metrics。
 
-Builder 對未變更 raw log 重用 mode-`0600` per-run summary，只重掃新增或 inode/size/mtime 改變的檔案；raw log 被輪替後仍保留已驗證摘要。顯示輸出固定為 rolling-window baseline、每個已完成 Asia/Taipei 日的 close、以及當日每個 cycle point。`point` label 是有上限的 ordinal（預設 30 日加最多 500 個當日 cycles），事件 timestamp 另以 metric value 輸出。Grafana 以 `point` join value/timestamp，轉為 real time field 後使用 `stepAfter` Timeseries，避免 XY interpolation 語意不明。
+Builder 對未變更 raw log 重用 mode-`0600` per-run summary，只重掃新增或 inode/size/mtime 改變的檔案；raw log 被輪替後仍保留已驗證摘要。顯示輸出固定為 rolling-window baseline、每個已完成 Asia/Taipei 日的 close、以及當日每個 cycle point；但第一筆 authoritative event 之前不產生 baseline 或 daily zero，避免把沒有 coverage 的區間畫成零損益。`point` label 是有上限的 ordinal（預設 30 日加最多 500 個當日 cycles），事件 timestamp 另以 metric value輸出。Grafana 以 `point` join value/timestamp，轉為 real time field 後使用 `stepAfter` Timeseries，避免 XY interpolation 語意不明；最新 bounded value 另由無 `point` label 的 scalar metric供摘要 stat 使用。
 
 Legacy completed-looking record 缺必要欄位時不得從 `real_pnl_usdt` 推測 delta，以免跨 run 無聲低估或重複計算。Dashboard 的 `P&L HISTORY COVERAGE` 必須同時顯示 build age、first supported event 與 skipped legacy count。
 
@@ -435,10 +438,10 @@ Legacy completed-looking record 缺必要欄位時不得從 `real_pnl_usdt` 推�
 
 | Panel | Source | 行為 |
 |---|---|---|
-| Accumulated Real P&L · 30D | bounded value/timestamp textfile metrics | rolling baseline、已完成日 close、當日 per-cycle points；Timeseries `stepAfter` |
-| P&L History Coverage | build timestamp、first supported timestamp、skipped legacy count | age 120 秒起黃、300 秒起紅；缺完整 contract 的舊資料明確揭露 |
-| Current Positions | current manifest-bound coordinator snapshot | signed BTC 與 LONG／SHORT／FLAT 語意 |
-| Current-run Volume | current manifest-bound completed trades | 依 Toobit／MEXC 分開顯示，不跨 run 累積 |
+| 跨輪累積實現損益 · 近 30 日 | bounded value/timestamp textfile metrics | rolling baseline、已完成日 close、當日 per-cycle points；Timeseries `stepAfter` |
+| 歷史資料涵蓋範圍 | build timestamp、first supported timestamp、skipped legacy count | age 120 秒起黃、300 秒起紅；缺完整 contract 的舊資料明確揭露 |
+| 目前部位 | current manifest-bound coordinator snapshot | signed BTC 與 LONG／SHORT／FLAT 語意 |
+| 本輪成交額 | current manifest-bound completed trades | 依 Toobit／MEXC 分開顯示，不跨 run 累積 |
 
 ### 7.3 Run status panels
 

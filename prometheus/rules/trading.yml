@@ -298,16 +298,47 @@ groups:
             }
           )
           unless on (product, environment, server_id, strategy)
-          max_over_time(
-            tnauqquant_probe_timestamp_seconds{
+          (
+            time() - tnauqquant_probe_timestamp_seconds{
               product="tnauqquant",
               environment="production"
-            }[3m]
+            } < 180
           )
         for: 0m
         labels:
           severity: High
           notification_mode: shadow
         annotations:
-          summary: "{{ $labels.server_id }} {{ $labels.strategy }} telemetry is missing"
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} telemetry is missing or stale"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md"
+
+      - alert: TradingPnlHistoryUnavailable
+        expr: |
+          trading_target_info{
+            product="tnauqquant",
+            environment="production",
+            history_capable="true"
+          }
+          unless on (product, environment, server_id, strategy)
+          (
+            (
+              time() - tnauqquant_pnl_history_build_timestamp_seconds{
+                product="tnauqquant",
+                environment="production"
+              } < 180
+            )
+            and on (product, environment, server_id, strategy)
+            (
+              tnauqquant_pnl_history_valid{
+                product="tnauqquant",
+                environment="production"
+              } == 1
+            )
+          )
+        for: 2m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} P&L history is unavailable or stale"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#pnl-history-unavailable"

@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "editable": true,
+  "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
@@ -14,9 +14,10 @@
       "keepTime": true,
       "tags": [],
       "targetBlank": false,
-      "title": "Trading Fleet",
+      "title": "策略總覽",
       "type": "link",
-      "url": "/d/trading-strategy-fleet/trading-strategy-fleet"
+      "url": "/d/trading-strategy-fleet/trading-strategy-fleet",
+      "tooltip": "返回所有受監控策略"
     }
   ],
   "liveNow": false,
@@ -26,263 +27,14 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Text and color both indicate whether exactly one or more strategy processes are present.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "DOWN"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "RUNNING"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "NO TELEMETRY",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 0,
-        "y": 0
-      },
-      "id": 1,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "trading_strategy_process_count{server_id=\"$server_id\",strategy=\"$strategy\"} > bool 0",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "PROCESS",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Minimum manifest, process identity, config snapshot, log, and terminal-marker binding state.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "INVALID"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "VALID"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "NO CONTRACT",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 0
-      },
-      "id": 2,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "trading_strategy_binding_ok{server_id=\"$server_id\",strategy=\"$strategy\"}",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "BINDING",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Latest stable P&L risk-stop state.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "green",
-                  "index": 0,
-                  "text": "CLEAR"
-                },
-                "1": {
-                  "color": "red",
-                  "index": 1,
-                  "text": "STOPPED"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "UNKNOWN",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 8,
-        "y": 0
-      },
-      "id": 3,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value"
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "trading_strategy_risk_stopped{server_id=\"$server_id\",strategy=\"$strategy\"}",
-          "instant": true,
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "RISK",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Latest stable real P&L for this manifest-bound run. It is not a daily or fleet aggregate.",
+      "description": "目前 manifest 綁定 run 的最新穩定 real PnL；不是跨日或跨策略總和。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
           "decimals": 4,
-          "noValue": "NO STABLE P&L",
+          "noValue": "等待首筆穩定損益",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -296,18 +48,18 @@
               },
               {
                 "color": "green",
-                "value": 1e-12
+                "value": 1E-12
               }
             ]
           },
-          "unit": "currencyUSD"
+          "unit": "suffix: USDT"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 12,
+        "w": 8,
+        "x": 0,
         "y": 0
       },
       "id": 4,
@@ -339,7 +91,7 @@
           "refId": "A"
         }
       ],
-      "title": "CURRENT RUN P&L",
+      "title": "本輪實現損益",
       "type": "stat"
     },
     {
@@ -347,7 +99,117 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Completed cycles reported by the current manifest-bound run.",
+      "description": "目前 run 最近完成週期的實現損益增量與完成時間。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 4,
+          "noValue": "尚無完成週期",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1E-12
+              }
+            ]
+          },
+          "unit": "suffix: USDT"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "完成時間"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#B8C7E0",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 8,
+        "y": 0
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "vertical",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_last_cycle_real_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "週期損益",
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_last_completed_cycle_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"} * 1000",
+          "instant": true,
+          "legendFormat": "完成時間",
+          "range": false,
+          "refId": "B"
+        }
+      ],
+      "title": "最近完成週期",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "目前 manifest 綁定 run 已完成的週期數。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -355,7 +217,7 @@
             "mode": "fixed"
           },
           "decimals": 0,
-          "noValue": "NO CYCLES",
+          "noValue": "0",
           "unit": "short"
         },
         "overrides": []
@@ -363,7 +225,7 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 16,
+        "x": 14,
         "y": 0
       },
       "id": 5,
@@ -395,7 +257,7 @@
           "refId": "A"
         }
       ],
-      "title": "COMPLETED CYCLES",
+      "title": "已完成週期",
       "type": "stat"
     },
     {
@@ -403,58 +265,181 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "FRESH means the source probe reported within 120 seconds.",
+      "description": "程序是精確數量：0=停止、1=運行中、2 以上=重複程序。資料綁定代表 process、config、log 與 marker 是否屬於同一個 run；風控狀態代表策略是否回報 risk_stopped；資料更新超過 180 秒即視為過期。",
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "STALE"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "FRESH"
-                }
-              },
-              "type": "value"
-            }
-          ],
-          "noValue": "MISSING",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "無資料",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "red",
                 "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "程序"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "未知"
               },
               {
-                "color": "green",
-                "value": 1
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "停止"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "運行中"
+                      }
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 2,
+                      "to": 1000000000,
+                      "result": {
+                        "color": "red",
+                        "index": 2,
+                        "text": "重複程序"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "資料綁定"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "未知"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "異常"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "正常"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "風控狀態"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "未知"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "green",
+                        "index": 0,
+                        "text": "正常"
+                      },
+                      "1": {
+                        "color": "red",
+                        "index": 1,
+                        "text": "已觸發停機"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "資料更新"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "無資料"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "過期"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "正常"
+                      }
+                    }
+                  }
+                ]
               }
             ]
           }
-        },
-        "overrides": []
+        ]
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 20,
+        "w": 6,
+        "x": 18,
         "y": 0
       },
-      "id": 6,
+      "id": 1,
       "options": {
         "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "horizontal",
+        "orientation": "vertical",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -462,7 +447,7 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value"
+        "textMode": "value_and_name"
       },
       "pluginVersion": "11.2.0",
       "targets": [
@@ -472,13 +457,50 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "time() - trading_strategy_probe_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"} < bool 120",
+          "expr": "trading_strategy_process_count{server_id=\"$server_id\",strategy=\"$strategy\"}",
           "instant": true,
+          "legendFormat": "程序",
           "range": false,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_binding_ok{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "資料綁定",
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_risk_stopped{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "legendFormat": "風控狀態",
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "time() - trading_strategy_probe_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"} < bool 180",
+          "instant": true,
+          "legendFormat": "資料更新",
+          "range": false,
+          "refId": "D"
         }
       ],
-      "title": "TELEMETRY",
+      "title": "監控摘要",
       "type": "stat"
     },
     {
@@ -486,7 +508,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "X is the completed session cycle; Y is cumulative real P&L for this current manifest-bound run.",
+      "description": "X 軸是已完成的 session cycle，Y 軸是目前 manifest 綁定 run 的累積 real PnL。此圖不跨 run。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -534,7 +556,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "currencyUSD"
+                "value": "suffix: USDT"
               },
               {
                 "id": "custom.axisLabel",
@@ -602,7 +624,7 @@
           "refId": "A"
         }
       ],
-      "title": "REAL P&L · CYCLE XY",
+      "title": "本輪實現損益 · 週期走勢",
       "transformations": [
         {
           "id": "organize",
@@ -653,7 +675,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Signed BTC position by mapped exchange and side, plus coordinator-book net. Long is positive, short is negative, and flat is zero.",
+      "description": "依交易所顯示 signed BTC 持倉與 coordinator 淨部位。多單為正、空單為負、空倉為零。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -674,7 +696,7 @@
               },
               {
                 "color": "green",
-                "value": 1e-12
+                "value": 1E-12
               }
             ]
           },
@@ -714,7 +736,7 @@
           "editorMode": "code",
           "expr": "sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"long\"})",
           "instant": true,
-          "legendFormat": "{{exchange}} · LONG",
+          "legendFormat": "{{exchange}} · 多",
           "range": false,
           "refId": "A"
         },
@@ -726,7 +748,7 @@
           "editorMode": "code",
           "expr": "-sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"short\"})",
           "instant": true,
-          "legendFormat": "{{exchange}} · SHORT",
+          "legendFormat": "{{exchange}} · 空",
           "range": false,
           "refId": "B"
         },
@@ -738,7 +760,7 @@
           "editorMode": "code",
           "expr": "sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"flat\"})",
           "instant": true,
-          "legendFormat": "{{exchange}} · FLAT",
+          "legendFormat": "{{exchange}} · 空倉",
           "range": false,
           "refId": "C"
         },
@@ -750,12 +772,12 @@
           "editorMode": "code",
           "expr": "trading_strategy_current_net_position_btc{server_id=\"$server_id\",strategy=\"$strategy\"}",
           "instant": true,
-          "legendFormat": "NET",
+          "legendFormat": "淨部位",
           "range": false,
           "refId": "D"
         }
       ],
-      "title": "CURRENT POSITIONS · SIGNED",
+      "title": "目前持倉 · 多空方向",
       "type": "stat"
     },
     {
@@ -763,7 +785,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Latest stable current-run P&L components. These values share the same source snapshot.",
+      "description": "同一份最新穩定 snapshot 的本輪實現損益、現金損益、返佣與風控損益。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -784,17 +806,17 @@
               },
               {
                 "color": "green",
-                "value": 1e-12
+                "value": 1E-12
               }
             ]
           },
-          "unit": "currencyUSD"
+          "unit": "suffix: USDT"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
+        "w": 10,
         "x": 0,
         "y": 13
       },
@@ -824,7 +846,7 @@
           "editorMode": "code",
           "expr": "trading_strategy_current_real_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
           "instant": true,
-          "legendFormat": "REAL",
+          "legendFormat": "實現損益",
           "range": false,
           "refId": "A"
         },
@@ -836,7 +858,7 @@
           "editorMode": "code",
           "expr": "trading_strategy_current_cash_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
           "instant": true,
-          "legendFormat": "CASH",
+          "legendFormat": "現金損益",
           "range": false,
           "refId": "B"
         },
@@ -848,7 +870,7 @@
           "editorMode": "code",
           "expr": "trading_strategy_current_rebate_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
           "instant": true,
-          "legendFormat": "REBATE",
+          "legendFormat": "返佣",
           "range": false,
           "refId": "C"
         },
@@ -860,12 +882,12 @@
           "editorMode": "code",
           "expr": "trading_strategy_current_risk_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
           "instant": true,
-          "legendFormat": "RISK",
+          "legendFormat": "風控損益",
           "range": false,
           "refId": "D"
         }
       ],
-      "title": "P&L COMPONENTS",
+      "title": "損益組成",
       "type": "stat"
     },
     {
@@ -873,7 +895,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "Authoritative latest stable current-run volume grouped by executor-to-exchange mapping.",
+      "description": "目前 manifest 綁定 run 的實際成交額，依 executor 對應交易所彙整，單位為 USD。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -881,15 +903,15 @@
             "mode": "fixed"
           },
           "decimals": 2,
-          "noValue": "NO COMPLETED TRADES",
+          "noValue": "尚無完成交易",
           "unit": "currencyUSD"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 5,
-        "w": 8,
-        "x": 8,
+        "w": 14,
+        "x": 10,
         "y": 13
       },
       "id": 10,
@@ -918,122 +940,12 @@
           "editorMode": "code",
           "expr": "trading_strategy_current_run_exchange_volume_usd{server_id=\"$server_id\",strategy=\"$strategy\"}",
           "instant": true,
-          "legendFormat": "{{exchange}} · VOLUME",
+          "legendFormat": "{{exchange}} · 成交額",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "CURRENT RUN VOLUME · BY EXCHANGE",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "description": "Real P&L delta and completion time of the latest completed cycle in the current run.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 4,
-          "noValue": "NO COMPLETED CYCLE",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "text",
-                "value": 0
-              },
-              {
-                "color": "green",
-                "value": 1e-12
-              }
-            ]
-          },
-          "unit": "currencyUSD"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "COMPLETED AT"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "dateTimeAsLocal"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              },
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "#B8C7E0",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 8,
-        "x": 16,
-        "y": 13
-      },
-      "id": 11,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "vertical",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "value_and_name",
-        "wideLayout": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "trading_strategy_last_cycle_real_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "CYCLE P&L",
-          "range": false,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "trading_strategy_last_completed_cycle_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"} * 1000",
-          "instant": true,
-          "legendFormat": "COMPLETED AT",
-          "range": false,
-          "refId": "B"
-        }
-      ],
-      "title": "LATEST COMPLETED CYCLE",
+      "title": "本輪成交額 · 依交易所",
       "type": "stat"
     },
     {
@@ -1041,7 +953,7 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "Source-scrubbed strategy logs. Order, client-action, and execution correlation identifiers are removed before Loki.",
+      "description": "來源端已移除訂單、client action、execution correlation 與本機路徑等敏感資訊；依新到舊顯示今天的策略日誌。",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -1078,7 +990,7 @@
           "refId": "A"
         }
       ],
-      "title": "STRATEGY LOGS · SCRUBBED",
+      "title": "最新策略日誌 · 已去識別",
       "type": "logs"
     }
   ],
@@ -1100,7 +1012,7 @@
         },
         "definition": "label_values(trading_target_info{product=\"tnauqquant\",environment=\"production\"}, server_id)",
         "includeAll": false,
-        "label": "Server",
+        "label": "伺服器",
         "multi": false,
         "name": "server_id",
         "options": [],
@@ -1120,7 +1032,7 @@
         },
         "definition": "label_values(trading_target_info{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\"}, strategy)",
         "includeAll": false,
-        "label": "Strategy",
+        "label": "策略",
         "multi": false,
         "name": "strategy",
         "options": [],
@@ -1140,8 +1052,9 @@
   },
   "timepicker": {},
   "timezone": "Asia/Taipei",
-  "title": "Trading · Strategy Detail",
+  "title": "Trading · 策略詳情",
   "uid": "trading-strategy-detail",
-  "version": 1,
-  "weekStart": "monday"
+  "version": 2,
+  "weekStart": "monday",
+  "description": "單一策略的本輪損益與診斷頁。損益和週期走勢是主要資訊；程序、資料綁定、風控與資料更新集中在右上角摘要。所有 log 在來源端完成去識別化。"
 }

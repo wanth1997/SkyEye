@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-08-28 15:53 — Trading dashboard PnL-first 與健康狀態可讀性
+
+**改動摘要：** 將三個 Trading dashboards 改為繁中、PnL-first 版面，正常健康訊號收進緊湊摘要；同時修正凍結 telemetry 偵測、history capability 告警與歷史 coverage 起點語意。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/` — 即時營運、策略詳情與策略總覽重新排序、縮小狀態區塊、加入 exact process 語意與每策略 shadow alert 數
+- `agents/alloy/trading/pnl-history.sh` — 輸出最新 bounded accumulated value，且第一筆 authoritative event 前不補零
+- `prometheus/rules/trading*.yml` — inventory 加入 history capability，telemetry freshness 統一為 180 秒，新增 history unavailable Medium shadow alert
+- `tests/trading/`、`prometheus/rules/tests/trading.test.yml` — 固定 dashboard contracts、history coverage 與 absent/frozen/invalid alert cases
+- `docs/`、`runbooks/` — 同步 dashboard、metric、alert 與 recovery contract
+
+**原因/備註：** Fleet 的健康基準由 owner 核准為 monitored strategies=2（中性）、stale=0、process mismatch=0、shadow alerts=0；異常從 1 起標色。此次完成 Git 內實作與隔離驗證，不部署、不重啟 Grafana、Alloy 或 trading process。
+
+---
+
 ## 2026-08-28 00:02 — 部署跨 round accumulated Real P&L 並完成 Grafana canary
 
 **改動摘要：** 合併 PR #30，將獨立的 macOS P&L history LaunchAgent 部署到 `tnauqquant-prod-1`，並讓中央 Grafana provisioning 載入 30 天跨 run／跨日 accumulated Real P&L Timeseries 與 coverage panel。
