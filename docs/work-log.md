@@ -15,6 +15,21 @@
 ---
 -->
 
+## 2026-08-28 17:19 — 部署 PnL-first Trading dashboards 與 history health
+
+**改動摘要：** 合併 PR #32，將繁中 PnL-first Trading dashboards、180 秒 telemetry freshness、history-capability shadow alert 與無假零點的 accumulated PnL builder 部署到 production。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/pnl-history.sh` — 在 `tnauqquant-prod-1` 先 render／validate，再只替換獨立 history script；未重載 Alloy、probe 或 trading process
+- `prometheus/rules/trading*.yml` — monitoring-prod fast-forward 到 merge commit `a6e636f`，通過 promtool 後以 lifecycle API reload，未重啟 Prometheus
+- `grafana/dashboards/Trading/` — 既有 provider 無重啟載入 `Trading · 即時營運` v15、`Trading · 策略詳情` v2 與 `Trading · 策略總覽` v2
+- `docs/work-log.md` — 記錄 PR #32、來源端與中央端 production canary
+
+**原因/備註：** History LaunchAgent 連續三輪 exit 0、stderr 0，中央收到 49 組對齊的 value/timestamp points、最新 accumulated Real PnL `1827.7101 USDT`、43 筆 legacy skipped records，且 `node_textfile_scrape_error=0`。Grafana provisioning error 與最近 10 分鐘 error 均為 0，Prometheus rule evaluation failures 為 0；Grafana 與 Prometheus container start time 均未改變。Fleet canary 為 2 個 targets、stale 0、process mismatch 0；當下 2 個 active shadow alerts 皆來自 `tnauqquant-prod-1` 的既有 `risk_halt` 狀態（`TradingCriticalSafetyState`、`TradingRiskStopped`），新 `TradingTelemetryMissing` 與 `TradingPnlHistoryUnavailable` 均 inactive。部署前後 matching trading process 都是 0，未啟停、signal、attach 或修改 trading process。
+
+---
+
 ## 2026-08-28 15:53 — Trading dashboard PnL-first 與健康狀態可讀性
 
 **改動摘要：** 將三個 Trading dashboards 改為繁中、PnL-first 版面，正常健康訊號收進緊湊摘要；同時修正凍結 telemetry 偵測、history capability 告警與歷史 coverage 起點語意。
