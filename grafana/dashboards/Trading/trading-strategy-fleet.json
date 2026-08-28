@@ -822,7 +822,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (strategy) (time() - trading_strategy_probe_timestamp_seconds < bool 180)",
+          "expr": "max by (strategy) (trading_strategy_risk_stopped)",
           "format": "table",
           "instant": true,
           "range": false,
@@ -834,7 +834,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (strategy) (time() - trading_strategy_probe_timestamp_seconds < bool 120)",
+          "expr": "max by (strategy) (time() - trading_strategy_probe_timestamp_seconds < bool 180)",
           "format": "table",
           "instant": true,
           "range": false,

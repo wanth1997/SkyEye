@@ -304,7 +304,16 @@ jq -e '
       contains(["Process", "Binding", "Risk", "Telemetry", "Alerts"])) and
     (.targets[5].expr | contains("trading_strategy_process_count") and
       (contains("> bool 0") | not)) and
-    (.targets[7].expr | contains("< bool 180")) and
+    ([.targets[] | select(.refId == "H") | .expr] |
+      (length == 1 and (.[0] | contains("trading_strategy_risk_stopped")))) and
+    .transformations[1].options.renameByName["Value #H"] == "Risk" and
+    ([.fieldConfig.overrides[] | select(.matcher.options == "Risk") |
+      .properties[] | select(.id == "displayName") | .value] == ["風控狀態"]) and
+    ([.targets[] | select(.refId == "I") | .expr] |
+      (length == 1 and (.[0] | contains("trading_strategy_probe_timestamp_seconds < bool 180")))) and
+    .transformations[1].options.renameByName["Value #I"] == "Telemetry" and
+    ([.fieldConfig.overrides[] | select(.matcher.options == "Telemetry") |
+      .properties[] | select(.id == "displayName") | .value] == ["資料更新"]) and
     (.targets[11].expr |
       contains("count by (strategy)") and
       contains("pending|firing") and
