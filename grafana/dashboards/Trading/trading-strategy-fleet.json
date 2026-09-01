@@ -12,10 +12,78 @@
   "panels": [
     {
       "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "所有 production Trading 策略近 15 分鐘的高信心執行事故總數。大於 0 時先由下方策略表進入各策略詳情，再核對關鍵執行事件。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 6,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\"} | logfmt | __error__=\"\" | msg=~\"coordinator_fence_stalled|mexcui_recovery_required|mexcui_recovery_required_refusing_normal_startup|shutdown_with_unconsumed_continuation|coordinated_shutdown_preserved_unresolved_fence\"[15m]))",
+          "instant": true,
+          "legendFormat": "需人工處理",
+          "queryType": "instant",
+          "refId": "A"
+        }
+      ],
+      "title": "執行事故 · 15 分鐘",
+      "type": "stat"
+    },
+    {
+      "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "監控策略是 inventory 總數；資料過期包含 probe timestamp 缺失或超過 180 秒；程序異常表示實際數量不符合 run_expected；Shadow 告警包含 pending 與 firing。健康基準是後三項皆為 0。",
+      "description": "Prometheus 摘要：監控策略是 inventory 總數；資料過期包含 probe timestamp 缺失或超過 180 秒；程序異常表示數量不符合 run_expected；Runtime 缺失表示 expected run 沒有 manifest contract；告警包含 pending 與 firing。Loki 執行事故另列於右側。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -129,7 +197,45 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "SHADOW 告警"
+              "options": "Runtime 缺失"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "0"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Prometheus SHADOW"
             },
             "properties": [
               {
@@ -167,8 +273,8 @@
         ]
       },
       "gridPos": {
-        "h": 3,
-        "w": 24,
+        "h": 4,
+        "w": 18,
         "x": 0,
         "y": 0
       },
@@ -231,11 +337,23 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "count(ALERTS{alertname=~\"Trading.*\",alertstate=~\"pending|firing\",notification_mode=\"shadow\"}) or vector(0)",
+          "expr": "sum((trading_strategy_run_expected == 1) and on (product, environment, server_id, strategy) (trading_strategy_runtime_contract_available == 0)) or vector(0)",
           "instant": true,
-          "legendFormat": "SHADOW 告警",
+          "legendFormat": "Runtime 缺失",
           "range": false,
           "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "count(ALERTS{alertname=~\"Trading.*\",alertstate=~\"pending|firing\",notification_mode=\"shadow\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "Prometheus SHADOW",
+          "range": false,
+          "refId": "E"
         }
       ],
       "title": "監控摘要",
@@ -246,7 +364,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "每列是一個 globally unique strategy slug。本輪實現損益不跨策略加總；程序顯示精確狀態，資料更新超過 180 秒為過期。告警欄讓上方非零 Shadow 告警可定位到策略。",
+      "description": "每列是一個 globally unique strategy slug。本輪損益不跨策略加總；Runtime Contract、執行綁定與 Config 快照分欄，避免既有 config drift 掩蓋新的 runtime 缺失。Prometheus 告警可定位到策略；Loki 執行事故由上方獨立呈現。",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -355,6 +473,49 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "RuntimeContract"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "缺失"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "可用"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "displayName",
+                "value": "Runtime Contract"
+              },
+              {
+                "id": "noValue",
+                "value": "未知"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "Binding"
             },
             "properties": [
@@ -387,7 +548,50 @@
               },
               {
                 "id": "displayName",
-                "value": "資料綁定"
+                "value": "執行綁定"
+              },
+              {
+                "id": "noValue",
+                "value": "未知"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ConfigSnapshot"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "已漂移"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "一致"
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "displayName",
+                "value": "Config 快照"
               },
               {
                 "id": "noValue",
@@ -405,7 +609,7 @@
                 "id": "custom.cellOptions",
                 "value": {
                   "mode": "basic",
-                  "type": "color-background"
+                  "type": "color-text"
                 }
               },
               {
@@ -415,9 +619,9 @@
                     "type": "value",
                     "options": {
                       "0": {
-                        "color": "green",
+                        "color": "text",
                         "index": 0,
-                        "text": "正常"
+                        "text": "未回報停機"
                       },
                       "1": {
                         "color": "red",
@@ -430,7 +634,7 @@
               },
               {
                 "id": "displayName",
-                "value": "風控狀態"
+                "value": "風控回報"
               },
               {
                 "id": "noValue",
@@ -720,7 +924,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 3
+        "y": 4
       },
       "id": 5,
       "options": {
@@ -810,7 +1014,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (strategy) (trading_strategy_binding_ok)",
+          "expr": "max by (strategy) (trading_strategy_runtime_binding_ok)",
           "format": "table",
           "instant": true,
           "range": false,
@@ -875,6 +1079,30 @@
           "instant": true,
           "range": false,
           "refId": "L"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (strategy) (trading_strategy_runtime_contract_available)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "M"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (strategy) (trading_strategy_config_snapshot_match)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "N"
         }
       ],
       "title": "策略損益與運行狀態 · 點選策略查看詳情",
@@ -893,6 +1121,8 @@
               "Time": true,
               "Time 1": true,
               "Time 10": true,
+              "Time 12": true,
+              "Time 13": true,
               "Time 2": true,
               "Time 3": true,
               "Time 4": true,
@@ -916,11 +1146,13 @@
               "Value #D": 5,
               "Value #E": 6,
               "Value #F": 7,
-              "Value #G": 8,
-              "Value #H": 9,
-              "Value #I": 10,
-              "Value #J": 11,
-              "Value #L": 12
+              "Value #M": 8,
+              "Value #G": 9,
+              "Value #N": 10,
+              "Value #H": 11,
+              "Value #I": 12,
+              "Value #J": 13,
+              "Value #L": 14
             },
             "renameByName": {
               "strategy": "Strategy",
@@ -931,7 +1163,9 @@
               "Value #D": "Run volume",
               "Value #E": "Net position",
               "Value #F": "Process",
+              "Value #M": "RuntimeContract",
               "Value #G": "Binding",
+              "Value #N": "ConfigSnapshot",
               "Value #H": "Risk",
               "Value #I": "Telemetry",
               "Value #J": "Telemetry age",
@@ -963,6 +1197,6 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略總覽",
   "uid": "trading-strategy-fleet",
-  "version": 2,
+  "version": 3,
   "weekStart": "monday"
 }

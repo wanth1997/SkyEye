@@ -95,6 +95,11 @@ loki.process "trading" {
     replace    = "[TRACE_REF]"
   }
 
+  stage.replace {
+    expression = "(?i)(grant_id|mutation_id|mutations|account)=([^[:space:]]+)"
+    replace    = "[EXECUTION_REF]"
+  }
+
   stage.label_drop {
     values = ["filename"]
   }

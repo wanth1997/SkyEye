@@ -15,6 +15,48 @@
 ---
 -->
 
+## 2026-09-01 19:03 — 移除 Trading 即時營運 dashboard
+
+**改動摘要：** 依 owner 指示刪除 provisioned `Trading · 即時營運` dashboard，Trading Grafana 介面只保留通用的策略詳情與策略總覽。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 從 Git provisioning source 刪除；provider 的 `disableDeletion=false` 會在後續部署時同步移除 Grafana DB dashboard
+- `tests/trading/test-central-config.sh` — 改為明確要求該檔案與 UID/title 均不存在，並繼續驗證 detail/fleet、rules 與 layout contracts
+- `docs/grafana-conventions.md`、`docs/project-brief.md` — 從現行 dashboard inventory 與專案狀態移除即時營運頁面
+
+**原因/備註：** Prometheus/Loki rules、Alloy scrub、P&L history metrics、Trading 策略詳情與策略總覽不受影響。此次只更新 PR，未直接操作或重載 production Grafana。
+
+---
+
+## 2026-09-01 18:09 — 實作 Trading incident-first dashboard 與 shadow rules
+
+**改動摘要：** 將三張 Trading dashboard 改為事故優先，新增高信心 execution incident taxonomy、runtime-contract-missing Prometheus 告警與 execution identifier source-side scrub，並以去識別化 fixture 固定正常 unresolved 與事故事件的邊界。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/` — 頂端新增近 15 分鐘 Loki 事故狀態、6 小時關鍵事件，並拆分 Runtime Contract、執行綁定與 Config 快照；fleet 分開顯示 Prometheus shadow 與 Loki execution incidents
+- `loki/rules/fake/tnauqquant.yml`、`prometheus/rules/trading.yml` — 新增 `TradingExecutionIncident`、`TradingRuntimeContractMissing` 與分離後的 recording rules；generic Loki fallback 支援 `ERROR+N`／`FATAL+N` 並排除專用 taxonomy
+- `agents/alloy/trading/` — macOS/Linux 在 Loki sink 前 scrub `grant_id`、`mutation_id`、`mutations`、`account` 為 `[EXECUTION_REF]`
+- `tests/fixtures/tnauqquant/`、`tests/trading/`、`prometheus/rules/tests/trading.test.yml` — 新增完全 synthetic 的 incident fixture/checksum、taxonomy、scrub、rule、dashboard datasource/layout contracts
+- `runbooks/trading-critical-safety-state.md`、`docs/project-brief.md` — 記錄 execution reconciliation、runtime contract 與 rollout 語意
+
+**原因/備註：** 正常的 `disposition=unresolved ui_submission_status=accepted` 不會單獨觸發事故；只有 allowlist 中的 fence stalled、人工復原、single-legged shutdown 與 unresolved fence preservation 會進入專用事件。所有新舊 Trading alerts 仍為 `notification_mode=shadow`，本次只建立 Git PR，未部署、reload 或重啟 production。完整 Trading regression、Prometheus 2.54.1 rules/unit tests、Loki 3.1.1 dry-run lint、Alloy validate、launchd plist、dashboard JSON/layout 與 Alertmanager 0.27 config 驗證皆通過。
+
+---
+
+## 2026-09-01 17:39 — 評估 Trading 成交確認異常監控缺口
+
+**改動摘要：** 唯讀比對 `tnauqquant-prod-1` 異常 run、中央 Loki／Prometheus／Alertmanager 與 production Grafana 設定，確認資料已完整送達但嚴重事件未被 dashboard 凸顯，且所有 Trading 告警仍由 shadow route 丟棄通知。
+
+**修改的檔案：**
+
+- `docs/work-log.md` — 記錄本次事故訊號、監控缺口與建議 rollout 邊界
+
+**原因/備註：** `20260901_112459_toobit-mexc` 在 16:24 後進入 reconcile／fence recovery，產生 14 筆 `coordinator_fence_stalled`、167 筆 fenced-signal skipped，結束時保留 unresolved fence 與 single-legged portfolio；17:17 新 run 再因 `mexcui_recovery_required` 拒絕啟動。Loki 收到 22 筆 `ERROR` 與 1 筆 `ERROR+4`，但 generic rule 只匹配前者且所有規則仍為 shadow；主要 dashboard 僅顯示未篩選的最新五筆 log，fleet 的 shadow alert count 又只讀 Prometheus `ALERTS`，看不到 Loki ruler alerts。建議另案實作 incident-first banner、critical event timeline、Alertmanager/Loki visibility、特定高信心 message taxonomy、runtime-contract-missing alert 與 source-side correlation ID scrub，經 fixture、shadow 與 canary 後才升級通知。本次未修改或重啟 Alloy、Trading、Grafana、Loki、Prometheus 或 Alertmanager。
+
+---
+
 ## 2026-08-28 17:19 — 部署 PnL-first Trading dashboards 與 history health
 
 **改動摘要：** 合併 PR #32，將繁中 PnL-first Trading dashboards、180 秒 telemetry freshness、history-capability shadow alert 與無假零點的 accumulated PnL builder 部署到 production。
