@@ -17,7 +17,7 @@
 - 中央監控棧、Cloudflare ingress、Telegram routing、host/app/business rules 與多個產品 dashboard 已投入使用。
 - Linux/Ubuntu Alloy installer 已支援 journald、node metrics 與 application `/metrics`。
 - Trading inventory 已包含 `tnauqquant-prod-1` / `toobit-mexc-btc` 與 `trading01` / `lighter-robinhood-btc-canary`；portable read-only probe 同時支援雙交易所與單交易所 executor mapping，Linux Alloy 以 directory fragment 共存於既有 ZenIncome pipeline。既有 dashboard 保留，另有可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
-- `tnauqquant-prod-1` 在 macOS Alloy 與 read-only probe 之外，另有隔離的每分鐘 P&L history builder，以變更偵測與 per-run cache 合併 authoritative completed-cycle delta。Trading dashboards 已改為繁中、PnL-first 版面：30 天跨 run／跨日 accumulated Real PnL 佔主視覺，正常的 process、binding、risk、telemetry 與 history 狀態收進緊湊摘要；fleet 另外揭露每策略 shadow alert 數。歷史資料在第一筆 authoritative event 前不補零，避免把尚無 coverage 誤畫成零損益。
+- `tnauqquant-prod-1` 在 macOS Alloy 與 read-only probe 之外，另有隔離的每分鐘 P&L history builder，以變更偵測與 per-run cache 合併 authoritative completed-cycle delta。Trading dashboards 採繁中、incident-first 版面：最上方直接顯示近 15 分鐘的高信心成交確認／復原事故，其後保留 30 天 accumulated Real PnL；runtime contract、執行 identity binding 與 config snapshot drift 分開呈現，關鍵事件也與完整 scrubbed log 分層。fleet 同時揭露 Prometheus shadow alerts 與獨立的 Loki execution incident count。歷史資料在第一筆 authoritative event 前不補零，避免把尚無 coverage 誤畫成零損益。
 - ZenIncome 的 Loki log alerts、dashboard 與唯讀 Bitfinex 診斷腳本已納入 Git；既有 production 規則狀態需由 operator 持續觀察。
 - LinkCourt 付款建立 5xx 與訂單編號 capacity/exhausted 告警已進入 shadow routing，等待 production canary review 後再決定是否升級通知。
 
@@ -30,6 +30,8 @@
 - Trading telemetry alert 由中央 inventory 判斷 timestamp 缺失或凍結超過 180 秒；只有標記 `history_capable="true"` 的 target 會套用獨立的 PnL history unavailable Medium shadow alert。
 - Production probe 強制使用 Trading repo 的 run manifest 與可驗證 done marker，缺少 contract 時 fail closed，不以最新 mtime 猜測 current run。
 - Running manifest 的 PID、executable、instance 與 log binding 有效時，磁碟 config drift 只以 `config_snapshot_match=0` 揭露並維持 shadow binding alert，不解除既有 run 的 P&L/log 可觀測性，也不改寫 manifest 快照。
+- Trading execution incident 使用高信心 `msg` allowlist，不以 `disposition=unresolved ui_submission_status=accepted` 單獨判定異常；同一 allowlist 從 generic ERROR-family rule 排除，避免日後 promotion 後重複 paging。`ERROR+N`／`FATAL+N` 仍由 generic fallback 涵蓋。
+- Trading log 在來源端額外 scrub `grant_id`、`mutation_id`、`mutations` 與 `account`，且這些 execution identifiers 永不升為 Loki labels。
 - Trading 原始 `tnauqquant_*` metrics 維持穩定，中央以 `trading_target_info` inventory 與 `trading_strategy_*` recording rules 提供多策略介面；alert 不再 hard-code server/strategy。
 - Linux 已有 Alloy 的主機使用 config directory 加入 `trading.alloy` fragment，重用既有 `central` receivers；不覆寫其他產品 pipeline，也不新增 ingestion port。
 - Current-run P&L 只能在同一策略列中呈現；不同 run 起始時間沒有共同 accounting window，因此 fleet 不顯示加總損益。

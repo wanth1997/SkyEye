@@ -115,6 +115,17 @@ does not touch the trading process.
 - Verify the Grafana Cloudflare email allowlist before pushing Trading PNL or raw errors.
 - The Alloy template reads secrets at runtime with `sys.env`; it never renders them into `config.alloy` or the launchd plist.
 
+## Source-side scrub contract
+
+Both macOS and Linux pipelines scrub the complete log line before it reaches the Loki sink:
+
+- order and client action fields become `[ORDER_REF]`;
+- attempt, reservation and recovery correlation fields become `[TRACE_REF]`;
+- execution grant/mutation/account fields (`grant_id`, `mutation_id`, `mutations`, `account`) become `[EXECUTION_REF]`;
+- repo paths, email addresses and tokens use their existing placeholders.
+
+None of these values may become Loki labels. The complete Trading label budget remains `product`, `environment`, `server_id`, `strategy`, `run_id` and `level`. When reconciliation requires the original identifiers, inspect the source raw log under incident-handling authorization instead of weakening the central scrub.
+
 ## New server handoff
 
 Another server agent changes environment values only:

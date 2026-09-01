@@ -1,0 +1,8 @@
+time=2026-01-15T09:10:00.000+08:00 level=INFO msg=order_submission_result venue=toobit disposition=unresolved ui_submission_status=accepted order_id=fixture-order-normal client_action_id=fixture-action-normal
+time=2026-01-15T09:11:00.000+08:00 level=WARN msg=reconcile_soft_deadline venue=mexc state=pending
+time=2026-01-15T09:12:00.000+08:00 level=WARN msg=coordinator_fence_stalled venue=mexc grant_id=fixture-grant-001 mutation_id=fixture-mutation-001
+time=2026-01-15T09:13:00.000+08:00 level=ERROR msg=shutdown_with_unconsumed_continuation portfolio_left_single_legged=true quantity_btc=0.012345 reservation_id=fixture-reservation-001
+time=2026-01-15T09:14:00.000+08:00 level=WARN msg=coordinated_shutdown_preserved_unresolved_fence grant_id=fixture-grant-002
+time=2026-01-15T09:15:00.000+08:00 level=ERROR msg=mexcui_recovery_required account=fixture-account mutations=fixture-mutation-002,fixture-mutation-003
+time=2026-01-15T09:16:00.000+08:00 level=ERROR+4 msg=mexcui_recovery_required_refusing_normal_startup account=fixture-account mutation_id=fixture-mutation-004
+time=2026-01-15T09:17:00.000+08:00 level=ERROR msg=unrelated_fixture_error reason=fixture_only

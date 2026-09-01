@@ -2,18 +2,28 @@ groups:
     - name: tnauqquant-trading-errors
       interval: 30s
       rules:
+        - alert: TradingExecutionIncident
+          expr: |-
+            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production"} | logfmt | __error__="" | msg=~"coordinator_fence_stalled|mexcui_recovery_required|mexcui_recovery_required_refusing_normal_startup|shutdown_with_unconsumed_continuation|coordinated_shutdown_preserved_unresolved_fence"[1m])) > 0)
+          labels:
+            incident_class: execution_confirmation
+            notification_mode: shadow
+            severity: High
+          annotations:
+            runbook_url: https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md#execution-confirmation-incident
+            summary: '{{ $labels.server_id }} {{ $labels.strategy }} requires execution reconciliation'
         - alert: TradingCriticalLogEvent
           expr: |-
-            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production", level=~"ERROR|FATAL"}[1m])) > 0)
+            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production", level=~"ERROR([+][0-9]+)?|FATAL([+][0-9]+)?"} | logfmt | __error__="" | msg!~"coordinator_fence_stalled|mexcui_recovery_required|mexcui_recovery_required_refusing_normal_startup|shutdown_with_unconsumed_continuation|coordinated_shutdown_preserved_unresolved_fence"[1m])) > 0)
           labels:
             notification_mode: shadow
             severity: High
           annotations:
             runbook_url: https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md
-            summary: '{{ $labels.server_id }} {{ $labels.strategy }} emitted ERROR/FATAL logs'
+            summary: '{{ $labels.server_id }} {{ $labels.strategy }} emitted ERROR-family/FATAL logs'
         - alert: TradingCriticalWarnEvent
           expr: |-
-            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production", level="WARN"} | logfmt | msg=~"emergency_exit|unhedged_exposure"[1m])) > 0)
+            (sum by (product,environment,server_id,strategy)(count_over_time({product="tnauqquant", environment="production", level="WARN"} | logfmt | __error__="" | msg=~"emergency_exit|unhedged_exposure"[1m])) > 0)
           labels:
             notification_mode: shadow
             severity: High

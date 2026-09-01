@@ -32,6 +32,24 @@ groups:
           and on (product, environment, server_id, strategy)
           trading_target_info
 
+      - record: trading_strategy_runtime_binding_ok
+        expr: |
+          min by (product, environment, server_id, strategy) (
+            {
+              __name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|log_binding_ok|marker_binding_ok)",
+              product="tnauqquant",
+              environment="production"
+            }
+          )
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_config_snapshot_match
+        expr: |
+          tnauqquant_config_snapshot_match{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
       - record: trading_strategy_sidecar_required
         expr: |
           tnauqquant_sidecar_required{product="tnauqquant",environment="production"}
@@ -241,6 +259,19 @@ groups:
         annotations:
           summary: "{{ $labels.server_id }} {{ $labels.strategy }} reports risk_stopped"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md"
+
+      - alert: TradingRuntimeContractMissing
+        expr: |
+          trading_strategy_run_expected == 1
+          and on (product, environment, server_id, strategy)
+          trading_strategy_runtime_contract_available == 0
+        for: 30s
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} {{ $labels.strategy }} expected run has no runtime contract"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md#runtime-contract-missing"
 
       - alert: TradingRunBindingInvalid
         expr: |

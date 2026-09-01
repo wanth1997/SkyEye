@@ -42,8 +42,46 @@ tests:
         alertname: TradingRunBindingInvalid
         exp_alerts: []
       - eval_time: 3m
+        alertname: TradingRuntimeContractMissing
+        exp_alerts: []
+      - eval_time: 3m
         alertname: TradingTelemetryMissing
         exp_alerts: []
+    promql_expr_test:
+      - expr: 'trading_strategy_runtime_binding_ok{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        eval_time: 3m
+        exp_samples:
+          - labels: 'trading_strategy_runtime_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+            value: 1
+      - expr: 'trading_strategy_config_snapshot_match{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        eval_time: 3m
+        exp_samples:
+          - labels: 'trading_strategy_config_snapshot_match{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+            value: 1
+
+  - name: expected run without runtime contract fires a dedicated shadow alert
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x5'
+      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x5'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: TradingRuntimeContractMissing
+        exp_alerts:
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: tnauqquant-prod-1
+              strategy: toobit-mexc-btc
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'tnauqquant-prod-1 toobit-mexc-btc expected run has no runtime contract'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md#runtime-contract-missing'
 
   - name: frozen probe timestamps alert even while stale textfiles keep scraping
     interval: 30s
@@ -167,6 +205,17 @@ tests:
             exp_annotations:
               summary: 'tnauqquant-prod-1 toobit-mexc-btc run binding is invalid'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md'
+    promql_expr_test:
+      - expr: 'trading_strategy_runtime_binding_ok{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'trading_strategy_runtime_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+            value: 1
+      - expr: 'trading_strategy_config_snapshot_match{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'trading_strategy_config_snapshot_match{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+            value: 0
 
   - name: missing production telemetry fires independently
     interval: 30s

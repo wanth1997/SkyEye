@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "以損益為主的 TNAUQQuant 營運頁面。主圖呈現跨輪、跨日連續的 30 日累積實現損益；右側集中顯示損益與監控摘要。持倉、成交額與日誌只代表目前 manifest 綁定的 run。歷史資料起點與被排除的舊格式事件會獨立揭露。",
+  "description": "事故優先的 TNAUQQuant 營運頁面。頂端直接呈現近 15 分鐘的成交確認、人工復原、單邊曝險與未解 fence 事件；其後保留 30 日累積實現損益、runtime contract、綁定、持倉與去識別化日誌。",
   "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -48,6 +48,109 @@
   ],
   "liveNow": false,
   "panels": [
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "高信心執行事故事件計數。任一值大於 0 都表示需要人工核對兩側實際持倉與未完成委託；單純 disposition=unresolved 且 ui_submission_status=accepted 不列入事故。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0,
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 51,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "value_and_name",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} | logfmt | __error__=\"\" | msg=\"coordinator_fence_stalled\"[15m]))",
+          "instant": true,
+          "legendFormat": "成交確認卡住",
+          "queryType": "instant",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} | logfmt | __error__=\"\" | msg=~\"mexcui_recovery_required(_refusing_normal_startup)?\"[15m]))",
+          "instant": true,
+          "legendFormat": "需人工復原",
+          "queryType": "instant",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} | logfmt | __error__=\"\" | msg=\"shutdown_with_unconsumed_continuation\"[15m]))",
+          "instant": true,
+          "legendFormat": "單邊曝險",
+          "queryType": "instant",
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} | logfmt | __error__=\"\" | msg=\"coordinated_shutdown_preserved_unresolved_fence\"[15m]))",
+          "instant": true,
+          "legendFormat": "未解 fence",
+          "queryType": "instant",
+          "refId": "D"
+        }
+      ],
+      "title": "執行事故 · 最近 15 分鐘",
+      "type": "stat"
+    },
     {
       "datasource": {
         "type": "prometheus",
@@ -134,10 +237,10 @@
         ]
       },
       "gridPos": {
-        "h": 10,
+        "h": 12,
         "w": 18,
         "x": 0,
-        "y": 0
+        "y": 4
       },
       "id": 2,
       "options": {
@@ -270,7 +373,7 @@
         "h": 5,
         "w": 6,
         "x": 18,
-        "y": 0
+        "y": 4
       },
       "id": 49,
       "options": {
@@ -336,7 +439,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "程序是精確數量：0=停止、1=運行中、2 以上=重複程序。資料綁定代表 process、config、log 與 marker 是否屬於同一個 run；風控狀態代表策略是否回報 risk_stopped；資料與歷史更新超過 180 秒即視為過期。",
+      "description": "程序顯示精確數量；Runtime Contract 顯示 manifest contract 是否可用；執行綁定只看 process、strategy、log 與 marker；Config 快照獨立揭露 drift。risk_stopped=0 只表示未回報停機，不代表已確認安全。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -401,10 +504,42 @@
               }
             ]
           },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Runtime Contract"
+        },
+        "properties": [
           {
-            "matcher": {
-              "id": "byName",
-              "options": "資料綁定"
+            "id": "noValue",
+            "value": "未知"
+          },
+          {
+            "id": "mappings",
+            "value": [
+              {
+                "type": "value",
+                "options": {
+                  "0": {
+                    "color": "red",
+                    "index": 0,
+                    "text": "缺失"
+                  },
+                  "1": {
+                    "color": "green",
+                    "index": 1,
+                    "text": "可用"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "執行綁定"
             },
             "properties": [
               {
@@ -432,11 +567,43 @@
                 ]
               }
             ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Config 快照"
+        },
+        "properties": [
+          {
+            "id": "noValue",
+            "value": "未知"
           },
           {
-            "matcher": {
-              "id": "byName",
-              "options": "風控狀態"
+            "id": "mappings",
+            "value": [
+              {
+                "type": "value",
+                "options": {
+                  "0": {
+                    "color": "red",
+                    "index": 0,
+                    "text": "已漂移"
+                  },
+                  "1": {
+                    "color": "green",
+                    "index": 1,
+                    "text": "一致"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "風控回報"
             },
             "properties": [
               {
@@ -449,10 +616,10 @@
                   {
                     "type": "value",
                     "options": {
-                      "0": {
-                        "color": "green",
-                        "index": 0,
-                        "text": "正常"
+                  "0": {
+                    "color": "text",
+                    "index": 0,
+                    "text": "未回報停機"
                       },
                       "1": {
                         "color": "red",
@@ -532,10 +699,10 @@
         ]
       },
       "gridPos": {
-        "h": 5,
+        "h": 7,
         "w": 6,
         "x": 18,
-        "y": 5
+        "y": 9
       },
       "id": 50,
       "options": {
@@ -574,9 +741,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "trading_strategy_binding_ok{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "expr": "trading_strategy_runtime_contract_available{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
           "instant": true,
-          "legendFormat": "資料綁定",
+          "legendFormat": "Runtime Contract",
           "range": false,
           "refId": "B"
         },
@@ -586,11 +753,35 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "trading_strategy_risk_stopped{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "expr": "trading_strategy_runtime_binding_ok{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
           "instant": true,
-          "legendFormat": "風控狀態",
+          "legendFormat": "執行綁定",
           "range": false,
           "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_config_snapshot_match{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "Config 快照",
+          "range": false,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_risk_stopped{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
+          "instant": true,
+          "legendFormat": "風控回報",
+          "range": false,
+          "refId": "E"
         },
         {
           "datasource": {
@@ -602,7 +793,7 @@
           "instant": true,
           "legendFormat": "資料更新",
           "range": false,
-          "refId": "D"
+          "refId": "F"
         },
         {
           "datasource": {
@@ -614,7 +805,7 @@
           "instant": true,
           "legendFormat": "歷史更新",
           "range": false,
-          "refId": "E"
+          "refId": "G"
         }
       ],
       "title": "監控摘要",
@@ -768,7 +959,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 10
+        "y": 16
       },
       "id": 40,
       "options": {
@@ -882,12 +1073,54 @@
         "type": "loki",
         "uid": "loki"
       },
-      "description": "來源端已去除訂單、client action、execution correlation 與本機路徑等敏感資訊；只查最近六小時並由新到舊顯示。",
+      "description": "只顯示需要人工處理的成交確認、復原、單邊曝險與未解 fence 事件；來源端已去識別化。",
       "gridPos": {
         "h": 7,
         "w": 16,
         "x": 8,
-        "y": 10
+        "y": 16
+      },
+      "id": 52,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "direction": "backward",
+          "editorMode": "code",
+          "expr": "{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"} | logfmt | __error__=\"\" | msg=~\"coordinator_fence_stalled|mexcui_recovery_required|mexcui_recovery_required_refusing_normal_startup|shutdown_with_unconsumed_continuation|coordinated_shutdown_preserved_unresolved_fence\"",
+          "maxLines": 100,
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "timeFrom": "6h",
+      "title": "關鍵執行事件 · 近 6 小時",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "description": "來源端已去除訂單、client action、execution correlation 與本機路徑等敏感資訊；只查最近六小時並由新到舊顯示。",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 27
       },
       "id": 45,
       "options": {
@@ -910,12 +1143,12 @@
           "direction": "backward",
           "editorMode": "code",
           "expr": "{product=\"tnauqquant\",environment=\"production\",server_id=\"tnauqquant-prod-1\",strategy=\"toobit-mexc-btc\"}",
-          "maxLines": 5,
+          "maxLines": 50,
           "queryType": "range",
           "refId": "A"
         }
       ],
-      "title": "最新 5 筆策略日誌",
+      "title": "最新 50 筆策略日誌 · 已去識別",
       "type": "logs",
       "timeFrom": "6h"
     },
@@ -973,7 +1206,7 @@
         "h": 4,
         "w": 8,
         "x": 0,
-        "y": 17
+        "y": 23
       },
       "id": 47,
       "options": {
@@ -1096,7 +1329,7 @@
         "h": 4,
         "w": 16,
         "x": 8,
-        "y": 17
+        "y": 23
       },
       "id": 48,
       "options": {
@@ -1185,6 +1418,6 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 即時營運",
   "uid": "tnauqquant-trading-overview",
-  "version": 15,
+  "version": 16,
   "weekStart": "monday"
 }
