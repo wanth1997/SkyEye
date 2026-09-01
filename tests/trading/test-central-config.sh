@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/tnauqquant-trading-overview.json"
+REMOVED_DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/tnauqquant-trading-overview.json"
 DETAIL_DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/trading-strategy-detail.json"
 FLEET_DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/trading-strategy-fleet.json"
 PROM_RULES="$REPO_ROOT/prometheus/rules/trading.yml"
@@ -13,7 +13,6 @@ INCIDENT_FIXTURE="$REPO_ROOT/tests/fixtures/tnauqquant/trading-incident.raw.log"
 INCIDENT_TEST="$REPO_ROOT/tests/trading/test-incident-taxonomy.sh"
 
 for required_file in \
-  "$DASHBOARD" \
   "$DETAIL_DASHBOARD" \
   "$FLEET_DASHBOARD" \
   "$PROM_RULES" \
@@ -27,27 +26,6 @@ do
     exit 1
   }
 done
-
-jq -e '
-  .uid == "tnauqquant-trading-overview" and
-  .title == "Trading · 即時營運" and
-  .editable == false and
-  ([.panels[].title] | contains([
-    "跨輪累積實現損益 · 近 30 日",
-    "損益摘要",
-    "監控摘要",
-    "執行事故 · 最近 15 分鐘",
-    "目前持倉 · 多空方向",
-    "關鍵執行事件 · 近 6 小時",
-    "最新 50 筆策略日誌 · 已去識別",
-    "本輪成交額 · 依交易所",
-    "資料涵蓋範圍"
-  ])) and
-  ([.panels[] | select(.title == "損益摘要") | .targets[].expr] |
-    any(contains("tnauqquant_pnl_history_current_value_usdt"))) and
-  ([.panels[] | select(.title == "關鍵執行事件 · 近 6 小時" or .title == "最新 50 筆策略日誌 · 已去識別") | .timeFrom] == ["6h", "6h"]) and
-  ([.links[].url] | any(contains("trading-strategy-fleet")))
-' "$DASHBOARD" >/dev/null
 
 jq -e '
   .uid == "trading-strategy-detail" and
@@ -101,10 +79,18 @@ jq -e '
     any(contains(["告警", "本輪實現損益", "資料更新"])))
 ' "$FLEET_DASHBOARD" >/dev/null
 
-jq empty "$DASHBOARD"
+if [[ -e "$REMOVED_DASHBOARD" ]]; then
+  printf 'FAIL: removed Trading immediate-operations dashboard still exists\n' >&2
+  exit 1
+fi
+if rg -q 'tnauqquant-trading-overview|Trading · 即時營運' "$REPO_ROOT/grafana/dashboards"; then
+  printf 'FAIL: removed Trading dashboard identity remains in provisioning sources\n' >&2
+  exit 1
+fi
+
 jq empty "$DETAIL_DASHBOARD"
 jq empty "$FLEET_DASHBOARD"
-for dashboard_file in "$DASHBOARD" "$DETAIL_DASHBOARD" "$FLEET_DASHBOARD"; do
+for dashboard_file in "$DETAIL_DASHBOARD" "$FLEET_DASHBOARD"; do
   jq -e '
     ([.panels[].id] | length == (unique | length)) and
     ([.panels[] |
@@ -121,163 +107,6 @@ for dashboard_file in "$DASHBOARD" "$DETAIL_DASHBOARD" "$FLEET_DASHBOARD"; do
     ] | all)
   ' "$dashboard_file" >/dev/null
 done
-jq -e '
-  .uid == "tnauqquant-trading-overview" and
-  .timezone == "Asia/Taipei" and
-  .time.from == "now-30d" and
-  (.templating.list | length == 0) and
-  (.panels | length == 9) and
-  ([.panels[].id] | sort == [2, 40, 45, 47, 48, 49, 50, 51, 52]) and
-  ([.panels[].type] | sort == ["logs", "logs", "stat", "stat", "stat", "stat", "stat", "stat", "timeseries"]) and
-  ([.. | objects | select(.mode? == "fixedColor")] | length == 0) and
-  ([.. | objects | select(.mode? == "fixed") |
-    (has("fixedColor") and (.fixedColor | type) == "string" and (.fixedColor | length) > 0)
-  ] | all) and
-  ([.panels[] | select(.id == 2) |
-    (.type == "timeseries" and
-     .pluginVersion == "11.2.0" and
-     .fieldConfig.defaults.custom.drawStyle == "line" and
-     .fieldConfig.defaults.custom.lineInterpolation == "stepAfter" and
-     .fieldConfig.defaults.custom.showPoints == "always" and
-     .options.legend.showLegend == false and
-     (.targets | length) == 2 and
-     ([.targets[].instant] == [true, true]) and
-     ([.targets[].range] == [false, false]) and
-     ([.targets[].format] == ["table", "table"]) and
-     (.targets[0].expr | contains("tnauqquant_pnl_history_point_value_usdt")) and
-     (.targets[1].expr | contains("tnauqquant_pnl_history_point_timestamp_seconds")) and
-     (.targets[1].expr | endswith(" * 1000")) and
-     ([.transformations[].id] == ["joinByField", "organize", "convertFieldType", "sortBy"]) and
-     .transformations[0].options == {"byField": "point", "mode": "outer"} and
-     .transformations[1].options.includeByName == {"Value #A": true, "Value #B": true} and
-     .transformations[1].options.indexByName == {
-       "Value #A": 1,
-       "Value #B": 0
-     } and
-     .transformations[1].options.renameByName == {
-       "Value #A": "Accumulated Real P&L",
-       "Value #B": "Time"
-     } and
-     .transformations[2].options.conversions[0].targetField == "Time" and
-     .transformations[2].options.conversions[0].destinationType == "time" and
-     .transformations[3].options.sort[0].field == "Time" and
-     .transformations[3].options.sort[0].desc == false and
-     ([.targets[].expr] | all(
-       (contains("tnauqquant_current_real_pnl_usdt") or
-        contains("tnauqquant_last_cycle_real_pnl_usdt") or
-        contains("tnauqquant_cycle_cumulative_real_pnl_usdt")) | not
-     )))
-  ] == [true]) and
-  ([.panels[] | select(.id == 40) |
-    (.type == "stat" and
-     (.targets | length) == 7 and
-     ([.targets[].legendFormat] == [
-       "TOOBIT · 多", "TOOBIT · 空", "TOOBIT · 空倉",
-       "MEXC · 多", "MEXC · 空", "MEXC · 空倉", "淨部位"
-     ]) and
-     (.targets[0:3] | map(.expr) | all(contains("exchange=\"toobit\""))) and
-     (.targets[3:6] | map(.expr) | all(contains("exchange=\"mexc\""))) and
-     (.targets[0:6] | map(.expr | capture("side=\\\"(?<side>long|short|flat)\\\"").side) ==
-       ["long", "short", "flat", "long", "short", "flat"]) and
-     ([.targets[1].expr, .targets[4].expr] | all(startswith("-sum("))) and
-     (.targets[6].expr | contains("side=\"long\"") and contains("side=\"short\"")) and
-     (.targets[6].expr | contains("exchange=\"toobit\"") | not) and
-     (.targets[6].expr | contains("exchange=\"mexc\"") | not) and
-     ([.fieldConfig.overrides[] |
-       select(.matcher.options == "TOOBIT · 多" or .matcher.options == "MEXC · 多") |
-       .properties[] | select(.id == "color") | .value.fixedColor
-     ] == ["#73BF69", "#73BF69"]) and
-     ([.fieldConfig.overrides[] |
-       select(.matcher.options == "TOOBIT · 空" or .matcher.options == "MEXC · 空") |
-       .properties[] | select(.id == "color") | .value.fixedColor
-     ] == ["#F2495C", "#F2495C"]) and
-     ([.fieldConfig.overrides[] | select(.matcher.options == "淨部位") |
-       .properties[] | select(.id == "color") | .value.mode
-     ] == ["thresholds"]))
-  ] == [true]) and
-  ([.panels[] | select(.id == 45) |
-    (.type == "logs" and
-     .datasource.type == "loki" and
-     .targets[0].datasource.type == "loki" and
-     .targets[0].maxLines == 50 and
-     .targets[0].direction == "backward" and
-     .options.sortOrder == "Descending" and
-     .timeFrom == "6h")
-  ] == [true]) and
-  ([.panels[] | select(.id == 51) |
-    (.type == "stat" and
-     .datasource.uid == "loki" and
-     .gridPos == {h: 4, w: 24, x: 0, y: 0} and
-     ([.targets[].legendFormat] == ["成交確認卡住", "需人工復原", "單邊曝險", "未解 fence"]) and
-     ([.targets[].queryType] == ["instant", "instant", "instant", "instant"]) and
-     ([.targets[].expr] | all(contains("[15m]") and contains("| logfmt") and contains("| __error__=\"\"") and contains("| msg"))))
-  ] == [true]) and
-  ([.panels[] | select(.id == 52) |
-    (.type == "logs" and
-     .datasource.uid == "loki" and
-     .targets[0].maxLines == 100 and
-     (.targets[0].expr | contains("coordinator_fence_stalled") and contains("mexcui_recovery_required") and contains("shutdown_with_unconsumed_continuation")) and
-     .timeFrom == "6h")
-  ] == [true]) and
-  ([.panels[] | select(.id == 49) |
-    (.type == "stat" and
-     .fieldConfig.defaults.unit == "suffix: USDT" and
-     ([.targets[].legendFormat] == ["跨輪累積", "本輪", "最近週期"]) and
-     (.targets[0].expr | contains("tnauqquant_pnl_history_current_value_usdt")) and
-     (.targets[1].expr | contains("tnauqquant_current_real_pnl_usdt")) and
-     (.targets[2].expr | contains("tnauqquant_last_cycle_real_pnl_usdt")))
-  ] == [true]) and
-  ([.panels[] | select(.id == 50) |
-    (.type == "stat" and
-     ([.targets[].legendFormat] == ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新", "歷史更新"]) and
-     (.targets[0].expr | contains("trading_strategy_process_count") and
-       (contains("> bool 0") | not)) and
-     (.targets[1].expr | contains("trading_strategy_runtime_contract_available")) and
-     (.targets[2].expr | contains("trading_strategy_runtime_binding_ok")) and
-     (.targets[3].expr | contains("trading_strategy_config_snapshot_match")) and
-     ([.fieldConfig.overrides[] |
-       select(any(.properties[]; .id == "noValue")) | .matcher.options] ==
-       ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新", "歷史更新"]) and
-     ([.fieldConfig.overrides[] | select(.matcher.options == "風控回報") |
-       .properties[] | select(.id == "mappings") | .value[].options["0"].text] == ["未回報停機"]) and
-     ([.fieldConfig.overrides[] | select(.matcher.options == "程序") |
-       .properties[] | select(.id == "mappings") | .value[] |
-       select(.type == "range") | (.options.from == 2 and .options.to > 1000)] == [true]))
-  ] == [true]) and
-  ([.panels[] | select(.id == 47) |
-    (.type == "stat" and
-     .gridPos.y == 23 and
-     .gridPos.x == 0 and
-     .gridPos.w == 8 and
-     .fieldConfig.defaults.unit == "currencyUSD" and
-     (.targets | length) == 2 and
-     ([.targets[].legendFormat] == ["TOOBIT 成交額", "MEXC 成交額"]) and
-     ([.targets[].expr] | all(contains("tnauqquant_current_run_exchange_volume_usd"))) and
-     (.targets[0].expr | contains("exchange=\"toobit\"")) and
-     (.targets[1].expr | contains("exchange=\"mexc\"")) and
-     ([.targets[].instant] == [true, true]) and
-     ([.targets[].range] == [false, false]))
-  ] == [true]) and
-  ([.panels[] | select(.id == 48) |
-    (.type == "stat" and
-     .gridPos.y == 23 and
-     .gridPos.x == 8 and
-     .gridPos.w == 16 and
-     ([.targets[].legendFormat] == ["更新秒數", "資料起點", "排除舊資料"]) and
-     (.targets[0].expr | contains("tnauqquant_pnl_history_build_timestamp_seconds")) and
-     (.targets[1].expr | contains("tnauqquant_pnl_history_first_supported_event_timestamp_seconds")) and
-     (.targets[2].expr | contains("tnauqquant_pnl_history_skipped_legacy_events")) and
-     ([.targets[].instant] == [true, true, true]) and
-     ([.targets[].range] == [false, false, false]))
-  ] == [true]) and
-  ([.panels[].targets[].expr] | all(
-    contains("environment=\"production\"") and
-    contains("server_id=\"tnauqquant-prod-1\"") and
-    contains("strategy=\"toobit-mexc-btc\"")
-  )) and
-  ([.panels[].targets[].expr] | all(contains("tnauqquant_cycle_cumulative_real_pnl_usdt") | not))
-' "$DASHBOARD" >/dev/null
-
 jq -e '
   .uid == "trading-strategy-detail" and
   .timezone == "Asia/Taipei" and
@@ -414,7 +243,7 @@ jq -e '
 ' "$FLEET_DASHBOARD" >/dev/null
 
 if rg -q 'development|tnauqquant-dev-mac|mexc-toobit-btc' \
-  "$DASHBOARD" "$PROM_RULES" "$PROM_TARGET" "$LOKI_RULES"
+  "$PROM_RULES" "$PROM_TARGET" "$LOKI_RULES"
 then
   printf 'FAIL: legacy development Trading target remains in central config\n' >&2
   exit 1

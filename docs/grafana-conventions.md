@@ -105,7 +105,6 @@ TODO (low priority): add a pre-commit hook that runs `jq` against every dashboar
 | SkyEye | SkyEye — Stack health | `skyeye-stack-health` | Built in-house — meta-monitoring: Prom TSDB / Loki ingest / AM notifications / Grafana HTTP / blackbox |
 | enyoung | enyoung — 日誌總覽 | `enyoung-logs-overview` | Log-derived observability: LogQL regexp parser extracts method/status/duration from Go chi access log. Stand-in until enyoung exposes `/metrics`. |
 | ZenIncome | ZenIncome — 日誌總覽 | `zenincome-logs-overview` | Log-derived: log level / business event / symbol / source file breakdown. Go Bitfinex funding-rate bot, no /metrics yet. |
-| Trading | Trading · 即時營運 | tnauqquant-trading-overview | PnL-first production view with cross-round accumulated Real PnL and compact health summary. |
 | Trading | Trading · 策略詳情 | trading-strategy-detail | Reusable server/strategy drill-down using generic trading strategy recording rules. |
 | Trading | Trading · 策略總覽 | trading-strategy-fleet | One row per strategy with PnL first, exact process state, telemetry freshness, active shadow alerts, and detail navigation. |
 

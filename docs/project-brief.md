@@ -16,8 +16,8 @@
 
 - 中央監控棧、Cloudflare ingress、Telegram routing、host/app/business rules 與多個產品 dashboard 已投入使用。
 - Linux/Ubuntu Alloy installer 已支援 journald、node metrics 與 application `/metrics`。
-- Trading inventory 已包含 `tnauqquant-prod-1` / `toobit-mexc-btc` 與 `trading01` / `lighter-robinhood-btc-canary`；portable read-only probe 同時支援雙交易所與單交易所 executor mapping，Linux Alloy 以 directory fragment 共存於既有 ZenIncome pipeline。既有 dashboard 保留，另有可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
-- `tnauqquant-prod-1` 在 macOS Alloy 與 read-only probe 之外，另有隔離的每分鐘 P&L history builder，以變更偵測與 per-run cache 合併 authoritative completed-cycle delta。Trading dashboards 採繁中、incident-first 版面：最上方直接顯示近 15 分鐘的高信心成交確認／復原事故，其後保留 30 天 accumulated Real PnL；runtime contract、執行 identity binding 與 config snapshot drift 分開呈現，關鍵事件也與完整 scrubbed log 分層。fleet 同時揭露 Prometheus shadow alerts 與獨立的 Loki execution incident count。歷史資料在第一筆 authoritative event 前不補零，避免把尚無 coverage 誤畫成零損益。
+- Trading inventory 已包含 `tnauqquant-prod-1` / `toobit-mexc-btc` 與 `trading01` / `lighter-robinhood-btc-canary`；portable read-only probe 同時支援雙交易所與單交易所 executor mapping，Linux Alloy 以 directory fragment 共存於既有 ZenIncome pipeline。Grafana 只保留可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
+- `tnauqquant-prod-1` 在 macOS Alloy 與 read-only probe 之外，另有隔離的每分鐘 P&L history builder，以變更偵測與 per-run cache 合併 authoritative completed-cycle delta；其 accumulated metrics 繼續保留，但不再提供專用的「Trading · 即時營運」dashboard。detail／fleet 採繁中、incident-first 版面：最上方直接顯示近 15 分鐘的高信心成交確認／復原事故，runtime contract、執行 identity binding 與 config snapshot drift 分開呈現，關鍵事件也與完整 scrubbed log 分層。fleet 同時揭露 Prometheus shadow alerts 與獨立的 Loki execution incident count。
 - ZenIncome 的 Loki log alerts、dashboard 與唯讀 Bitfinex 診斷腳本已納入 Git；既有 production 規則狀態需由 operator 持續觀察。
 - LinkCourt 付款建立 5xx 與訂單編號 capacity/exhausted 告警已進入 shadow routing，等待 production canary review 後再決定是否升級通知。
 

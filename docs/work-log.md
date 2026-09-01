@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-09-01 19:03 — 移除 Trading 即時營運 dashboard
+
+**改動摘要：** 依 owner 指示刪除 provisioned `Trading · 即時營運` dashboard，Trading Grafana 介面只保留通用的策略詳情與策略總覽。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/tnauqquant-trading-overview.json` — 從 Git provisioning source 刪除；provider 的 `disableDeletion=false` 會在後續部署時同步移除 Grafana DB dashboard
+- `tests/trading/test-central-config.sh` — 改為明確要求該檔案與 UID/title 均不存在，並繼續驗證 detail/fleet、rules 與 layout contracts
+- `docs/grafana-conventions.md`、`docs/project-brief.md` — 從現行 dashboard inventory 與專案狀態移除即時營運頁面
+
+**原因/備註：** Prometheus/Loki rules、Alloy scrub、P&L history metrics、Trading 策略詳情與策略總覽不受影響。此次只更新 PR，未直接操作或重載 production Grafana。
+
+---
+
 ## 2026-09-01 18:09 — 實作 Trading incident-first dashboard 與 shadow rules
 
 **改動摘要：** 將三張 Trading dashboard 改為事故優先，新增高信心 execution incident taxonomy、runtime-contract-missing Prometheus 告警與 execution identifier source-side scrub，並以去識別化 fixture 固定正常 unresolved 與事故事件的邊界。
