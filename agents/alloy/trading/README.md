@@ -103,6 +103,13 @@ directory defaults to `/var/lib/skyeye-trading/textfile`, is setgid
 probe-user:alloy mode 2770, and is checked from the probe user's account before
 any service is restarted; probe output is 0640.
 
+Trading creates each new raw log as mode `0600`. Before every 15-second probe,
+the systemd oneshot runs `ensure-log-access.sh`, which adds only the named
+`alloy:r--` ACL to files matching `TQ_RAW_LOG_GLOB` when effective read access
+is missing. It never changes log content, ownership, group, or files outside
+the configured repository and glob. This avoids silently losing Loki ingest
+after a new run creates a fresh log.
+
 To roll back, disable skyeye-trading-probe.timer, remove
 /etc/alloy/trading.alloy, restore the printed /etc/default/alloy backup,
 validate the remaining Alloy configuration, and restart Alloy. This rollback
