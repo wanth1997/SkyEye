@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-09-01 19:33 — 部署 Trading incident observability 並修復 Linux log ACL
+
+**改動摘要：** 合併並部署 PR #34 的 incident-first dashboards、shadow rules 與 execution identifier scrub；production canary 另發現 Trading01 新 raw logs 的 mode-`0600` ACL 缺口，先恢復 ingest，再以 PR #35 加入持續修補 named Alloy read ACL 的 helper。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/config-*.alloy.tmpl` — macmini-m2 與 Trading01 已載入 execution identifier scrub；兩端 Alloy ready，未 scrubbed identifiers 為 0，Loki 實際收到 `[EXECUTION_REF]`
+- `prometheus/rules/trading.yml`、`loki/rules/fake/tnauqquant.yml` — monitoring-prod fast-forward 到 PR #34 merge commit `478ac74`，Prometheus 以 lifecycle API reload，Loki ruler 自動載入；新規則 health 為 ok 且仍為 shadow
+- `grafana/dashboards/Trading/` — provisioning 將 detail／fleet 更新為 v3，並從 Grafana DB 刪除 `Trading · 即時營運`
+- `agents/alloy/trading/ensure-log-access.sh`、`setup-linux.sh`、`skyeye-trading-probe.service.tmpl` — PR #35 merge commit `c236698`；每次 Linux probe 前只對設定 glob 內缺少有效權限的 raw logs 補 named `alloy:r--` ACL
+- `docs/work-log.md` — 記錄 PR #34／#35 production rollout、ACL 根因與 canary
+
+**原因/備註：** PR #34 rollout 時，Trading01 Alloy restart 揭露新 run logs 雖有 directory traverse ACL，檔案本身仍為 `0600`，導致 Loki 至少一小時沒有該主機 logs。即時 remediation 只改 29 個設定檔案的 ACL、未改內容，中央隨即在兩分鐘窗收到 11 筆 logs；永久 helper 已以 `--no-start` 部署，29/29 可讀且 ExecStartPre 成功，沒有再次重啟 Alloy。最終兩個策略的 process/runtime contract/runtime binding/config snapshot 均為 1，probe age 約 14–27 秒；近兩分鐘未 scrubbed execution identifiers 為 0、10 分鐘 `[EXECUTION_REF]` 為 4，6 小時事故 query 正確找到 `tnauqquant-prod-1` 的 18 筆事件。Grafana、Loki、Prometheus 自 merge 起 error 皆為 0，rule evaluation failures 為 0；唯一 active Trading alert 仍是部署前既有的 `TradingPnlTelemetryStale` shadow。兩臺 Trading process count 部署前後皆為 1，交易 config／manifest checksum 未變，未啟停或修改 Trading process；Trading01 checkout 既有的 `docs/code-patterns/go.md` 未提交修改保持原狀。
+
+---
+
 ## 2026-09-01 19:03 — 移除 Trading 即時營運 dashboard
 
 **改動摘要：** 依 owner 指示刪除 provisioned `Trading · 即時營運` dashboard，Trading Grafana 介面只保留通用的策略詳情與策略總覽。
