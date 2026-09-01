@@ -6,6 +6,7 @@ TEMPLATE="$SCRIPT_DIR/config-linux.alloy.tmpl"
 SERVICE_TEMPLATE="$SCRIPT_DIR/skyeye-trading-probe.service.tmpl"
 TIMER_TEMPLATE="$SCRIPT_DIR/skyeye-trading-probe.timer.tmpl"
 SOURCE_PROBE="$SCRIPT_DIR/probe.sh"
+SOURCE_ACCESS="$SCRIPT_DIR/ensure-log-access.sh"
 ENV_FILE=""
 RENDER_ONLY_DIR=""
 NO_START=0
@@ -70,14 +71,17 @@ render_unit() {
   local target="$2"
   local env_path="$3"
   local probe_path="$4"
-  local env_escaped probe_escaped user_escaped group_escaped
+  local access_path="$5"
+  local env_escaped probe_escaped access_escaped user_escaped group_escaped
   env_escaped="$(escape_sed_replacement "$env_path")"
   probe_escaped="$(escape_sed_replacement "$probe_path")"
+  access_escaped="$(escape_sed_replacement "$access_path")"
   user_escaped="$(escape_sed_replacement "$TQ_PROBE_USER")"
   group_escaped="$(escape_sed_replacement "$TQ_PROBE_GROUP")"
   sed \
     -e "s|@@ENV_FILE@@|$env_escaped|g" \
     -e "s|@@PROBE_PATH@@|$probe_escaped|g" \
+    -e "s|@@ACCESS_PATH@@|$access_escaped|g" \
     -e "s|@@PROBE_USER@@|$user_escaped|g" \
     -e "s|@@PROBE_GROUP@@|$group_escaped|g" \
     "$template" >"$target"
@@ -87,14 +91,16 @@ render_artifacts() {
   local target_dir="$1"
   local rendered_env="$target_dir/config.env"
   local rendered_probe="$target_dir/probe.sh"
+  local rendered_access="$target_dir/ensure-log-access.sh"
   install -d -m 700 "$target_dir"
   render_alloy "$target_dir/trading.alloy"
   install -m 600 "$ENV_FILE" "$rendered_env"
   install -m 755 "$SOURCE_PROBE" "$rendered_probe"
+  install -m 755 "$SOURCE_ACCESS" "$rendered_access"
   render_unit "$SERVICE_TEMPLATE" "$target_dir/skyeye-trading-probe.service" \
-    "$rendered_env" "$rendered_probe"
+    "$rendered_env" "$rendered_probe" "$rendered_access"
   render_unit "$TIMER_TEMPLATE" "$target_dir/skyeye-trading-probe.timer" \
-    "$rendered_env" "$rendered_probe"
+    "$rendered_env" "$rendered_probe" "$rendered_access"
   chmod 644 \
     "$target_dir/trading.alloy" \
     "$target_dir/skyeye-trading-probe.service" \
@@ -132,6 +138,7 @@ done
 [[ -f "$SERVICE_TEMPLATE" ]] || die "missing systemd service template: $SERVICE_TEMPLATE"
 [[ -f "$TIMER_TEMPLATE" ]] || die "missing systemd timer template: $TIMER_TEMPLATE"
 [[ -x "$SOURCE_PROBE" ]] || die "missing executable probe: $SOURCE_PROBE"
+[[ -x "$SOURCE_ACCESS" ]] || die "missing executable log access helper: $SOURCE_ACCESS"
 [[ -f "$ENV_FILE" ]] || die "env file not found: $ENV_FILE"
 
 mode="$(file_mode "$ENV_FILE")"
@@ -211,7 +218,7 @@ if [[ -n "$RENDER_ONLY_DIR" ]]; then
 fi
 
 [[ "$(id -u)" -eq 0 ]] || die "installation must run as root"
-for command_name in alloy getent grep install runuser sed setfacl systemctl
+for command_name in alloy find getent getfacl grep install runuser sed setfacl systemctl
 do
   command -v "$command_name" >/dev/null 2>&1 || die "missing required command: $command_name"
 done
@@ -257,14 +264,19 @@ runuser -u "$TQ_PROBE_USER" -- test -x "$TQ_TEXTFILE_DIR" || \
 runuser -u "$TQ_PROBE_USER" -- test -w "$TQ_TEXTFILE_DIR" || \
   die "probe user cannot write textfile directory: $TQ_TEXTFILE_DIR"
 install -m 755 "$RENDER_ROOT/probe.sh" "$INSTALL_ROOT/probe.sh"
+install -m 755 "$RENDER_ROOT/ensure-log-access.sh" \
+  "$INSTALL_ROOT/ensure-log-access.sh"
 install -m 600 "$ENV_FILE" "$INSTALL_ENV"
 install -m 644 "$RENDER_ROOT/trading.alloy" "$ALLOY_FRAGMENT"
-render_unit "$SERVICE_TEMPLATE" "$SERVICE_PATH" "$INSTALL_ENV" "$INSTALL_ROOT/probe.sh"
-render_unit "$TIMER_TEMPLATE" "$TIMER_PATH" "$INSTALL_ENV" "$INSTALL_ROOT/probe.sh"
+render_unit "$SERVICE_TEMPLATE" "$SERVICE_PATH" "$INSTALL_ENV" \
+  "$INSTALL_ROOT/probe.sh" "$INSTALL_ROOT/ensure-log-access.sh"
+render_unit "$TIMER_TEMPLATE" "$TIMER_PATH" "$INSTALL_ENV" \
+  "$INSTALL_ROOT/probe.sh" "$INSTALL_ROOT/ensure-log-access.sh"
 chmod 644 "$SERVICE_PATH" "$TIMER_PATH"
 
 probe_home="$(getent passwd "$TQ_PROBE_USER" | awk -F: '{ print $6 }')"
 raw_log_dir="${TQ_RAW_LOG_GLOB%/*}"
+raw_log_pattern="${TQ_RAW_LOG_GLOB##*/}"
 if [[ "$raw_log_dir" == "$probe_home"/* ]]; then
   setfacl -m "u:$TQ_ALLOY_USER:r-x" "$raw_log_dir"
   acl_path="$(dirname "$raw_log_dir")"
@@ -274,6 +286,8 @@ if [[ "$raw_log_dir" == "$probe_home"/* ]]; then
     acl_path="$(dirname "$acl_path")"
   done
 fi
+
+runuser -u "$TQ_PROBE_USER" -- "$INSTALL_ROOT/ensure-log-access.sh"
 
 ALLOY_ENV_BACKUP="$ALLOY_ENV_FILE.skyeye-trading.bak.$(date +%s)"
 cp -p "$ALLOY_ENV_FILE" "$ALLOY_ENV_BACKUP"
@@ -308,7 +322,7 @@ systemctl start skyeye-trading-probe.service
 systemctl is-active --quiet alloy || die "Alloy is not active after installation"
 systemctl is-active --quiet skyeye-trading-probe.timer || die "trading probe timer is not active"
 
-first_log="$(find "$raw_log_dir" -maxdepth 1 -type f -name '*.raw.log' -print -quit)"
+first_log="$(find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print -quit)"
 if [[ -n "$first_log" ]]; then
   runuser -u "$TQ_ALLOY_USER" -- test -r "$first_log" || \
     die "Alloy user cannot read configured raw logs"

@@ -9,13 +9,15 @@ TEMPLATE="$TRADING_DIR/config-linux.alloy.tmpl"
 SERVICE_TEMPLATE="$TRADING_DIR/skyeye-trading-probe.service.tmpl"
 TIMER_TEMPLATE="$TRADING_DIR/skyeye-trading-probe.timer.tmpl"
 ENV_EXAMPLE="$TRADING_DIR/deployment-linux.env.example"
+ACCESS_HELPER="$TRADING_DIR/ensure-log-access.sh"
 
 for required_file in \
   "$SETUP" \
   "$TEMPLATE" \
   "$SERVICE_TEMPLATE" \
   "$TIMER_TEMPLATE" \
-  "$ENV_EXAMPLE"
+  "$ENV_EXAMPLE" \
+  "$ACCESS_HELPER"
 do
   [[ -f "$required_file" ]] || {
     printf 'FAIL: required Linux deployment file is missing: %s\n' "$required_file" >&2
@@ -25,6 +27,10 @@ done
 
 [[ -x "$SETUP" ]] || {
   printf 'FAIL: Linux setup script is not executable\n' >&2
+  exit 1
+}
+[[ -x "$ACCESS_HELPER" ]] || {
+  printf 'FAIL: Linux raw-log access helper is not executable\n' >&2
   exit 1
 }
 
@@ -69,6 +75,8 @@ assert_contains "$ENV_EXAMPLE" '^TQ_TEXTFILE_DIR=/var/lib/skyeye-trading/textfil
 assert_not_contains "$ENV_EXAMPLE" '^TQ_TEXTFILE_DIR=/var/lib/alloy/'
 assert_contains "$SETUP" 'runuser -u "[$]TQ_PROBE_USER" -- test -x "[$]TQ_TEXTFILE_DIR"'
 assert_contains "$SETUP" 'runuser -u "[$]TQ_PROBE_USER" -- test -w "[$]TQ_TEXTFILE_DIR"'
+assert_contains "$SETUP" 'ensure-log-access.sh'
+assert_contains "$SERVICE_TEMPLATE" '^ExecStartPre=@@ACCESS_PATH@@$'
 
 TEST_ROOT="$(mktemp -d /tmp/skyeye-linux-render.XXXXXX)"
 cleanup() {
@@ -120,6 +128,7 @@ for rendered_file in \
   "$RENDERED/trading.alloy" \
   "$RENDERED/config.env" \
   "$RENDERED/probe.sh" \
+  "$RENDERED/ensure-log-access.sh" \
   "$RENDERED/skyeye-trading-probe.service" \
   "$RENDERED/skyeye-trading-probe.timer"
 do
@@ -136,6 +145,8 @@ assert_not_contains "$RENDERED/trading.alloy" '@@[A-Z_]+@@'
 assert_not_contains "$RENDERED/trading.alloy" 'fake-client-secret'
 assert_contains "$RENDERED/skyeye-trading-probe.service" 'User=ubuntu'
 assert_contains "$RENDERED/skyeye-trading-probe.service" 'Group=ubuntu'
+assert_contains "$RENDERED/skyeye-trading-probe.service" \
+  '^ExecStartPre=.*/ensure-log-access[.]sh$'
 
 mode="$(stat -f '%Lp' "$RENDERED/config.env" 2>/dev/null || stat -c '%a' "$RENDERED/config.env")"
 [[ "$mode" == "600" ]] || {

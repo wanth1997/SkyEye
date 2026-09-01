@@ -7,6 +7,7 @@ Type=oneshot
 User=@@PROBE_USER@@
 Group=@@PROBE_GROUP@@
 EnvironmentFile=@@ENV_FILE@@
+ExecStartPre=@@ACCESS_PATH@@
 ExecStart=@@PROBE_PATH@@
 UMask=0027
 

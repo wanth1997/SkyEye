@@ -34,6 +34,7 @@
 - Trading log 在來源端額外 scrub `grant_id`、`mutation_id`、`mutations` 與 `account`，且這些 execution identifiers 永不升為 Loki labels。
 - Trading 原始 `tnauqquant_*` metrics 維持穩定，中央以 `trading_target_info` inventory 與 `trading_strategy_*` recording rules 提供多策略介面；alert 不再 hard-code server/strategy。
 - Linux 已有 Alloy 的主機使用 config directory 加入 `trading.alloy` fragment，重用既有 `central` receivers；不覆寫其他產品 pipeline，也不新增 ingestion port。
+- Linux Trading probe timer 會在每次執行前，僅對 `TQ_RAW_LOG_GLOB` 命中的 mode-`0600` raw logs 補上 named `alloy:r--` ACL；不更改檔案內容、owner/group，也不將 Alloy 加入產品使用者群組。
 - Current-run P&L 只能在同一策略列中呈現；不同 run 起始時間沒有共同 accounting window，因此 fleet 不顯示加總損益。
 - Owner 已核准：TQ human foreground launch、`real_pnl_usdt` primary PNL、development/production target IDs、Trading runtime contract 修改，以及 operator-only Grafana access。
 - 新增告警一律先帶 `notification_mode="shadow"`，通過 canary review 後才可移除 shadow routing。
