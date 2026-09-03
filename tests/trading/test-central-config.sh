@@ -394,4 +394,24 @@ then
   exit 1
 fi
 
+if command -v docker >/dev/null 2>&1; then
+  docker run --rm \
+    -v "$REPO_ROOT/prometheus:/etc/prometheus:ro" \
+    --entrypoint promtool \
+    prom/prometheus:v2.54.1 \
+    check rules \
+    /etc/prometheus/rules/trading-targets.yml \
+    /etc/prometheus/rules/trading.yml
+  docker run --rm \
+    -v "$REPO_ROOT/prometheus:/etc/prometheus:ro" \
+    --entrypoint promtool \
+    prom/prometheus:v2.54.1 \
+    test rules /etc/prometheus/rules/tests/trading.test.yml
+elif command -v promtool >/dev/null 2>&1; then
+  promtool check rules "$PROM_TARGET" "$PROM_RULES"
+  promtool test rules "$REPO_ROOT/prometheus/rules/tests/trading.test.yml"
+else
+  printf 'SKIP: docker/promtool unavailable; Prometheus rule execution was not run\n'
+fi
+
 printf 'PASS: central Trading production target and dashboard contract\n'

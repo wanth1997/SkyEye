@@ -129,7 +129,7 @@ The first install uses `--migrate-singleton --no-start`; the second uses `--no-s
 Before and after installation record:
 
 ```bash
-pgrep -af '/home/ubuntu/tnauqquant/quant' || true
+pgrep -af '/home/ubuntu/tnauqquant/(bin/[^/]+/)?quant([[:space:]]|$)' || true
 tmux list-panes -a -F '#{session_name} #{pane_pid} #{pane_current_command}'
 systemctl is-active alloy
 systemctl is-active \

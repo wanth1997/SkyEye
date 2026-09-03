@@ -26,7 +26,7 @@
 - `prometheus/rules/trading-targets.yml`、`prometheus/rules/tests/trading.test.yml` — 新增 `trading01/lighter-mainnet-btc-canary` shadow target，quote 為 USDT 且不宣告 history capability
 - `AGENTS.md`、`docs/project-brief.md`、`docs/trading-new-server-handoff.md` — 記錄同 server 雙策略監控與 Mainnet 不由監控安裝器啟動的契約
 
-**原因/備註：** 本次尚未部署或 reload production。全部 Trading shell regressions、ShellCheck、native Alloy combined-config validation、dashboard JSON 與 YAML parse 均通過；本機沒有 Docker/promtool/amtool，因此那些 container checks留待 reviewer/CI publication gate。
+**原因/備註：** 本次尚未部署或 reload production。Herdr code review 後另修正 per-instance binary 的 before/after process census、要求 test-root 使用 root 內非 symlink 的 fake `systemctl`，並覆蓋 `--no-start` inertness、started install／restart rollback；central test 也會在 Docker 或 native promtool 可用時實際執行 rule tests。全部 Trading shell regressions、ShellCheck、native Alloy combined-config validation、dashboard JSON 與 YAML parse 均通過；本機沒有 Docker/promtool/amtool，因此 Prometheus container checks 仍留待 publication gate。
 
 ---
 

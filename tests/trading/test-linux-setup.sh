@@ -66,10 +66,11 @@ assert_not_contains "$INSTANCE_TEMPLATE" 'CF-Access-Client-Secret'
 
 assert_contains "$SETUP" 'CONFIG_FILE="/etc/alloy"'
 assert_contains "$SETUP" 'alloy validate'
-assert_contains "$SETUP" 'systemctl disable --now "[$]LEGACY_TIMER"'
+assert_contains "$SETUP" '"[$]SYSTEMCTL_BIN" disable --now "[$]LEGACY_TIMER"'
 assert_contains "$SETUP" 'legacy singleton artifacts exist'
 assert_contains "$SETUP" 'install -d -o .* -g .* -m 2770'
-assert_contains "$SETUP" 'systemctl restart alloy'
+assert_contains "$SETUP" '"[$]SYSTEMCTL_BIN" restart alloy'
+assert_contains "$SETUP" 'test mode requires a non-symlink systemctl stub below SKYEYE_TRADING_TEST_ROOT'
 assert_not_contains "$SETUP" 'systemctl.*tnauqquant'
 assert_not_contains "$SERVICE_TEMPLATE" 'quant'
 assert_contains "$SERVICE_TEMPLATE" 'Type=oneshot'
@@ -279,6 +280,15 @@ shift
   printf '\n'
 } >>"$SYSTEMCTL_LOG"
 
+if [[ "$cmd" == "restart" && "${1:-}" == "alloy" &&
+      "${SYSTEMCTL_FAIL_RESTART_ONCE:-0}" == "1" ]]; then
+  fail_marker="$SYSTEMCTL_STATE/fail_restart_once_consumed"
+  if [[ ! -e "$fail_marker" ]]; then
+    touch "$fail_marker"
+    exit 1
+  fi
+fi
+
 state_path() {
   local kind="$1"
   local unit="$2"
@@ -369,6 +379,18 @@ export PATH="$FAKE_BIN:$PATH"
 export SYSTEMCTL_STATE SYSTEMCTL_LOG ALLOY_CALL_COUNT
 export FAKE_PASSWD_HOME="$TEST_ROOT"
 
+printf 'case: test mode rejects a systemctl symlink even below its root\n'
+mv "$FAKE_BIN/systemctl" "$FAKE_BIN/systemctl.stub"
+ln -s /usr/bin/false "$FAKE_BIN/systemctl"
+if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" --env-file "$ROBINHOOD_ENV" --no-start >/dev/null 2>&1
+then
+  printf 'FAIL: test mode accepted a symlinked systemctl\n' >&2
+  exit 1
+fi
+rm -f "$FAKE_BIN/systemctl"
+mv "$FAKE_BIN/systemctl.stub" "$FAKE_BIN/systemctl"
+
 if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" --env-file "$ROBINHOOD_ENV" --no-start >/dev/null 2>&1
 then
@@ -412,9 +434,13 @@ done
 
 printf 'case: two instance installs preserve shared and sibling artifacts\n'
 printf '0\n' >"$ALLOY_CALL_COUNT"
+: >"$SYSTEMCTL_LOG"
 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" --env-file "$ROBINHOOD_ENV" --migrate-singleton --no-start >/dev/null
 assert_contains "$SYSTEMCTL_LOG" 'disable --now skyeye-trading-probe[.]timer'
+assert_not_contains "$SYSTEMCTL_LOG" '^restart alloy$'
+assert_not_contains "$SYSTEMCTL_LOG" '^enable --now skyeye-trading-probe@'
+assert_not_contains "$SYSTEMCTL_LOG" '^start skyeye-trading-probe@'
 for removed in \
   "$SYSTEM_ROOT/etc/alloy/trading.alloy" \
   "$SYSTEM_ROOT/etc/skyeye-trading/config.env" \
@@ -434,8 +460,12 @@ ROBINHOOD_FRAGMENT="$SYSTEM_ROOT/etc/alloy/trading-$ROBINHOOD.alloy"
 ROBINHOOD_INSTALLED_ENV="$SYSTEM_ROOT/etc/skyeye-trading/instances/$ROBINHOOD.env"
 robinhood_fragment_sha="$(shasum -a 256 "$ROBINHOOD_FRAGMENT" | awk '{print $1}')"
 robinhood_env_sha="$(shasum -a 256 "$ROBINHOOD_INSTALLED_ENV" | awk '{print $1}')"
+: >"$SYSTEMCTL_LOG"
 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" --env-file "$MAINNET_ENV" --no-start >/dev/null
+assert_not_contains "$SYSTEMCTL_LOG" '^restart alloy$'
+assert_not_contains "$SYSTEMCTL_LOG" '^enable --now skyeye-trading-probe@'
+assert_not_contains "$SYSTEMCTL_LOG" '^start skyeye-trading-probe@'
 [[ "$robinhood_fragment_sha" == "$(shasum -a 256 "$ROBINHOOD_FRAGMENT" | awk '{print $1}')" ]] || {
   printf 'FAIL: Mainnet install rewrote the Robinhood Alloy fragment\n' >&2
   exit 1
@@ -486,6 +516,42 @@ assert_contains "$TEXTFILE_DIR/tnauqquant-$ROBINHOOD.prom" \
   'strategy="lighter-robinhood-btc-canary"'
 assert_contains "$TEXTFILE_DIR/tnauqquant-$MAINNET.prom" \
   'strategy="lighter-mainnet-btc-canary"'
+
+printf 'case: failed started install restores files and Alloy state\n'
+MAINNET_CHANGED_ENV="$TEST_ROOT/$MAINNET.changed.env"
+cp "$MAINNET_ENV" "$MAINNET_CHANGED_ENV"
+printf '# force a distinct transaction payload\n' >>"$MAINNET_CHANGED_ENV"
+chmod 600 "$MAINNET_CHANGED_ENV"
+mainnet_installed_sha="$(shasum -a 256 "$SYSTEM_ROOT/etc/skyeye-trading/instances/$MAINNET.env" | awk '{print $1}')"
+rm -f "$SYSTEMCTL_STATE/fail_restart_once_consumed"
+: >"$SYSTEMCTL_LOG"
+if SYSTEMCTL_FAIL_RESTART_ONCE=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" --env-file "$MAINNET_CHANGED_ENV" >/dev/null 2>&1
+then
+  printf 'FAIL: forced Alloy restart failure was accepted\n' >&2
+  exit 1
+fi
+[[ "$mainnet_installed_sha" == "$(shasum -a 256 "$SYSTEM_ROOT/etc/skyeye-trading/instances/$MAINNET.env" | awk '{print $1}')" ]] || {
+  printf 'FAIL: failed started install did not restore the Mainnet env\n' >&2
+  exit 1
+}
+[[ "$(rg -c '^restart alloy$' "$SYSTEMCTL_LOG")" == "2" ]] || {
+  printf 'FAIL: restart failure rollback did not retry the prior active Alloy state\n' >&2
+  exit 1
+}
+
+printf 'case: started install restarts Alloy and enables only its probe\n'
+: >"$SYSTEMCTL_LOG"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" --env-file "$MAINNET_ENV" >/dev/null
+assert_contains "$SYSTEMCTL_LOG" '^restart alloy$'
+assert_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_contains "$SYSTEMCTL_LOG" "^start skyeye-trading-probe@${MAINNET}[.]service$"
+[[ -e "$SYSTEMCTL_STATE/enabled_skyeye-trading-probe@$MAINNET.timer" &&
+   -e "$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.timer" ]] || {
+  printf 'FAIL: started install did not activate the Mainnet probe timer\n' >&2
+  exit 1
+}
 
 printf 'case: changed shared artifacts require all templated probes disabled\n'
 printf '# fixture drift\n' >>"$SYSTEM_ROOT/usr/local/libexec/skyeye-trading/probe.sh"

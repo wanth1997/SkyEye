@@ -256,8 +256,6 @@ TEST_SYSTEM_ROOT="${SKYEYE_TRADING_TEST_ROOT:-}"
 if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
   [[ "$TEST_SYSTEM_ROOT" == /* && "$TEST_SYSTEM_ROOT" != "/" ]] || \
     die "SKYEYE_TRADING_TEST_ROOT must be an absolute non-root path"
-  [[ "$NO_START" -eq 1 ]] || \
-    die "SKYEYE_TRADING_TEST_ROOT is allowed only with --no-start"
   mkdir -p "$TEST_SYSTEM_ROOT"
   TEST_SYSTEM_ROOT="$(cd "$TEST_SYSTEM_ROOT" && pwd -P)"
   for test_scoped_path in "$ENV_FILE" "$TQ_REPO_ROOT" "$TQ_TEXTFILE_DIR"; do
@@ -288,6 +286,18 @@ for command_name in alloy awk cmp cp date find getent getfacl grep install runus
 do
   command -v "$command_name" >/dev/null 2>&1 || die "missing required command: $command_name"
 done
+SYSTEMCTL_BIN="$(command -v systemctl)"
+[[ "$SYSTEMCTL_BIN" == /* && -f "$SYSTEMCTL_BIN" && -x "$SYSTEMCTL_BIN" ]] || \
+  die "systemctl must resolve to an absolute executable file"
+SYSTEMCTL_BIN="$(cd "$(dirname "$SYSTEMCTL_BIN")" && pwd -P)/$(basename "$SYSTEMCTL_BIN")"
+if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
+  [[ ! -L "$SYSTEMCTL_BIN" ]] || \
+    die "test mode requires a non-symlink systemctl stub below SKYEYE_TRADING_TEST_ROOT"
+  case "$SYSTEMCTL_BIN" in
+    "$TEST_SYSTEM_ROOT"/*) ;;
+    *) die "test mode requires a systemctl stub below SKYEYE_TRADING_TEST_ROOT" ;;
+  esac
+fi
 if [[ -z "$TEST_SYSTEM_ROOT" ]]; then
   id "$TQ_PROBE_USER" >/dev/null 2>&1 || die "probe user not found: $TQ_PROBE_USER"
   id "$TQ_ALLOY_USER" >/dev/null 2>&1 || die "Alloy user not found: $TQ_ALLOY_USER"
@@ -366,7 +376,7 @@ remove_exact_path() {
 restore_transaction() {
   local target_path relative_path
   [[ -n "$TRANSACTION_BACKUP" && -d "$TRANSACTION_BACKUP" ]] || return 0
-  systemctl disable --now "$INSTANCE_TIMER" >/dev/null 2>&1 || true
+  "$SYSTEMCTL_BIN" disable --now "$INSTANCE_TIMER" >/dev/null 2>&1 || true
   if [[ -f "$TRANSACTION_BACKUP/absent.list" ]]; then
     while IFS= read -r target_path; do
       [[ -n "$target_path" ]] || continue
@@ -385,20 +395,20 @@ restore_transaction() {
       cp -a "$TRANSACTION_BACKUP/previous/$relative_path" "$target_path"
     done <"$TRANSACTION_BACKUP/present.list"
   fi
-  systemctl daemon-reload >/dev/null 2>&1 || true
+  "$SYSTEMCTL_BIN" daemon-reload >/dev/null 2>&1 || true
   if [[ "$ALLOY_WAS_ACTIVE" -eq 1 ]]; then
-    systemctl restart alloy >/dev/null 2>&1 || true
+    "$SYSTEMCTL_BIN" restart alloy >/dev/null 2>&1 || true
   else
-    systemctl stop alloy >/dev/null 2>&1 || true
+    "$SYSTEMCTL_BIN" stop alloy >/dev/null 2>&1 || true
   fi
   if [[ "$LEGACY_TIMER_WAS_ENABLED" -eq 1 ]]; then
-    systemctl enable "$LEGACY_TIMER" >/dev/null 2>&1 || true
+    "$SYSTEMCTL_BIN" enable "$LEGACY_TIMER" >/dev/null 2>&1 || true
   fi
   if [[ "$LEGACY_TIMER_WAS_ACTIVE" -eq 1 ]]; then
-    systemctl start "$LEGACY_TIMER" >/dev/null 2>&1 || true
+    "$SYSTEMCTL_BIN" start "$LEGACY_TIMER" >/dev/null 2>&1 || true
   fi
   if [[ "$LEGACY_SERVICE_WAS_ACTIVE" -eq 1 ]]; then
-    systemctl start "$LEGACY_SERVICE" >/dev/null 2>&1 || true
+    "$SYSTEMCTL_BIN" start "$LEGACY_SERVICE" >/dev/null 2>&1 || true
   fi
 }
 
@@ -443,18 +453,18 @@ if [[ "$legacy_present" -eq 1 && "$MIGRATE_SINGLETON" -ne 1 ]]; then
 fi
 
 if [[ "$MIGRATE_SINGLETON" -eq 1 ]]; then
-  if systemctl is-enabled --quiet "$LEGACY_TIMER" >/dev/null 2>&1; then
+  if "$SYSTEMCTL_BIN" is-enabled --quiet "$LEGACY_TIMER" >/dev/null 2>&1; then
     LEGACY_TIMER_WAS_ENABLED=1
   fi
-  if systemctl is-active --quiet "$LEGACY_TIMER" >/dev/null 2>&1; then
+  if "$SYSTEMCTL_BIN" is-active --quiet "$LEGACY_TIMER" >/dev/null 2>&1; then
     LEGACY_TIMER_WAS_ACTIVE=1
   fi
-  if systemctl is-active --quiet "$LEGACY_SERVICE" >/dev/null 2>&1; then
+  if "$SYSTEMCTL_BIN" is-active --quiet "$LEGACY_SERVICE" >/dev/null 2>&1; then
     LEGACY_SERVICE_WAS_ACTIVE=1
   fi
 fi
 
-if systemctl is-active --quiet alloy >/dev/null 2>&1; then
+if "$SYSTEMCTL_BIN" is-active --quiet alloy >/dev/null 2>&1; then
   ALLOY_WAS_ACTIVE=1
 fi
 
@@ -512,9 +522,9 @@ for index in "${!shared_sources[@]}"; do
 done
 
 if [[ "$shared_changed" -eq 1 ]]; then
-  if systemctl is-active --quiet 'skyeye-trading-probe@*.service' >/dev/null 2>&1 || \
-    systemctl is-active --quiet 'skyeye-trading-probe@*.timer' >/dev/null 2>&1 || \
-    systemctl is-enabled --quiet 'skyeye-trading-probe@*.timer' >/dev/null 2>&1; then
+  if "$SYSTEMCTL_BIN" is-active --quiet 'skyeye-trading-probe@*.service' >/dev/null 2>&1 || \
+    "$SYSTEMCTL_BIN" is-active --quiet 'skyeye-trading-probe@*.timer' >/dev/null 2>&1 || \
+    "$SYSTEMCTL_BIN" is-enabled --quiet 'skyeye-trading-probe@*.timer' >/dev/null 2>&1; then
     die "shared probe artifacts changed while a templated probe service/timer is active or enabled"
   fi
   if [[ -d "$INSTALL_ENV_ROOT" ]]; then
@@ -523,17 +533,17 @@ if [[ "$shared_changed" -eq 1 ]]; then
       installed_strategy="$(basename "$installed_probe_env" .env)"
       valid_label_value "$installed_strategy" || \
         die "installed probe env has an invalid strategy basename: $installed_probe_env"
-      if systemctl is-active --quiet "skyeye-trading-probe@$installed_strategy.service" >/dev/null 2>&1 || \
-        systemctl is-active --quiet "skyeye-trading-probe@$installed_strategy.timer" >/dev/null 2>&1 || \
-        systemctl is-enabled --quiet "skyeye-trading-probe@$installed_strategy.timer" >/dev/null 2>&1; then
+      if "$SYSTEMCTL_BIN" is-active --quiet "skyeye-trading-probe@$installed_strategy.service" >/dev/null 2>&1 || \
+        "$SYSTEMCTL_BIN" is-active --quiet "skyeye-trading-probe@$installed_strategy.timer" >/dev/null 2>&1 || \
+        "$SYSTEMCTL_BIN" is-enabled --quiet "skyeye-trading-probe@$installed_strategy.timer" >/dev/null 2>&1; then
         die "shared probe artifacts changed while $installed_strategy is active or enabled"
       fi
     done
   fi
 fi
-if systemctl is-active --quiet "$INSTANCE_SERVICE" >/dev/null 2>&1 || \
-  systemctl is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 || \
-  systemctl is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1; then
+if "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_SERVICE" >/dev/null 2>&1 || \
+  "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 || \
+  "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1; then
   die "target probe instance must be inactive and disabled before installation: $TQ_STRATEGY"
 fi
 for custom_instance_path in \
@@ -589,13 +599,13 @@ MUTATION_STARTED=1
 if [[ "$MIGRATE_SINGLETON" -eq 1 ]]; then
   if [[ "$legacy_present" -eq 1 || "$LEGACY_TIMER_WAS_ENABLED" -eq 1 || \
     "$LEGACY_TIMER_WAS_ACTIVE" -eq 1 || "$LEGACY_SERVICE_WAS_ACTIVE" -eq 1 ]]; then
-    systemctl disable --now "$LEGACY_TIMER"
-    systemctl stop "$LEGACY_SERVICE" >/dev/null 2>&1 || true
-    ! systemctl is-active --quiet "$LEGACY_TIMER" >/dev/null 2>&1 || \
+    "$SYSTEMCTL_BIN" disable --now "$LEGACY_TIMER"
+    "$SYSTEMCTL_BIN" stop "$LEGACY_SERVICE" >/dev/null 2>&1 || true
+    ! "$SYSTEMCTL_BIN" is-active --quiet "$LEGACY_TIMER" >/dev/null 2>&1 || \
       die "legacy probe timer remained active after disable --now"
-    ! systemctl is-enabled --quiet "$LEGACY_TIMER" >/dev/null 2>&1 || \
+    ! "$SYSTEMCTL_BIN" is-enabled --quiet "$LEGACY_TIMER" >/dev/null 2>&1 || \
       die "legacy probe timer remained enabled after disable --now"
-    ! systemctl is-active --quiet "$LEGACY_SERVICE" >/dev/null 2>&1 || \
+    ! "$SYSTEMCTL_BIN" is-active --quiet "$LEGACY_SERVICE" >/dev/null 2>&1 || \
       die "legacy probe service remained active after stop"
   fi
   for legacy_path in "${legacy_paths[@]}"; do
@@ -655,7 +665,7 @@ install -m "$(file_mode "$ALLOY_ENV_FILE")" "$ALLOY_ENV_FILE.tmp" "$ALLOY_ENV_FI
 rm -f "$ALLOY_ENV_FILE.tmp"
 
 alloy validate "$ALLOY_CONFIG_DIR"
-systemctl daemon-reload
+"$SYSTEMCTL_BIN" daemon-reload
 
 if [[ "$NO_START" -eq 1 ]]; then
   INSTALL_COMMITTED=1
@@ -664,14 +674,14 @@ if [[ "$NO_START" -eq 1 ]]; then
   exit 0
 fi
 
-if ! systemctl restart alloy; then
+if ! "$SYSTEMCTL_BIN" restart alloy; then
   die "Alloy restart failed"
 fi
 
-systemctl enable --now "$INSTANCE_TIMER"
-systemctl start "$INSTANCE_SERVICE"
-systemctl is-active --quiet alloy || die "Alloy is not active after installation"
-systemctl is-active --quiet "$INSTANCE_TIMER" || die "trading probe timer is not active"
+"$SYSTEMCTL_BIN" enable --now "$INSTANCE_TIMER"
+"$SYSTEMCTL_BIN" start "$INSTANCE_SERVICE"
+"$SYSTEMCTL_BIN" is-active --quiet alloy || die "Alloy is not active after installation"
+"$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" || die "trading probe timer is not active"
 
 first_log="$(find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print -quit)"
 if [[ -n "$first_log" ]]; then
