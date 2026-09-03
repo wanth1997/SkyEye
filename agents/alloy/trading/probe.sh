@@ -482,6 +482,7 @@ esac
 TQ_EXECUTOR_MAP="${TQ_EXECUTOR_MAP:-toobit-main=toobit,mexc-ui=mexc}"
 TQ_SIDECAR_REQUIRED="${TQ_SIDECAR_REQUIRED:-1}"
 TQ_TEXTFILE_MODE="${TQ_TEXTFILE_MODE:-600}"
+TQ_TEXTFILE_NAME="${TQ_TEXTFILE_NAME:-tnauqquant.prom}"
 
 case "$TQ_SIDECAR_REQUIRED" in
   0|1) ;;
@@ -492,6 +493,10 @@ case "$TQ_TEXTFILE_MODE" in
   600|640) ;;
   *) die "TQ_TEXTFILE_MODE must be 600 or 640" ;;
 esac
+
+[[ "$TQ_TEXTFILE_NAME" =~ ^(tnauqquant|tnauqquant-[A-Za-z0-9][A-Za-z0-9_.-]*)[.]prom$ ]] || \
+  die "TQ_TEXTFILE_NAME must be a safe tnauqquant .prom basename"
+[[ "$TQ_TEXTFILE_NAME" != *..* ]] || die "TQ_TEXTFILE_NAME must not contain '..'"
 
 executor_entries=()
 old_ifs="$IFS"
@@ -876,7 +881,8 @@ PROBE_TIMESTAMP="$(date +%s)"
 
 mkdir -p "$TQ_TEXTFILE_DIR"
 umask 077
-TEMP_METRICS="$(mktemp "$TQ_TEXTFILE_DIR/.tnauqquant.prom.XXXXXX")"
+metric_stem="${TQ_TEXTFILE_NAME%.prom}"
+TEMP_METRICS="$(mktemp "$TQ_TEXTFILE_DIR/.$metric_stem.prom.XXXXXX")"
 
 cleanup_temp() {
   if [[ -n "${TEMP_METRICS:-}" && -e "$TEMP_METRICS" ]]; then
@@ -950,5 +956,5 @@ trap cleanup_temp EXIT HUP INT TERM
 } >"$TEMP_METRICS"
 
 chmod "$TQ_TEXTFILE_MODE" "$TEMP_METRICS"
-mv "$TEMP_METRICS" "$TQ_TEXTFILE_DIR/tnauqquant.prom"
+mv "$TEMP_METRICS" "$TQ_TEXTFILE_DIR/$TQ_TEXTFILE_NAME"
 TEMP_METRICS=""

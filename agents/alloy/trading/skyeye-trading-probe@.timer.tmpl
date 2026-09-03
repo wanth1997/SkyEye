@@ -1,12 +1,12 @@
 [Unit]
-Description=Run the SkyEye trading telemetry probe
+Description=Run the SkyEye trading telemetry probe for %i
 
 [Timer]
 OnBootSec=5s
 OnUnitActiveSec=15s
 AccuracySec=1s
 Persistent=true
-Unit=skyeye-trading-probe.service
+Unit=skyeye-trading-probe@%i.service
 
 [Install]
 WantedBy=timers.target

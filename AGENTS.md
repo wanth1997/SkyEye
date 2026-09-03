@@ -43,6 +43,7 @@ find grafana/dashboards -name '*.json' -exec jq empty {} +
 - Logs 必須在離開來源主機前完成敏感資訊 scrub；不得把本機絕對路徑、訂單 ID 或 client action ID 做成 Loki labels。
 - 遠端 agent 必須主動 push；中央 Prometheus 不對產品主機開放 scrape port。
 - Trading 類告警的 duplicate process、risk halt 與 telemetry missing 屬高風險狀態，規則必須先經 shadow 與 canary 驗證。
+- Linux Trading monitoring 必須以 `skyeye-trading-probe@STRATEGY`、獨立 mode-0600 env、獨立 `tnauqquant-STRATEGY.prom` 與精確 log glob 隔離；共享 textfile collector 只能在所有 templated probe 停止且 timer disabled 時改寫。Mainnet strategy 未經 operator 指示不得由監控安裝器啟動。
 
 ## 相關文件
 

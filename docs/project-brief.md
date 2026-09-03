@@ -16,7 +16,7 @@
 
 - 中央監控棧、Cloudflare ingress、Telegram routing、host/app/business rules 與多個產品 dashboard 已投入使用。
 - Linux/Ubuntu Alloy installer 已支援 journald、node metrics 與 application `/metrics`。
-- Trading inventory 已包含 `tnauqquant-prod-1` / `toobit-mexc-btc` 與 `trading01` / `lighter-robinhood-btc-canary`；portable read-only probe 同時支援雙交易所與單交易所 executor mapping，Linux Alloy 以 directory fragment 共存於既有 ZenIncome pipeline。Grafana 只保留可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
+- Trading inventory 已包含 `tnauqquant-prod-1` / `toobit-mexc-btc`，以及同一臺 `trading01` 上彼此獨立的 `lighter-robinhood-btc-canary` / `lighter-mainnet-btc-canary`。portable read-only probe 支援雙交易所與單交易所 executor mapping；Linux 以 per-strategy systemd probe、env、metrics output 與 Loki fragment 共用單一 textfile collector，並與既有 ZenIncome Alloy pipeline 共存。Grafana 只保留可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
 - `tnauqquant-prod-1` 在 macOS Alloy 與 read-only probe 之外，另有隔離的每分鐘 P&L history builder，以變更偵測與 per-run cache 合併 authoritative completed-cycle delta；其 accumulated metrics 繼續保留，但不再提供專用的「Trading · 即時營運」dashboard。detail／fleet 採繁中、incident-first 版面：最上方直接顯示近 15 分鐘的高信心成交確認／復原事故，runtime contract、執行 identity binding 與 config snapshot drift 分開呈現，關鍵事件也與完整 scrubbed log 分層。fleet 同時揭露 Prometheus shadow alerts 與獨立的 Loki execution incident count。
 - ZenIncome 的 Loki log alerts、dashboard 與唯讀 Bitfinex 診斷腳本已納入 Git；既有 production 規則狀態需由 operator 持續觀察。
 - LinkCourt 付款建立 5xx 與訂單編號 capacity/exhausted 告警已進入 shadow routing，等待 production canary review 後再決定是否升級通知。
@@ -33,7 +33,7 @@
 - Trading execution incident 使用高信心 `msg` allowlist，不以 `disposition=unresolved ui_submission_status=accepted` 單獨判定異常；同一 allowlist 從 generic ERROR-family rule 排除，避免日後 promotion 後重複 paging。`ERROR+N`／`FATAL+N` 仍由 generic fallback 涵蓋。
 - Trading log 在來源端額外 scrub `grant_id`、`mutation_id`、`mutations` 與 `account`，且這些 execution identifiers 永不升為 Loki labels。
 - Trading 原始 `tnauqquant_*` metrics 維持穩定，中央以 `trading_target_info` inventory 與 `trading_strategy_*` recording rules 提供多策略介面；alert 不再 hard-code server/strategy。
-- Linux 已有 Alloy 的主機使用 config directory 加入 `trading.alloy` fragment，重用既有 `central` receivers；不覆寫其他產品 pipeline，也不新增 ingestion port。
+- Linux 已有 Alloy 的主機使用 config directory 加入共享 `trading-metrics.alloy` 與 per-strategy `trading-<strategy>.alloy`，重用既有 `central` receivers；singleton 遷移會先 disable 舊 probe timer、備份精確舊檔與 metrics output，且不覆寫其他產品 pipeline、不新增 ingestion port。
 - Linux Trading probe timer 會在每次執行前，僅對 `TQ_RAW_LOG_GLOB` 命中的 mode-`0600` raw logs 補上 named `alloy:r--` ACL；不更改檔案內容、owner/group，也不將 Alloy 加入產品使用者群組。
 - Current-run P&L 只能在同一策略列中呈現；不同 run 起始時間沒有共同 accounting window，因此 fleet 不顯示加總損益。
 - Owner 已核准：TQ human foreground launch、`real_pnl_usdt` primary PNL、development/production target IDs、Trading runtime contract 修改，以及 operator-only Grafana access。
@@ -41,6 +41,6 @@
 
 ## 待辦 / 下一步
 
-- 觀察兩個 Trading production targets 的 shadow alerts、Linux coexistence 與 fleet/detail dashboard 訊號品質，完成 canary review 後另案決定是否啟用通知。
+- 部署並觀察三個 Trading production targets 的 shadow alerts；在 Trading01 驗證兩個 probe output、共享 collector 與 fleet/detail dashboard 的同 server 雙策略隔離後，再另案決定是否啟用通知。
 - 設定 Cloudflare service token 到期通知，並在到期前完成可獨立回復的 rotation。
 - 觀察 LinkCourt 付款 shadow 告警，完成 canary review 後另案決定是否啟用通知。

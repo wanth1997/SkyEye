@@ -32,3 +32,13 @@ groups:
           strategy: lighter-robinhood-btc-canary
           notification_mode: shadow
           quote_currency: USDT
+
+      - record: trading_target_info
+        expr: vector(1)
+        labels:
+          product: tnauqquant
+          environment: production
+          server_id: trading01
+          strategy: lighter-mainnet-btc-canary
+          notification_mode: shadow
+          quote_currency: USDT

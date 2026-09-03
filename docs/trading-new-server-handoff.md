@@ -99,26 +99,32 @@ Central acceptance requires logs, probe metrics, stable Real PNL equality, corre
 | `product` | `tnauqquant` |
 | `environment` | `production` |
 | `server_id` | `trading01` |
-| `strategy` / `instance_id` | `lighter-robinhood-btc-canary` |
-| executor mapping | `lighter-robinhood-main=lighter` |
+| `strategy` / `instance_id` | `lighter-robinhood-btc-canary`; `lighter-mainnet-btc-canary` |
+| executor mapping | `lighter-robinhood-main=lighter`; `lighter-mainnet-main=lighter` |
 | sidecar required | `0` |
 | repo root | `/home/ubuntu/tnauqquant` |
 
-Trading01 already runs Alloy for ZenIncome. Do not run the generic Linux installer that overwrites `/etc/alloy/config.alloy`, and do not define another central remote-write or Loki sink. Copy `deployment-linux.env.example` to `/etc/skyeye-trading/config.env` with mode `0600`, then render the coexistence artifacts:
+Trading01 already runs Alloy for ZenIncome. Do not run the generic Linux installer that overwrites `/etc/alloy/config.alloy`, and do not define another central remote-write or Loki sink. Copy the two `deployment-linux-{robinhood,mainnet}.env.example` files to private mode-`0600` staging paths, verify their dedicated executable/config/log/manifest bindings, then render both coexistence instances:
 
 ```bash
 render_dir="$(mktemp -d /tmp/skyeye-trading-render.XXXXXX)"
 agents/alloy/trading/setup-linux.sh \
-  --env-file /etc/skyeye-trading/config.env \
-  --render-only "$render_dir"
+  --env-file /tmp/lighter-robinhood-btc-canary.env \
+  --render-only "$render_dir/robinhood"
+agents/alloy/trading/setup-linux.sh \
+  --env-file /tmp/lighter-mainnet-btc-canary.env \
+  --render-only "$render_dir/mainnet"
 
 validate_dir="$(mktemp -d /tmp/skyeye-alloy-validate.XXXXXX)"
 sudo cp /etc/alloy/*.alloy "$validate_dir/"
-cp "$render_dir/trading.alloy" "$validate_dir/"
+rm -f "$validate_dir/trading.alloy"
+cp "$render_dir/robinhood/trading-metrics.alloy" "$validate_dir/"
+cp "$render_dir/robinhood/trading-lighter-robinhood-btc-canary.alloy" "$validate_dir/"
+cp "$render_dir/mainnet/trading-lighter-mainnet-btc-canary.alloy" "$validate_dir/"
 alloy validate "$validate_dir"
 ```
 
-The full installer changes Alloy's `CONFIG_FILE` to `/etc/alloy`, installs `trading.alloy`, and adds only the read-only `skyeye-trading-probe` systemd timer. It validates the combined directory before restarting Alloy and prints the `/etc/default/alloy` backup path. The textfile directory is setgid `ubuntu:alloy` mode `2770`, probe output is `0640`, and Alloy receives only the ACL permissions needed to discover/read raw logs.
+The first install uses `--migrate-singleton --no-start`; the second uses `--no-start`. The installer changes Alloy's `CONFIG_FILE` to `/etc/alloy`, installs a shared textfile fragment plus two exact Loki fragments, and adds only read-only `skyeye-trading-probe@STRATEGY` systemd templates. It validates the combined directory and prints an exact rollback record without restarting Alloy. The textfile directory is setgid `ubuntu:alloy` mode `2770`, each strategy output is `0640`, and Alloy receives only the ACL permissions needed to discover/read each exact raw-log glob. Mainnet begins with `TQ_POC_RUN_EXPECTED=0`; monitoring it does not start the strategy.
 
 Before and after installation record:
 
@@ -126,7 +132,10 @@ Before and after installation record:
 pgrep -af '/home/ubuntu/tnauqquant/quant' || true
 tmux list-panes -a -F '#{session_name} #{pane_pid} #{pane_current_command}'
 systemctl is-active alloy
-systemctl is-active skyeye-trading-probe.timer
+systemctl is-active \
+  skyeye-trading-probe@lighter-robinhood-btc-canary.timer \
+  skyeye-trading-probe@lighter-mainnet-btc-canary.timer
+find /var/lib/skyeye-trading/textfile -maxdepth 1 -type f -name 'tnauqquant-*.prom' -print
 ```
 
 The installer must not start, stop, or restart the trading process. If `current.json` still says `running` after that process exited and no bound done marker exists, leave the files unchanged: SkyEye should surface ProcessDown and stale telemetry in shadow mode.

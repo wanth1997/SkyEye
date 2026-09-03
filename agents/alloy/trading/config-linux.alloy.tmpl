@@ -1,7 +1,7 @@
 // SkyEye trading fragment for a Linux host with an existing Alloy deployment.
 // The central write receivers are defined by the host's base Alloy config.
 
-loki.source.file "skyeye_trading_raw" {
+loki.source.file "@@COMPONENT_ID@@_raw" {
   targets = [
     {
       __path__    = "@@RAW_LOG_GLOB@@",
@@ -14,7 +14,7 @@ loki.source.file "skyeye_trading_raw" {
 
   tail_from_end           = false
   on_positions_file_error = "restart_from_end"
-  forward_to              = [loki.process.skyeye_trading.receiver]
+  forward_to              = [loki.process.@@COMPONENT_ID@@.receiver]
 
   file_match {
     enabled           = true
@@ -23,7 +23,7 @@ loki.source.file "skyeye_trading_raw" {
   }
 }
 
-loki.process "skyeye_trading" {
+loki.process "@@COMPONENT_ID@@" {
   forward_to = [loki.write.central.receiver]
 
   stage.logfmt {
@@ -104,20 +104,4 @@ loki.process "skyeye_trading" {
   stage.label_keep {
     values = ["product", "environment", "server_id", "strategy", "run_id", "level"]
   }
-}
-
-prometheus.exporter.unix "skyeye_trading_textfile" {
-  set_collectors = ["textfile"]
-
-  textfile {
-    directory = "@@TEXTFILE_DIR@@"
-  }
-}
-
-prometheus.scrape "skyeye_trading_probe" {
-  targets         = prometheus.exporter.unix.skyeye_trading_textfile.targets
-  forward_to      = [prometheus.remote_write.central.receiver]
-  scrape_interval = "15s"
-  scrape_timeout  = "10s"
-  job_name        = "tnauqquant-trading-probe"
 }

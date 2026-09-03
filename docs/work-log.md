@@ -15,6 +15,21 @@
 ---
 -->
 
+## 2026-09-04 02:55 — 新增 Trading01 雙 Lighter process 監控
+
+**改動摘要：** 將 Linux Trading probe 與 Loki source 改為 per-strategy instance，共用單一 textfile collector，並新增可回復的 singleton migration 及 Mainnet shadow inventory。
+
+**修改的檔案：**
+
+- `agents/alloy/trading/` — 新增兩份 credential-free env 範例、`skyeye-trading-probe@` units、獨立 metrics basename、shared metrics/per-strategy Loki fragments 與 exact-file rollback record
+- `tests/trading/test-probe.sh`、`tests/trading/test-linux-setup.sh` — 證明兩個 output 共存、sibling preservation、legacy timer disable、validation failure rollback 與 shared-update quiescence
+- `prometheus/rules/trading-targets.yml`、`prometheus/rules/tests/trading.test.yml` — 新增 `trading01/lighter-mainnet-btc-canary` shadow target，quote 為 USDT 且不宣告 history capability
+- `AGENTS.md`、`docs/project-brief.md`、`docs/trading-new-server-handoff.md` — 記錄同 server 雙策略監控與 Mainnet 不由監控安裝器啟動的契約
+
+**原因/備註：** 本次尚未部署或 reload production。全部 Trading shell regressions、ShellCheck、native Alloy combined-config validation、dashboard JSON 與 YAML parse 均通過；本機沒有 Docker/promtool/amtool，因此那些 container checks留待 reviewer/CI publication gate。
+
+---
+
 ## 2026-09-01 19:33 — 部署 Trading incident observability 並修復 Linux log ACL
 
 **改動摘要：** 合併並部署 PR #34 的 incident-first dashboards、shadow rules 與 execution identifier scrub；production canary 另發現 Trading01 新 raw logs 的 mode-`0600` ACL 缺口，先恢復 ingest，再以 PR #35 加入持續修補 named Alloy read ACL 的 helper。
