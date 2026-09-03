@@ -232,6 +232,7 @@ SYSTEM_ROOT="$TEST_ROOT"
 FAKE_BIN="$TEST_ROOT/fake-bin"
 SYSTEMCTL_STATE="$TEST_ROOT/systemctl-state"
 SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log"
+SYSTEMCTL_LOG_ALL="$TEST_ROOT/systemctl-all.log"
 ALLOY_CALL_COUNT="$TEST_ROOT/alloy-call-count"
 mkdir -p \
   "$SYSTEM_ROOT/etc/alloy" \
@@ -274,11 +275,13 @@ cat >"$FAKE_BIN/systemctl" <<'EOF'
 set -euo pipefail
 cmd="$1"
 shift
-{
-  printf '%s' "$cmd"
-  printf ' %s' "$@"
-  printf '\n'
-} >>"$SYSTEMCTL_LOG"
+for systemctl_log_path in "$SYSTEMCTL_LOG" "$SYSTEMCTL_LOG_ALL"; do
+  {
+    printf '%s' "$cmd"
+    printf ' %s' "$@"
+    printf '\n'
+  } >>"$systemctl_log_path"
+done
 
 if [[ "$cmd" == "restart" && "${1:-}" == "alloy" &&
       "${SYSTEMCTL_FAIL_RESTART_ONCE:-0}" == "1" ]]; then
@@ -376,7 +379,7 @@ exit 0
 EOF
 chmod 755 "$FAKE_BIN"/*
 export PATH="$FAKE_BIN:$PATH"
-export SYSTEMCTL_STATE SYSTEMCTL_LOG ALLOY_CALL_COUNT
+export SYSTEMCTL_STATE SYSTEMCTL_LOG SYSTEMCTL_LOG_ALL ALLOY_CALL_COUNT
 export FAKE_PASSWD_HOME="$TEST_ROOT"
 
 printf 'case: test mode rejects a systemctl symlink even below its root\n'
@@ -547,6 +550,7 @@ SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
 assert_contains "$SYSTEMCTL_LOG" '^restart alloy$'
 assert_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]timer$"
 assert_contains "$SYSTEMCTL_LOG" "^start skyeye-trading-probe@${MAINNET}[.]service$"
+assert_not_contains "$SYSTEMCTL_LOG" "skyeye-trading-probe@${ROBINHOOD}"
 [[ -e "$SYSTEMCTL_STATE/enabled_skyeye-trading-probe@$MAINNET.timer" &&
    -e "$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.timer" ]] || {
   printf 'FAIL: started install did not activate the Mainnet probe timer\n' >&2
@@ -563,7 +567,7 @@ then
   exit 1
 fi
 
-if rg -q 'tnauqquant' "$SYSTEMCTL_LOG"; then
+if rg -q 'tnauqquant' "$SYSTEMCTL_LOG_ALL"; then
   printf 'FAIL: monitoring installer attempted to control a trading service\n' >&2
   exit 1
 fi
