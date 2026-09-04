@@ -1,0 +1,18 @@
+// Shared SkyEye trading textfile collector for a Linux host.
+// Per-strategy probes publish distinct files into this private directory.
+
+prometheus.exporter.unix "skyeye_trading_textfile" {
+  set_collectors = ["textfile"]
+
+  textfile {
+    directory = "@@TEXTFILE_DIR@@"
+  }
+}
+
+prometheus.scrape "skyeye_trading_probe" {
+  targets         = prometheus.exporter.unix.skyeye_trading_textfile.targets
+  forward_to      = [prometheus.remote_write.central.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+  job_name        = "tnauqquant-trading-probe"
+}

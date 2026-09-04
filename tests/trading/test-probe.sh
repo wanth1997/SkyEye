@@ -434,7 +434,47 @@ if [[ "$mode" != "640" ]]; then
   exit 1
 fi
 
-if find "$TEXTFILE_DIR" -maxdepth 1 -name '.tnauqquant.prom.*' -print | grep -q .; then
+printf 'case: two strategy probes keep distinct atomic outputs\n'
+MAINNET_CONFIG_PATH="$FAKE_REPO/config/lighter_mainnet_btc_config.yaml"
+MAINNET_METRICS_PATH="$TEXTFILE_DIR/tnauqquant-lighter-mainnet-btc-canary.prom"
+cat >"$MAINNET_CONFIG_PATH" <<'EOF'
+instance_id: "lighter-mainnet-btc-canary"
+max_cycles: 100
+EOF
+export TQ_STRATEGY=lighter-mainnet-btc-canary
+export TQ_INSTANCE_ID=lighter-mainnet-btc-canary
+export TQ_CONFIG_PATH="$MAINNET_CONFIG_PATH"
+export TQ_RUN_MANIFEST="$FAKE_REPO/run-state/lighter-mainnet-btc-canary/current.json"
+export TQ_DONE_MARKER="$FAKE_REPO/run-state/lighter-mainnet-btc-canary/current.done.json"
+export TQ_POC_RUN_EXPECTED=0
+export TQ_EXECUTOR_MAP=lighter-mainnet-main=lighter
+export TQ_TEXTFILE_NAME=tnauqquant-lighter-mainnet-btc-canary.prom
+"$PROBE"
+[[ -f "$METRICS_PATH" && -f "$MAINNET_METRICS_PATH" ]] || {
+  printf 'FAIL: concurrent strategy output files were not preserved\n' >&2
+  exit 1
+}
+rg -q 'strategy="lighter-robinhood-btc-canary"' "$METRICS_PATH" || {
+  printf 'FAIL: Robinhood output lost its strategy identity\n' >&2
+  exit 1
+}
+rg -q 'strategy="lighter-mainnet-btc-canary"' "$MAINNET_METRICS_PATH" || {
+  printf 'FAIL: Mainnet output lost its strategy identity\n' >&2
+  exit 1
+}
+
+printf 'case: unsafe textfile basename is rejected\n'
+export TQ_TEXTFILE_NAME=../outside.prom
+if "$PROBE" >/dev/null 2>&1; then
+  printf 'FAIL: unsafe TQ_TEXTFILE_NAME was accepted\n' >&2
+  exit 1
+fi
+[[ ! -e "$TEST_ROOT/outside.prom" ]] || {
+  printf 'FAIL: unsafe textfile basename escaped the output directory\n' >&2
+  exit 1
+}
+
+if find "$TEXTFILE_DIR" -maxdepth 1 -name '.tnauqquant*.prom.*' -print | grep -q .; then
   printf 'FAIL: atomic writer left temporary files\n' >&2
   exit 1
 fi

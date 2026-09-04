@@ -1,12 +1,12 @@
 [Unit]
-Description=SkyEye trading telemetry probe
+Description=SkyEye trading telemetry probe (%i)
 After=local-fs.target
 
 [Service]
 Type=oneshot
 User=@@PROBE_USER@@
 Group=@@PROBE_GROUP@@
-EnvironmentFile=@@ENV_FILE@@
+EnvironmentFile=@@ENV_ROOT@@/%i.env
 ExecStartPre=@@ACCESS_PATH@@
 ExecStart=@@PROBE_PATH@@
 UMask=0027

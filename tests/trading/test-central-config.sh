@@ -161,7 +161,8 @@ jq -e '
   ((tostring | contains("tnauqquant-prod-1")) | not) and
   ((tostring | contains("toobit-mexc-btc")) | not) and
   ((tostring | contains("trading01")) | not) and
-  ((tostring | contains("lighter-robinhood-btc-canary")) | not)
+  ((tostring | contains("lighter-robinhood-btc-canary")) | not) and
+  ((tostring | contains("lighter-mainnet-btc-canary")) | not)
 ' "$DETAIL_DASHBOARD" >/dev/null
 
 jq -e '
@@ -239,7 +240,8 @@ jq -e '
   ((tostring | contains("tnauqquant-prod-1")) | not) and
   ((tostring | contains("toobit-mexc-btc")) | not) and
   ((tostring | contains("trading01")) | not) and
-  ((tostring | contains("lighter-robinhood-btc-canary")) | not)
+  ((tostring | contains("lighter-robinhood-btc-canary")) | not) and
+  ((tostring | contains("lighter-mainnet-btc-canary")) | not)
 ' "$FLEET_DASHBOARD" >/dev/null
 
 if rg -q 'development|tnauqquant-dev-mac|mexc-toobit-btc' \
@@ -254,13 +256,44 @@ for production_value in \
   tnauqquant-prod-1 \
   toobit-mexc-btc \
   trading01 \
-  lighter-robinhood-btc-canary
+  lighter-robinhood-btc-canary \
+  lighter-mainnet-btc-canary
 do
   rg -q -- "$production_value" "$PROM_TARGET" || {
     printf 'FAIL: inventory is missing production identity %s\n' \
       "$production_value" >&2
     exit 1
   }
+done
+
+[[ "$(rg -c '^[[:space:]]+- record:[[:space:]]+trading_target_info' "$PROM_TARGET")" == "3" ]] || {
+  printf 'FAIL: expected exactly three generic Trading inventory rows\n' >&2
+  exit 1
+}
+for strategy in lighter-robinhood-btc-canary lighter-mainnet-btc-canary; do
+  stanza="$(awk -v RS='' -v strategy="$strategy" '
+    $0 ~ /record: trading_target_info/ && $0 ~ ("strategy: " strategy) {
+      print
+      found = 1
+      exit
+    }
+    END { if (!found) exit 1 }
+  ' "$PROM_TARGET")" || {
+    printf 'FAIL: missing Trading01 inventory stanza for %s\n' "$strategy" >&2
+    exit 1
+  }
+  printf '%s\n' "$stanza" | rg -q 'server_id:[[:space:]]+trading01' || {
+    printf 'FAIL: %s inventory row is not bound to trading01\n' "$strategy" >&2
+    exit 1
+  }
+  printf '%s\n' "$stanza" | rg -q 'quote_currency:[[:space:]]+USDT' || {
+    printf 'FAIL: %s inventory row must use USDT\n' "$strategy" >&2
+    exit 1
+  }
+  if printf '%s\n' "$stanza" | rg -q 'history_capable'; then
+    printf 'FAIL: %s must not claim a history builder\n' "$strategy" >&2
+    exit 1
+  fi
 done
 
 rg -q 'history_capable:[[:space:]]+"true"' "$PROM_TARGET" || {
@@ -332,7 +365,7 @@ rg -q 'msg!~' "$LOKI_RULES" || {
 
 "$INCIDENT_TEST"
 
-if rg -q 'tnauqquant-prod-1|toobit-mexc-btc|trading01|lighter-robinhood-btc-canary' \
+if rg -q 'tnauqquant-prod-1|toobit-mexc-btc|trading01|lighter-robinhood-btc-canary|lighter-mainnet-btc-canary' \
   "$PROM_RULES" "$LOKI_RULES"
 then
   printf 'FAIL: generic Trading rules still hard-code a server or strategy\n' >&2
@@ -359,6 +392,26 @@ if [[ "$prom_alert_count" != "$prom_shadow_count" ||
 then
   printf 'FAIL: every Trading alert must remain shadow-only during rollout\n' >&2
   exit 1
+fi
+
+if command -v docker >/dev/null 2>&1; then
+  docker run --rm \
+    -v "$REPO_ROOT/prometheus:/etc/prometheus:ro" \
+    --entrypoint /bin/promtool \
+    prom/prometheus:v2.54.1 \
+    check rules \
+    /etc/prometheus/rules/trading-targets.yml \
+    /etc/prometheus/rules/trading.yml
+  docker run --rm \
+    -v "$REPO_ROOT/prometheus:/etc/prometheus:ro" \
+    --entrypoint /bin/promtool \
+    prom/prometheus:v2.54.1 \
+    test rules /etc/prometheus/rules/tests/trading.test.yml
+elif command -v promtool >/dev/null 2>&1; then
+  promtool check rules "$PROM_TARGET" "$PROM_RULES"
+  promtool test rules "$REPO_ROOT/prometheus/rules/tests/trading.test.yml"
+else
+  printf 'SKIP: docker/promtool unavailable; Prometheus rule execution was not run\n'
 fi
 
 printf 'PASS: central Trading production target and dashboard contract\n'
