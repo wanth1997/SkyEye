@@ -52,8 +52,8 @@ today_local="$(TZ=Asia/Taipei date +%F)"
 cat >"$LOG_PATH" <<EOF
 time=${today_local}T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.1 session_cycle=1 real_pnl_usdt=10 cash_pnl_usdt=8 rebate_usdt=2 risk_pnl_usdt=9 cycles_completed=1 cycle_real_pnl_usdt=10
 time=${today_local}T09:30:00+08:00 level=INFO msg=pnl_status stable=false cycle_completed=false cycle_id=current.pending real_pnl_usdt=999 cash_pnl_usdt=999 rebate_usdt=0 risk_pnl_usdt=999 cycles_completed=1
-time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
-time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5 risk_stopped=false
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 equity_now=3000.75 equity_usdt_by_executor=mexc-ui:1000.25,toobit-main:2000.50 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5
+time=${today_local}T10:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.2 session_cycle=2 equity_now=3000.75 equity_usdt_by_executor=mexc-ui:1000.25,toobit-main:2000.50 real_pnl_usdt=12.5 cash_pnl_usdt=9.5 rebate_usdt=3 risk_pnl_usdt=11.5 cycles_completed=2 cycle_real_pnl_usdt=2.5 risk_stopped=false
 time=${today_local}T10:01:00+08:00 level=INFO msg=trade_status state=settled initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.125 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.125 portfolio_projection=coordinator_book
 time=${today_local}T10:02:00+08:00 level=INFO msg=coordinated_signal_skipped initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.103 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.103 portfolio_projection=coordinator_book
 time=${today_local}T10:03:00+08:00 level=INFO msg=invalid_snapshot initiator_venue=unknown initiator_side=Short initiator_qty_btc=99 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=99 portfolio_projection=coordinator_book
@@ -65,8 +65,8 @@ time=${today_local}T10:08:00+08:00 level=INFO msg=trade_status state=closed exec
 time=${today_local}T10:09:00+08:00 level=INFO msg=trade_status state=closed executor=toobit-main volume_usd=-1
 EOF
 cat >"$PREVIOUS_LOG_PATH" <<EOF
-time=${today_local}T08:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=previous.1 real_pnl_usdt=4 cash_pnl_usdt=3 rebate_usdt=1 risk_pnl_usdt=3.5 cycles_completed=1
-time=${today_local}T08:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=previous.1 real_pnl_usdt=4 cash_pnl_usdt=3 rebate_usdt=1 risk_pnl_usdt=3.5 cycles_completed=1
+time=${today_local}T08:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=previous.1 equity_now=99999 real_pnl_usdt=4 cash_pnl_usdt=3 rebate_usdt=1 risk_pnl_usdt=3.5 cycles_completed=1
+time=${today_local}T08:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=previous.1 equity_now=99999 real_pnl_usdt=4 cash_pnl_usdt=3 rebate_usdt=1 risk_pnl_usdt=3.5 cycles_completed=1
 EOF
 
 export TQ_PRODUCT=tnauqquant
@@ -213,6 +213,7 @@ assert_metric tnauqquant_config_snapshot_match 0
 assert_metric tnauqquant_log_binding_ok 0
 assert_metric tnauqquant_marker_binding_ok 0
 assert_metric tnauqquant_current_pnl_valid 0
+assert_metric_missing tnauqquant_current_equity_usdt
 assert_metric tnauqquant_current_position_valid 0
 assert_metric_missing tnauqquant_current_run_info
 assert_metric_missing tnauqquant_current_real_pnl_usdt
@@ -265,6 +266,7 @@ assert_metric tnauqquant_run_expected 1
 assert_metric tnauqquant_current_run_info 1 'run_id="20260717_024506_mexc_toobit_btc_config"'
 assert_metric tnauqquant_current_pnl_valid 1
 assert_metric tnauqquant_current_real_pnl_usdt 12.5
+assert_metric tnauqquant_current_equity_usdt 3000.75
 assert_metric tnauqquant_current_cash_pnl_usdt 9.5
 assert_metric tnauqquant_current_rebate_usdt 3
 assert_metric tnauqquant_current_risk_pnl_usdt 11.5
@@ -289,6 +291,30 @@ assert_metric tnauqquant_current_net_position_btc 0
 assert_metric tnauqquant_current_run_exchange_volume_usd 100.25 'exchange="toobit"'
 assert_metric tnauqquant_current_run_exchange_volume_usd 99.75 'exchange="mexc"'
 assert_metric tnauqquant_risk_stopped 0
+
+printf 'case: latest stable total equity ignores unstable snapshots\n'
+cp "$LOG_PATH" "$TEST_ROOT/balance.original.log"
+printf 'time=%sT10:10:00+08:00 level=INFO msg=pnl_status stable=false equity_now=999999 real_pnl_usdt=999999\n' \
+  "$today_local" >>"$LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_equity_usdt 3000.75
+
+printf 'case: valid zero equity is emitted\n'
+printf 'time=%sT10:11:00+08:00 level=INFO msg=pnl_status stable=true equity_now=0 real_pnl_usdt=0\n' \
+  "$today_local" >>"$LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_equity_usdt 0
+
+printf 'case: missing and invalid equity never reuse an earlier total\n'
+for equity_field in '' 'equity_now=NaN' 'equity_now=+Inf' 'equity_now=invalid'; do
+  cp "$TEST_ROOT/balance.original.log" "$LOG_PATH"
+  printf 'time=%sT10:12:00+08:00 level=INFO msg=pnl_status stable=true real_pnl_usdt=12.5 %s\n' \
+    "$today_local" "$equity_field" >>"$LOG_PATH"
+  run_probe
+  assert_metric tnauqquant_current_pnl_valid 1
+  assert_metric_missing tnauqquant_current_equity_usdt
+done
+cp "$TEST_ROOT/balance.original.log" "$LOG_PATH"
 
 printf 'case: running config drift remains observable\n'
 config_before_drift="$TEST_ROOT/config.before-drift"
@@ -367,7 +393,7 @@ EOF
 cat >"$LIGHTER_LOG_PATH" <<EOF
 time=${today_local}T11:12:11+08:00 level=INFO msg=pnl_status stable=false cycle_completed=false real_pnl_usdt=999 volume_usd_by_executor=lighter-robinhood-main:999
 time=${today_local}T11:14:06+08:00 level=WARN msg=coordinator_domain_fenced_signal_skipped attempt_id=44 reservation_id=1268 linked_reservation_id=0 recovery_group_id=0 initiator_venue=lighter-robinhood-main initiator_side=Short initiator_qty_btc=0.00231 net_side=Short net_qty_btc=0.00231 portfolio_projection=coordinator_book
-time=${today_local}T11:14:14+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true session_cycle=196 real_pnl_usdt=1.4083 cash_pnl_usdt=1.4083 rebate_usdt=0 risk_pnl_usdt=1.4083 cycles_completed=195 cycle_real_pnl_usdt=-0.0151 risk_stopped=false volume_usd_by_executor=lighter-robinhood-main:68610.97
+time=${today_local}T11:14:14+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true session_cycle=196 equity_now=501.4083 equity_usdt_by_executor=lighter-robinhood-main:501.41 real_pnl_usdt=1.4083 cash_pnl_usdt=1.4083 rebate_usdt=0 risk_pnl_usdt=1.4083 cycles_completed=195 cycle_real_pnl_usdt=-0.0151 risk_stopped=false volume_usd_by_executor=lighter-robinhood-main:68610.97
 EOF
 
 export TQ_STRATEGY=lighter-robinhood-btc-canary
@@ -408,6 +434,7 @@ run_probe
 assert_metric tnauqquant_process_count 0
 assert_metric tnauqquant_run_expected 1
 assert_metric tnauqquant_current_real_pnl_usdt 1.4083
+assert_metric tnauqquant_current_equity_usdt 501.4083
 assert_metric tnauqquant_current_run_exchange_volume_usd 68610.97 'exchange="lighter"'
 assert_metric tnauqquant_current_position_valid 1
 assert_metric tnauqquant_current_position_btc 0.00231 'exchange="lighter",side="short"'

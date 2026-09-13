@@ -604,6 +604,7 @@ CURRENT_RUN_ID=""
 CURRENT_RUN_STARTED_TIMESTAMP=""
 CURRENT_PNL_VALID=0
 CURRENT_REAL_PNL=""
+CURRENT_EQUITY=""
 CURRENT_CASH_PNL=""
 CURRENT_REBATE=""
 CURRENT_RISK_PNL=""
@@ -707,11 +708,14 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
           CURRENT_PNL_VALID=1
           CURRENT_REAL_PNL="$current_real_pnl"
           PNL_SAMPLE_TIMESTAMP="$current_pnl_timestamp"
+          # The producer already sums all executor accounts in this stable snapshot.
+          current_equity="$(logfmt_value "$CURRENT_PNL_LINE" equity_now)"
           current_cash_pnl="$(logfmt_value "$CURRENT_PNL_LINE" cash_pnl_usdt)"
           current_rebate="$(logfmt_value "$CURRENT_PNL_LINE" rebate_usdt)"
           current_risk_pnl="$(logfmt_value "$CURRENT_PNL_LINE" risk_pnl_usdt)"
           current_cycles_completed="$(logfmt_value "$CURRENT_PNL_LINE" cycles_completed)"
           current_risk_stopped="$(logfmt_value "$CURRENT_PNL_LINE" risk_stopped)"
+          is_number "$current_equity" && CURRENT_EQUITY="$current_equity"
           is_number "$current_cash_pnl" && CURRENT_CASH_PNL="$current_cash_pnl"
           is_number "$current_rebate" && CURRENT_REBATE="$current_rebate"
           is_number "$current_risk_pnl" && CURRENT_RISK_PNL="$current_risk_pnl"
@@ -916,6 +920,7 @@ trap cleanup_temp EXIT HUP INT TERM
   fi
   [[ -n "$CURRENT_RUN_STARTED_TIMESTAMP" ]] && emit_gauge tnauqquant_current_run_started_timestamp_seconds "Unix timestamp when the current run process started." "$CURRENT_RUN_STARTED_TIMESTAMP"
   [[ -n "$CURRENT_REAL_PNL" ]] && emit_gauge tnauqquant_current_real_pnl_usdt "Latest stable real PNL for the current run in USDT." "$CURRENT_REAL_PNL"
+  [[ -n "$CURRENT_EQUITY" ]] && emit_gauge tnauqquant_current_equity_usdt "Total account equity across all executors in the latest stable current-run snapshot in USDT." "$CURRENT_EQUITY"
   [[ -n "$CURRENT_CASH_PNL" ]] && emit_gauge tnauqquant_current_cash_pnl_usdt "Latest stable cash PNL for the current run in USDT." "$CURRENT_CASH_PNL"
   [[ -n "$CURRENT_REBATE" ]] && emit_gauge tnauqquant_current_rebate_usdt "Latest stable rebate for the current run in USDT." "$CURRENT_REBATE"
   [[ -n "$CURRENT_RISK_PNL" ]] && emit_gauge tnauqquant_current_risk_pnl_usdt "Latest stable risk PNL for the current run in USDT." "$CURRENT_RISK_PNL"

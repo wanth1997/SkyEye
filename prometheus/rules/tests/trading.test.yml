@@ -5,6 +5,34 @@ rule_files:
 evaluation_interval: 30s
 
 tests:
+  - name: total equity stays scoped to the inventoried strategy
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_current_equity_usdt{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '3000.75x2'
+      - series: 'tnauqquant_current_equity_usdt{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '501.4083x2'
+      - series: 'tnauqquant_current_equity_usdt{product="tnauqquant",environment="production",server_id="trading01",strategy="unknown-strategy"}'
+        values: '99999x2'
+      - series: 'tnauqquant_current_equity_usdt{product="tnauqquant",environment="development",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '99999x2'
+    promql_expr_test:
+      - expr: 'trading_strategy_current_equity_usdt{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'trading_strategy_current_equity_usdt{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+            value: 3000.75
+      - expr: 'trading_strategy_current_equity_usdt{server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'trading_strategy_current_equity_usdt{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+            value: 501.4083
+      - expr: 'count(trading_strategy_current_equity_usdt)'
+        eval_time: 1m
+        exp_samples:
+          - labels: '{}'
+            value: 2
+
   - name: healthy production contract remains quiet
     interval: 30s
     input_series:

@@ -24,108 +24,6 @@
   "panels": [
     {
       "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "高信心執行事故事件計數。任一值大於 0 都需要人工核對兩側實際持倉與未完成委託；正常的 accepted unresolved submission 不列入事故。",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "id": 2,
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "value_and_name"
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"} | logfmt | __error__=\"\" | msg=\"coordinator_fence_stalled\"[15m]))",
-          "instant": true,
-          "legendFormat": "成交確認卡住",
-          "queryType": "instant",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"} | logfmt | __error__=\"\" | msg=~\"mexcui_recovery_required(_refusing_normal_startup)?\"[15m]))",
-          "instant": true,
-          "legendFormat": "需人工復原",
-          "queryType": "instant",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"} | logfmt | __error__=\"\" | msg=\"shutdown_with_unconsumed_continuation\"[15m]))",
-          "instant": true,
-          "legendFormat": "單邊曝險",
-          "queryType": "instant",
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"} | logfmt | __error__=\"\" | msg=\"coordinated_shutdown_preserved_unresolved_fence\"[15m]))",
-          "instant": true,
-          "legendFormat": "未解 fence",
-          "queryType": "instant",
-          "refId": "D"
-        }
-      ],
-      "title": "執行事故 · 最近 15 分鐘",
-      "type": "stat"
-    },
-    {
-      "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
@@ -162,7 +60,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 4
+        "y": 0
       },
       "id": 4,
       "options": {
@@ -258,7 +156,7 @@
         "h": 4,
         "w": 5,
         "x": 6,
-        "y": 4
+        "y": 0
       },
       "id": 11,
       "options": {
@@ -328,7 +226,7 @@
         "h": 4,
         "w": 4,
         "x": 11,
-        "y": 4
+        "y": 0
       },
       "id": 5,
       "options": {
@@ -367,7 +265,63 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "程序顯示精確數量；Runtime Contract 顯示 manifest contract 是否可用；執行綁定只看 process、strategy、log 與 marker；Config 快照獨立揭露 drift。risk_stopped=0 只表示未回報停機，不代表已確認安全。",
+      "description": "目前策略最近一次穩定快照的帳戶總權益（USDT）。雙交易所已加總，單交易所顯示該帳戶數值；隨穩定損益快照更新，並非即時可用保證金。尚無有效快照時顯示等待資料。",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#B8C7E0"
+          },
+          "decimals": 2,
+          "noValue": "等待餘額資料",
+          "unit": "suffix: USDT"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 9,
+        "x": 15,
+        "y": 0
+      },
+      "id": 14,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value"
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "trading_strategy_current_equity_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "目前餘額",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "mixed",
+        "uid": "-- Mixed --"
+      },
+      "description": "程序顯示精確數量；Runtime Contract 顯示 manifest contract 是否可用；執行綁定只看 process、strategy、log 與 marker；Config 快照獨立揭露 drift。risk_stopped=0 只表示未回報停機，不代表已確認安全。 事故欄位統計最近 15 分鐘的高信心事件；任一值大於 0 都需核對實際持倉與未完成委託，正常 accepted unresolved submission 不列入。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -432,42 +386,42 @@
               }
             ]
           },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Runtime Contract"
-        },
-        "properties": [
           {
-            "id": "noValue",
-            "value": "未知"
-          },
-          {
-            "id": "mappings",
-            "value": [
+            "matcher": {
+              "id": "byName",
+              "options": "Runtime Contract"
+            },
+            "properties": [
               {
-                "type": "value",
-                "options": {
-                  "0": {
-                    "color": "red",
-                    "index": 0,
-                    "text": "缺失"
-                  },
-                  "1": {
-                    "color": "green",
-                    "index": 1,
-                    "text": "可用"
+                "id": "noValue",
+                "value": "未知"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "缺失"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "可用"
+                      }
+                    }
                   }
-                }
+                ]
               }
             ]
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "執行綁定"
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "執行綁定"
             },
             "properties": [
               {
@@ -495,43 +449,11 @@
                 ]
               }
             ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Config 快照"
-        },
-        "properties": [
-          {
-            "id": "noValue",
-            "value": "未知"
           },
           {
-            "id": "mappings",
-            "value": [
-              {
-                "type": "value",
-                "options": {
-                  "0": {
-                    "color": "red",
-                    "index": 0,
-                    "text": "已漂移"
-                  },
-                  "1": {
-                    "color": "green",
-                    "index": 1,
-                    "text": "一致"
-                  }
-                }
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "風控回報"
+            "matcher": {
+              "id": "byName",
+              "options": "Config 快照"
             },
             "properties": [
               {
@@ -544,10 +466,42 @@
                   {
                     "type": "value",
                     "options": {
-                  "0": {
-                    "color": "text",
-                    "index": 0,
-                    "text": "未回報停機"
+                      "0": {
+                        "color": "red",
+                        "index": 0,
+                        "text": "已漂移"
+                      },
+                      "1": {
+                        "color": "green",
+                        "index": 1,
+                        "text": "一致"
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "風控回報"
+            },
+            "properties": [
+              {
+                "id": "noValue",
+                "value": "未知"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {
+                        "color": "text",
+                        "index": 0,
+                        "text": "未回報停機"
                       },
                       "1": {
                         "color": "red",
@@ -591,13 +545,109 @@
                 ]
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "G"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "H"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "I"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "J"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
           }
         ]
       },
       "gridPos": {
-        "h": 4,
-        "w": 9,
-        "x": 15,
+        "h": 3,
+        "w": 24,
+        "x": 0,
         "y": 4
       },
       "id": 1,
@@ -605,7 +655,7 @@
         "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "vertical",
+        "orientation": "auto",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -688,6 +738,50 @@
           "legendFormat": "資料更新",
           "range": false,
           "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"} | logfmt | __error__=\"\" | msg=\"coordinator_fence_stalled\"[15m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "成交確認卡住 · 15m",
+          "queryType": "instant",
+          "refId": "G"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"} | logfmt | __error__=\"\" | msg=~\"mexcui_recovery_required(_refusing_normal_startup)?\"[15m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "需人工復原 · 15m",
+          "queryType": "instant",
+          "refId": "H"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"} | logfmt | __error__=\"\" | msg=\"shutdown_with_unconsumed_continuation\"[15m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "單邊曝險 · 15m",
+          "queryType": "instant",
+          "refId": "I"
+        },
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"} | logfmt | __error__=\"\" | msg=\"coordinated_shutdown_preserved_unresolved_fence\"[15m])) or vector(0)",
+          "instant": true,
+          "legendFormat": "未解 fence · 15m",
+          "queryType": "instant",
+          "refId": "J"
         }
       ],
       "title": "監控摘要",
@@ -776,7 +870,7 @@
         "h": 9,
         "w": 16,
         "x": 0,
-        "y": 8
+        "y": 7
       },
       "id": 7,
       "options": {
@@ -898,7 +992,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 8
+        "y": 7
       },
       "id": 8,
       "options": {
@@ -975,7 +1069,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "同一份最新穩定 snapshot 的本輪實現損益、現金損益、返佣與風控損益。",
+      "description": "同一份最新穩定快照的本輪實現損益、現金損益與返佣。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1008,7 +1102,7 @@
         "h": 5,
         "w": 10,
         "x": 0,
-        "y": 17
+        "y": 16
       },
       "id": 9,
       "options": {
@@ -1063,18 +1157,6 @@
           "legendFormat": "返佣",
           "range": false,
           "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "editorMode": "code",
-          "expr": "trading_strategy_current_risk_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}",
-          "instant": true,
-          "legendFormat": "風控損益",
-          "range": false,
-          "refId": "D"
         }
       ],
       "title": "損益組成",
@@ -1102,7 +1184,7 @@
         "h": 5,
         "w": 14,
         "x": 10,
-        "y": 17
+        "y": 16
       },
       "id": 10,
       "options": {
@@ -1148,7 +1230,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 21
       },
       "id": 13,
       "options": {
@@ -1194,7 +1276,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 28
       },
       "id": 12,
       "options": {
@@ -1286,7 +1368,7 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略詳情",
   "uid": "trading-strategy-detail",
-  "version": 3,
+  "version": 4,
   "weekStart": "monday",
-  "description": "單一策略的事故優先診斷頁。頂端顯示近 15 分鐘高信心執行事故，並拆分 runtime contract、執行綁定與 config drift；關鍵事件置於完整去識別化日誌之前。"
+  "description": "單一策略的損益、餘額與執行診斷頁。監控摘要合併程序、runtime、執行綁定、config、風控與近 15 分鐘高信心事故；關鍵事件置於完整去識別化日誌之前。"
 }

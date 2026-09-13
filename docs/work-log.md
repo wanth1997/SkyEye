@@ -15,6 +15,21 @@
 ---
 -->
 
+## 2026-09-13 16:24 — 合併 Trading 狀態列並新增目前餘額
+
+**改動摘要：** 將策略詳情的四項執行事故併入緊湊監控摘要，損益組成保留實現損益／現金損益／返佣，新增目前策略的單一總餘額。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/trading-strategy-detail.json` — v4：第一列新增目前餘額，十項狀態合併到三格高的 Mixed stat panel，移除顯示的風控損益
+- `agents/alloy/trading/probe.sh`、`prometheus/rules/trading.yml` — 將最新穩定 `pnl_status.equity_now` 輸出為 inventory-scoped 總權益；producer 已加總所有 executor，不在 Grafana 二次加總
+- `tests/trading/test-probe.sh`、`test-central-config.sh`、`prometheus/rules/tests/trading.test.yml` — 驗證單／雙交易所、零值、缺值、無效值、unstable sample、inventory 隔離、mixed datasource 與版面
+- `docs/superpowers/specs/2026-09-13-trading-dashboard-summary-balance-design.md`、`docs/superpowers/plans/2026-09-13-trading-dashboard-summary-balance.md`、`docs/project-brief.md` — 記錄設計、執行計畫與最新介面
+
+**原因/備註：** 餘額為最近穩定快照的總帳戶權益（USDT），並非即時可用保證金；缺資料時顯示等待。Probe regression 先確認新指標缺失而失敗，再通過所有案例；central-config、log-pipeline（含 Alloy validate／plutil）、全部 dashboard JSON 與 diff check 通過。使用 SkyEye 隔離暫存檔執行候選 Compose config、Prometheus 2.54.1 config／rule unit tests（41 條 Trading rules）成功，既有 Alertmanager 0.27 config 檢查成功。三個 production targets 的 12 個候選 Loki 事故查詢皆回傳單一數字；在 macmini-m2 與 Trading01 以候選 probe 讀取三個策略的實際 manifest-bound logs、輸出到獨立暫存 textfile，各取得一筆有效餘額。未部署或 reload 正式服務、未更動 Trading process；本次無可用 browser session，尚未做實際畫面驗收。
+
+---
+
 ## 2026-09-04 02:55 — 新增 Trading01 雙 Lighter process 監控
 
 **改動摘要：** 將 Linux Trading probe 與 Loki source 改為 per-strategy instance，共用單一 textfile collector，並新增可回復的 singleton migration 及 Mainnet shadow inventory。
