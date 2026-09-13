@@ -1285,12 +1285,57 @@
         "type": "loki",
         "uid": "loki"
       },
+      "description": "來源端已移除訂單、client action、execution correlation 與本機路徑等敏感資訊；依新到舊顯示今天的策略日誌。",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 12,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": false,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "direction": "backward",
+          "editorMode": "code",
+          "expr": "{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"}",
+          "maxLines": 100,
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "title": "最新策略日誌 · 已去識別",
+      "type": "logs"
+    },
+    {
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "description": "只顯示需要人工處理的成交確認、復原、單邊曝險與未解 fence 事件；來源端已去識別化。",
       "gridPos": {
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 29
       },
       "id": 13,
       "options": {
@@ -1320,51 +1365,6 @@
       ],
       "timeFrom": "6h",
       "title": "關鍵執行事件 · 近 6 小時",
-      "type": "logs"
-    },
-    {
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "description": "來源端已移除訂單、client action、execution correlation 與本機路徑等敏感資訊；依新到舊顯示今天的策略日誌。",
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 28
-      },
-      "id": 12,
-      "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": false,
-        "showTime": true,
-        "sortOrder": "Descending",
-        "wrapLogMessage": true
-      },
-      "pluginVersion": "11.2.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "direction": "backward",
-          "editorMode": "code",
-          "expr": "{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\",strategy=\"$strategy\"}",
-          "maxLines": 100,
-          "queryType": "range",
-          "refId": "A"
-        }
-      ],
-      "title": "最新策略日誌 · 已去識別",
       "type": "logs"
     }
   ],
@@ -1428,7 +1428,7 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略詳情",
   "uid": "trading-strategy-detail",
-  "version": 5,
+  "version": 6,
   "weekStart": "monday",
-  "description": "單一策略的損益、餘額與執行診斷頁。監控摘要合併程序、runtime、執行綁定、config、風控與近 15 分鐘高信心事故；關鍵事件置於完整去識別化日誌之前。"
+  "description": "單一策略的損益、餘額與執行診斷頁。監控摘要合併程序、runtime、執行綁定、config、風控與近 15 分鐘高信心事故；最新策略日誌置於關鍵執行事件上方。"
 }
