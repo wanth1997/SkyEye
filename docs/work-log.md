@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-09-13 17:59 — 交換 Trading 日誌順序並量測刷新延遲
+
+**改動摘要：** 將最新策略日誌放到關鍵執行事件上方；針對手動刷新轉圈進行正式查詢延遲排查。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/trading-strategy-detail.json` — v6：日誌 id 12 移至 y=21，事件 id 13 移至 y=29；保留各自高度、100 行上限、查詢、時間範圍與 15s refresh
+- `docs/superpowers/plans/2026-09-13-trading-log-order-refresh.md` — 記錄版面修改、診斷結果與部署驗證計畫
+- `docs/work-log.md` — 記錄實測與尚未定位的瀏覽器端延遲
+
+**原因/備註：** 三策略共 36 個 panel/datasource 請求耗時 0.004–0.212 秒；近 30m 約 3,000 次 datasource requests 全部 HTTP 200、histogram 均在 0.25 秒內，p99 約 0.088 秒，Loki range p99 約 0.049 秒。主機資源低負载，近期 Grafana error／slow request 與 Cloudflared error 未見異常；未登入的公開入口 redirect 實測 0.40 秒，不能推論已登入瀏覽器端的時間。沒有可用 browser session，仍需使用者轉圈當下的面板與 Network timing 才能定位，未宣稱慢速已修復，也未猜測調整查詢／刷新間隔。Central-config、所有 dashboard JSON 與 diff check 通過；semantic diff 證明各 panel 除兩個日誌 y 座標以外完全一致。本機沒有 Docker/promtool，本次未更動 rules 或 runtime。
+
+---
+
 ## 2026-09-13 17:09 — 部署 Trading 摘要欄名與週期可讀性修正
 
 **改動摘要：** 合併 PR #40，中央 checkout fast-forward 至 `6b8e927`，Grafana 自動載入策略詳情 v5。
