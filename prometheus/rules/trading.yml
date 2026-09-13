@@ -116,6 +116,12 @@ groups:
           and on (product, environment, server_id, strategy)
           trading_target_info
 
+      - record: trading_strategy_current_equity_usdt
+        expr: |
+          tnauqquant_current_equity_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
       - record: trading_strategy_current_cash_pnl_usdt
         expr: |
           tnauqquant_current_cash_pnl_usdt{product="tnauqquant",environment="production"}

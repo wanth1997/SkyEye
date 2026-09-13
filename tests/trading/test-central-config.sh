@@ -34,7 +34,7 @@ jq -e '
   ([.templating.list[].name] == ["server_id", "strategy"]) and
   ([.templating.list[].label] == ["伺服器", "策略"]) and
   ([.panels[].title] | contains([
-    "執行事故 · 最近 15 分鐘",
+    "目前餘額",
     "本輪實現損益",
     "最近完成週期",
     "已完成週期",
@@ -46,7 +46,7 @@ jq -e '
     "關鍵執行事件 · 近 6 小時",
     "最新策略日誌 · 已去識別"
   ])) and
-  ([.panels[] | select(.title == "監控摘要") | .targets[].legendFormat] ==
+  ([.panels[] | select(.title == "監控摘要") | .targets[] | select(.datasource.uid == "prometheus") | .legendFormat] ==
     ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新"]) and
   ([.panels[] | select(.title == "監控摘要") |
     [.fieldConfig.overrides[] |
@@ -124,12 +124,32 @@ jq -e '
     (.datasource.uid == "loki" and
      (.targets[0].expr | contains("server_id=\"$server_id\"") and contains("strategy=\"$strategy\"")))
   ] | all) and
-  ([.panels[] | select(.title == "執行事故 · 最近 15 分鐘") |
-    (.datasource.uid == "loki" and
-     .gridPos == {h: 4, w: 24, x: 0, y: 0} and
-     ([.targets[].legendFormat] == ["成交確認卡住", "需人工復原", "單邊曝險", "未解 fence"]) and
-     ([.targets[].expr] | all(contains("[15m]") and contains("server_id=\"$server_id\"") and contains("strategy=\"$strategy\""))))
+  ([.panels[] | select(.title == "監控摘要") |
+    .datasource == {type: "mixed", uid: "-- Mixed --"} and
+    .gridPos == {h: 3, w: 24, x: 0, y: 4} and
+    ([.targets[].refId] | length == 10 and length == (unique | length)) and
+    ([.targets[] | select(.datasource.uid == "loki") | .legendFormat] ==
+      ["成交確認卡住 · 15m", "需人工復原 · 15m", "單邊曝險 · 15m", "未解 fence · 15m"]) and
+    ([.targets[] | select(.datasource.uid == "loki") |
+      .queryType == "instant" and
+      (.expr | contains("[15m]") and contains("server_id=\"$server_id\"") and
+        contains("strategy=\"$strategy\"") and endswith("or vector(0)"))] | all) and
+    ([.fieldConfig.overrides[] | select(.matcher.id == "byFrameRefID") |
+      .properties[] | select(.id == "thresholds") | .value.steps] ==
+      [range(4) | [{color: "green", value: null}, {color: "red", value: 1}]])
   ] == [true]) and
+  ([.panels[].title] | index("執行事故 · 最近 15 分鐘") == null) and
+  ([.panels[] | select(.title == "目前餘額") |
+    .gridPos == {h: 4, w: 9, x: 15, y: 0} and
+    .datasource.uid == "prometheus" and
+    .fieldConfig.defaults.unit == "suffix: USDT" and
+    .fieldConfig.defaults.noValue == "等待餘額資料" and
+    (.targets | length == 1) and .targets[0].instant == true and
+    .targets[0].expr == "trading_strategy_current_equity_usdt{server_id=\"$server_id\",strategy=\"$strategy\"}"
+  ] == [true]) and
+  ([.panels[] | select(.title == "損益組成") | [.targets[].legendFormat]] ==
+    [["實現損益", "現金損益", "返佣"]]) and
+  ([.panels[].targets[].expr] | all(contains("current_risk_pnl_usdt") | not)) and
   ([.panels[] | select(.title == "關鍵執行事件 · 近 6 小時") |
     (.type == "logs" and .targets[0].maxLines == 100 and .timeFrom == "6h" and
      (.targets[0].expr | contains("coordinator_fence_stalled") and contains("shutdown_with_unconsumed_continuation")))
@@ -140,7 +160,7 @@ jq -e '
     (.targets[0].expr | contains("trading_strategy_current_run_exchange_volume_usd"))
   ] == [true]) and
   ([.panels[] | select(.title == "監控摘要") |
-    ([.targets[].legendFormat] == ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新"]) and
+    ([.targets[] | select(.datasource.uid == "prometheus") | .legendFormat] == ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新"]) and
     (.targets[0].expr | contains("trading_strategy_process_count") and
       (contains("> bool 0") | not)) and
     (.targets[1].expr | contains("trading_strategy_runtime_contract_available")) and
@@ -155,7 +175,8 @@ jq -e '
   ([.panels[] | select(.title == "本輪實現損益 · 週期走勢") |
     .fieldConfig.overrides[].properties[] | select(.id == "unit") | .value] == ["suffix: USDT"]) and
   ([.. | objects | .datasource?.uid? | select(. != null)] |
-    all(. == "prometheus" or . == "loki" or . == "alertmanager")) and
+    all(. == "prometheus" or . == "loki" or . == "alertmanager" or . == "-- Mixed --")) and
+  ([.panels[].targets[].datasource.uid] | all(. == "prometheus" or . == "loki")) and
   ([.panels[] | .targets[] | select(.datasource.uid == "prometheus") | .expr] |
     all(contains("trading_strategy_"))) and
   ((tostring | contains("tnauqquant-prod-1")) | not) and
@@ -320,6 +341,7 @@ for recording_rule in \
   trading_strategy_runtime_binding_ok \
   trading_strategy_config_snapshot_match \
   trading_strategy_current_real_pnl_usdt \
+  trading_strategy_current_equity_usdt \
   trading_strategy_current_net_position_btc \
   trading_strategy_current_run_exchange_volume_usd \
   trading_strategy_risk_stopped
