@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-09-13 17:09 — 部署 Trading 摘要欄名與週期可讀性修正
+
+**改動摘要：** 合併 PR #40，中央 checkout fast-forward 至 `6b8e927`，Grafana 自動載入策略詳情 v5。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/trading-strategy-detail.json` — production 與 Git 的 SHA-256 均為 `a65aefdd3391813d6872167f96cadbf59fc99999918126b6819778c3c2b6d3d0`；Grafana DB panels 與 provisioning source 完全一致
+- `docs/work-log.md` — 記錄部署與正式資料驗證
+
+**原因/備註：** 三個策略共 39 個摘要／週期／餘額 datasource queries 無錯誤；每個策略皆有十個 numeric 狀態，週期與餘額結果和相同時間的直接 Prometheus query 一致。兩個 Lighter 策略週期／餘額均有數字；Toobit/MEXC 的週期與餘額來源缺資料，部署前採樣與 offset query 已確認缺值，保留既有等待提示。再以部署後 Grafana model、實際 frames 與 upstream v11.2.0 converter 驗證十項正式顯示名稱、事故 thresholds，以及週期全寬兩列／16px labels／24px values。Grafana DB healthy；probe／Prometheus／Loki rules／Compose checksums 未變，三個中央 container start time 未變，未操作 Trading process。Central-config、dashboard JSON、diff check 通過；本機沒有 Docker/promtool，本次未改 rules；browser session 不可用，未做像素級驗收。
+
+---
+
 ## 2026-09-13 17:00 — 修正 Trading 摘要預設欄名並放大週期資訊
 
 **改動摘要：** 將監控摘要固定為十項具名狀態，消除 Value／G／H／I／J 預設欄名；最近完成週期改為上下兩列並放大字體。
