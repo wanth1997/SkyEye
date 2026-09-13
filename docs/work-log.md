@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-09-13 18:28 — 放大手機監控摘要並保留十項完整狀態
+
+**改動摘要：** 將過矮的合併摘要改為較寬鬆的自動多列排列，固定 14px 標籤／20px 狀態數值，避免手機自動縮字。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/trading-strategy-detail.json` — v7：摘要高度 3→10 grid units，關閉 label/value 並排；後續 panels 下移七格，最近日誌仍在關鍵事件上方
+- `tests/trading/test-central-config.sh` — 更新摘要高度、字級與自動排列契約
+- `docs/superpowers/plans/2026-09-13-trading-mobile-summary.md` — 記錄手機重現、原生 Grafana 預覽與驗收
+
+**原因/備註：** Grafana 11.2 的 Stat auto grid 在 390px 手機預覽把舊標籤縮到 4.3125px、數值縮到 10.2667px。使用同版本、僅綁 loopback 的隔離 Grafana 與 synthetic datasource frames，以既有 Chromium／Playwright 驗證 320／360／390／430／1280px：十個狀態在正常、重複程序、停機與四位數事故情境均無文字越界與 page errors；主文字為 14／20px，原生 K 後綴為 16px。8 格高候選在 320px 仍有風控文字越界，因此採 10 格高，桌面也會使用增加後的摘要高度。所有查詢、欄名、mappings、thresholds 與其他 panel 內容均未變；central-config、所有 dashboard JSON、semantic diff 與 diff check 通過。本機無 Docker/promtool，本次未修改 rules。使用者已確認 20–30 秒刷新等待恢復，依指示停止該項排查，未把恢復歸因於本次 UI 調整。
+
+---
+
 ## 2026-09-13 17:59 — 交換 Trading 日誌順序並量測刷新延遲
 
 **改動摘要：** 將最新策略日誌放到關鍵執行事件上方；針對手動刷新轉圈進行正式查詢延遲排查。

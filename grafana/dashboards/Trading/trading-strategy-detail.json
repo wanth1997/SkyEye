@@ -705,7 +705,7 @@
         ]
       },
       "gridPos": {
-        "h": 3,
+        "h": 10,
         "w": 24,
         "x": 0,
         "y": 4
@@ -723,7 +723,12 @@
           "fields": "",
           "values": false
         },
-        "textMode": "value_and_name"
+        "textMode": "value_and_name",
+        "text": {
+          "titleSize": 14,
+          "valueSize": 20
+        },
+        "wideLayout": false
       },
       "pluginVersion": "11.2.0",
       "targets": [
@@ -930,7 +935,7 @@
         "h": 9,
         "w": 16,
         "x": 0,
-        "y": 7
+        "y": 14
       },
       "id": 7,
       "options": {
@@ -1052,7 +1057,7 @@
         "h": 9,
         "w": 8,
         "x": 16,
-        "y": 7
+        "y": 14
       },
       "id": 8,
       "options": {
@@ -1162,7 +1167,7 @@
         "h": 5,
         "w": 10,
         "x": 0,
-        "y": 16
+        "y": 23
       },
       "id": 9,
       "options": {
@@ -1244,7 +1249,7 @@
         "h": 5,
         "w": 14,
         "x": 10,
-        "y": 16
+        "y": 23
       },
       "id": 10,
       "options": {
@@ -1294,7 +1299,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 28
       },
       "id": 12,
       "options": {
@@ -1335,7 +1340,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 29
+        "y": 36
       },
       "id": 13,
       "options": {
@@ -1428,7 +1433,7 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略詳情",
   "uid": "trading-strategy-detail",
-  "version": 6,
+  "version": 7,
   "weekStart": "monday",
   "description": "單一策略的損益、餘額與執行診斷頁。監控摘要合併程序、runtime、執行綁定、config、風控與近 15 分鐘高信心事故；最新策略日誌置於關鍵執行事件上方。"
 }
