@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-09-13 16:49 — 部署 Trading 合併狀態列與目前餘額
+
+**改動摘要：** 依 owner 授權將 PR #38 的 merge commit `c4b30f4` 部署至中央監控與兩臺 Trading 主機；策略詳情 v4 與三個策略的總餘額已生效。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/trading-strategy-detail.json`、`prometheus/rules/trading.yml` — 中央 checkout fast-forward 至 `c4b30f4`；Prometheus lifecycle reload 成功，Grafana provisioning 載入 v4
+- `agents/alloy/trading/probe.sh` — macmini-m2 的 `/opt/homebrew/libexec/skyeye-trading/probe.sh` 與 Trading01 的 `/usr/local/libexec/skyeye-trading/probe.sh` 皆原子替換為 merged source，checksum 均為 `8239ebe9…`；既有排程與共享 Alloy collector 持續運行
+- `docs/work-log.md` — 記錄正式驗收與 rollback 備份位置
+
+**原因/備註：** 正式 Compose、Prometheus 2.54.1 config／rule tests、Alertmanager 0.27 config 與 dashboard JSON 檢查通過；三個 raw／recorded equity series 齊全，驗收時 probe age 最大約 52 秒，新 recording rule 為 healthy。Grafana DB 確認十項狀態合併、損益組成三欄與餘額面板；透過 Grafana datasource API 驗證每策略 7 個 Prometheus 與 4 個 Loki queries，33 個查詢皆有資料且無錯誤。驗收時 Toobit/MEXC 合計 `26675.70 USDT`、Lighter Mainnet `96.64 USDT`、Lighter Robinhood `30.44 USDT`，均為各策略最新穩定快照。三個 Trading PID（`160`／`223939`／`2491098`）、process start、config 與 manifest SHA-256 部署前後完全一致，未啟停交易程序；macOS probe stderr 為 0 行，Linux probe 結果皆 success／exit 0。瀏覽器 session 仍不可用，本次以正式 provisioning 與 datasource API 完成驗收。
+
+Rollback 原始 probe 保留於 macmini-m2 `/tmp/skyeye-balance-rollout-20260913.ErYmme/probe.before.sh` 與 Trading01 `/tmp/skyeye-balance-rollout-20260913.0tP9ar/probe.before.sh`；中央部署前 commit 為 `2fc490f`。GitHub merge API 回傳 502，但 `origin/master` 已確認包含 `c4b30f4` 及 PR head `5803549`，因此以實際 Git ancestry 與部署 checksum 作為驗證依據。
+
+---
+
 ## 2026-09-13 16:24 — 合併 Trading 狀態列並新增目前餘額
 
 **改動摘要：** 將策略詳情的四項執行事故併入緊湊監控摘要，損益組成保留實現損益／現金損益／返佣，新增目前策略的單一總餘額。
