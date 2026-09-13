@@ -126,7 +126,10 @@ jq -e '
   ] | all) and
   ([.panels[] | select(.title == "監控摘要") |
     .datasource == {type: "mixed", uid: "-- Mixed --"} and
-    .gridPos == {h: 3, w: 24, x: 0, y: 4} and
+    .gridPos == {h: 10, w: 24, x: 0, y: 4} and
+    .options.orientation == "auto" and
+    .options.text == {titleSize: 14, valueSize: 20} and
+    .options.wideLayout == false and
     .options.reduceOptions.fields == "" and
     (. as $panel | all(.targets[];
       . as $target |
