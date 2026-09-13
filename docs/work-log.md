@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-09-13 17:00 — 修正 Trading 摘要預設欄名並放大週期資訊
+
+**改動摘要：** 將監控摘要固定為十項具名狀態，消除 Value／G／H／I／J 預設欄名；最近完成週期改為上下兩列並放大字體。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/trading-strategy-detail.json` — v5：summary 以 refId 固定中文 displayName 並保留 mappings／thresholds；週期面板改為 7 格寬、16px label／24px value，完整時間格式保留
+- `tests/trading/test-central-config.sh` — 更新 refId 命名、字級、排列與無重疊版面契約
+- `docs/work-log.md` — 記錄 Grafana 11.2 frontend 轉換根因與驗證
+
+**原因/備註：** 正式 API 已回傳正確中文 alias，但 Grafana 11.2 的 Loki `makeTableFrames` 會重建 instant numeric fields 為 `Value #G` 等名稱並丟棄 displayNameFromDS。使用實際正式回應與 upstream v11.2.0 converter 重現四項預設名稱，候選設定十項 numeric displays 的中文名稱全部正確、數值與事故 thresholds 保持一致。保留 numeric-only reduction，避免 Time 欄被顯示為多餘 stat。週期面板原本左右分欄會壓縮長時間字串，改用兩個全寬橫列；餘額讓出兩格寬度，查詢與其他 panels 內容不變。Central-config、全部 dashboard JSON 與 diff check 通過；browser session 不可用，未聲稱完成像素級畫面驗收。此修正只更新 Grafana JSON，不需變更或 reload probe、Prometheus/Loki rules 或 Trading process。
+
+---
+
 ## 2026-09-13 16:24 — 合併 Trading 狀態列並新增目前餘額
 
 **改動摘要：** 將策略詳情的四項執行事故併入緊湊監控摘要，損益組成保留實現損益／現金損益／返佣，新增目前策略的單一總餘額。

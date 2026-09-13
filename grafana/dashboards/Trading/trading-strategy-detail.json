@@ -129,10 +129,14 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "完成時間"
+              "id": "byFrameRefID",
+              "options": "B"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "完成時間"
+              },
               {
                 "id": "unit",
                 "value": "dateTimeAsLocal"
@@ -149,12 +153,24 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "週期損益"
+              }
+            ]
           }
         ]
       },
       "gridPos": {
         "h": 4,
-        "w": 5,
+        "w": 7,
         "x": 6,
         "y": 0
       },
@@ -163,7 +179,7 @@
         "colorMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
-        "orientation": "vertical",
+        "orientation": "horizontal",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -172,7 +188,11 @@
           "values": false
         },
         "textMode": "value_and_name",
-        "wideLayout": true
+        "wideLayout": true,
+        "text": {
+          "titleSize": 16,
+          "valueSize": 24
+        }
       },
       "pluginVersion": "11.2.0",
       "targets": [
@@ -225,7 +245,7 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 11,
+        "x": 13,
         "y": 0
       },
       "id": 5,
@@ -280,8 +300,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 9,
-        "x": 15,
+        "w": 7,
+        "x": 17,
         "y": 0
       },
       "id": 14,
@@ -344,10 +364,14 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "程序"
+              "id": "byFrameRefID",
+              "options": "A"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "程序"
+              },
               {
                 "id": "noValue",
                 "value": "未知"
@@ -388,10 +412,14 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "Runtime Contract"
+              "id": "byFrameRefID",
+              "options": "B"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "Runtime Contract"
+              },
               {
                 "id": "noValue",
                 "value": "未知"
@@ -420,10 +448,14 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "執行綁定"
+              "id": "byFrameRefID",
+              "options": "C"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "執行綁定"
+              },
               {
                 "id": "noValue",
                 "value": "未知"
@@ -452,10 +484,14 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "Config 快照"
+              "id": "byFrameRefID",
+              "options": "D"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "Config 快照"
+              },
               {
                 "id": "noValue",
                 "value": "未知"
@@ -484,10 +520,14 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "風控回報"
+              "id": "byFrameRefID",
+              "options": "E"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "風控回報"
+              },
               {
                 "id": "noValue",
                 "value": "未知"
@@ -516,10 +556,14 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "資料更新"
+              "id": "byFrameRefID",
+              "options": "F"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "資料更新"
+              },
               {
                 "id": "noValue",
                 "value": "無資料"
@@ -553,6 +597,10 @@
             },
             "properties": [
               {
+                "id": "displayName",
+                "value": "成交確認卡住 · 15m"
+              },
+              {
                 "id": "thresholds",
                 "value": {
                   "mode": "absolute",
@@ -576,6 +624,10 @@
               "options": "H"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "需人工復原 · 15m"
+              },
               {
                 "id": "thresholds",
                 "value": {
@@ -601,6 +653,10 @@
             },
             "properties": [
               {
+                "id": "displayName",
+                "value": "單邊曝險 · 15m"
+              },
+              {
                 "id": "thresholds",
                 "value": {
                   "mode": "absolute",
@@ -624,6 +680,10 @@
               "options": "J"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "未解 fence · 15m"
+              },
               {
                 "id": "thresholds",
                 "value": {
@@ -1368,7 +1428,7 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略詳情",
   "uid": "trading-strategy-detail",
-  "version": 4,
+  "version": 5,
   "weekStart": "monday",
   "description": "單一策略的損益、餘額與執行診斷頁。監控摘要合併程序、runtime、執行綁定、config、風控與近 15 分鐘高信心事故；關鍵事件置於完整去識別化日誌之前。"
 }

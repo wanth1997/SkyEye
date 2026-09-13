@@ -52,10 +52,10 @@ jq -e '
     [.fieldConfig.overrides[] |
       select(any(.properties[]; .id == "noValue")) |
       .matcher.options]
-  ] == [["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新"]]) and
+  ] == [["A", "B", "C", "D", "E", "F"]]) and
   ([.panels[] | select(.title == "監控摘要") |
     .fieldConfig.overrides[] |
-    select(.matcher.options == "程序") |
+    select(.matcher.id == "byFrameRefID" and .matcher.options == "A") |
     .properties[] | select(.id == "mappings") | .value[] |
     select(.type == "range") | (.options.from == 2 and .options.to > 1000)
   ] == [true])
@@ -127,6 +127,12 @@ jq -e '
   ([.panels[] | select(.title == "監控摘要") |
     .datasource == {type: "mixed", uid: "-- Mixed --"} and
     .gridPos == {h: 3, w: 24, x: 0, y: 4} and
+    .options.reduceOptions.fields == "" and
+    (. as $panel | all(.targets[];
+      . as $target |
+      [$panel.fieldConfig.overrides[] |
+        select(.matcher.id == "byFrameRefID" and .matcher.options == $target.refId) |
+        .properties[] | select(.id == "displayName") | .value] == [$target.legendFormat])) and
     ([.targets[].refId] | length == 10 and length == (unique | length)) and
     ([.targets[] | select(.datasource.uid == "loki") | .legendFormat] ==
       ["成交確認卡住 · 15m", "需人工復原 · 15m", "單邊曝險 · 15m", "未解 fence · 15m"]) and
@@ -139,8 +145,17 @@ jq -e '
       [range(4) | [{color: "green", value: null}, {color: "red", value: 1}]])
   ] == [true]) and
   ([.panels[].title] | index("執行事故 · 最近 15 分鐘") == null) and
+  ([.panels[] | select(.title == "最近完成週期") |
+    .gridPos == {h: 4, w: 7, x: 6, y: 0} and
+    .options.orientation == "horizontal" and
+    .options.wideLayout == true and
+    .options.text == {titleSize: 16, valueSize: 24} and
+    ([.fieldConfig.overrides[] |
+      select(.matcher.id == "byFrameRefID" and .matcher.options == "B") |
+      .properties[] | select(.id == "unit") | .value] == ["dateTimeAsLocal"])
+  ] == [true]) and
   ([.panels[] | select(.title == "目前餘額") |
-    .gridPos == {h: 4, w: 9, x: 15, y: 0} and
+    .gridPos == {h: 4, w: 7, x: 17, y: 0} and
     .datasource.uid == "prometheus" and
     .fieldConfig.defaults.unit == "suffix: USDT" and
     .fieldConfig.defaults.noValue == "等待餘額資料" and
@@ -168,7 +183,7 @@ jq -e '
     (.targets[3].expr | contains("trading_strategy_config_snapshot_match")) and
     ([.fieldConfig.overrides[] |
       select(any(.properties[]; .id == "noValue")) | .matcher.options] ==
-      ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新"])
+      ["A", "B", "C", "D", "E", "F"])
   ] == [true]) and
   ([.panels[] | select(.title == "本輪實現損益" or .title == "損益組成") |
     .fieldConfig.defaults.unit] | all(. == "suffix: USDT")) and
