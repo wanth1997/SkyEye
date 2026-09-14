@@ -619,7 +619,7 @@
                     "type": "value",
                     "options": {
                       "0": {
-                        "color": "text",
+                        "color": "green",
                         "index": 0,
                         "text": "未回報停機"
                       },
@@ -1197,6 +1197,6 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略總覽",
   "uid": "trading-strategy-fleet",
-  "version": 3,
+  "version": 4,
   "weekStart": "monday"
 }

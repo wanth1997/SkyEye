@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-09-14 14:46 — 統一 Trading 風控正常狀態配色
+
+**改動摘要：** 策略詳情與策略總覽的風控回報「未回報停機」改為綠色，與其他正常狀態一致；「已觸發停機」維持紅色。
+
+**修改的檔案：**
+
+- `grafana/dashboards/Trading/trading-strategy-detail.json` — v8：risk=0 mapping 改綠色
+- `grafana/dashboards/Trading/trading-strategy-fleet.json` — v4：相同風控 mapping 同步改綠色
+- `docs/work-log.md` — 記錄驗證與部署範圍
+
+**原因/備註：** central-config 與所有 dashboard JSON 檢查通過；semantic diff 確認兩份 JSON 各僅變更一個 color 與 version。摘要其他正常／事故狀態已分別為綠／紅，queries、未知／缺資料與 risk 指標語意不變。本機無 Docker/promtool；中央 production 的 Compose、Prometheus config/rules、Alertmanager config 以現有容器唯讀驗證。依使用者授權合併後以檔案 provisioning 部署，並核對 Grafana 實際載入的 model 與健康狀態；本次無可用 browser session，視覺像素未驗收。
+
+---
+
 ## 2026-09-13 18:28 — 放大手機監控摘要並保留十項完整狀態
 
 **改動摘要：** 將過矮的合併摘要改為較寬鬆的自動多列排列，固定 14px 標籤／20px 狀態數值，避免手機自動縮字。
