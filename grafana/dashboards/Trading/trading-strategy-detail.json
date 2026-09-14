@@ -539,7 +539,7 @@
                     "type": "value",
                     "options": {
                       "0": {
-                        "color": "text",
+                        "color": "green",
                         "index": 0,
                         "text": "未回報停機"
                       },
@@ -1433,7 +1433,7 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略詳情",
   "uid": "trading-strategy-detail",
-  "version": 7,
+  "version": 8,
   "weekStart": "monday",
   "description": "單一策略的損益、餘額與執行診斷頁。監控摘要合併程序、runtime、執行綁定、config、風控與近 15 分鐘高信心事故；最新策略日誌置於關鍵執行事件上方。"
 }
