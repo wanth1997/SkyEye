@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-09-22 — 移除 Trading01 Lighter Mainnet 監控
+
+**改動摘要：** Mainnet 策略已停止且取消自動啟動，依 operator 指示移出中央 target inventory，停用該 lane 的 SkyEye probe timer/service，封存專用 env、Loki fragment 與 textfile。Robinhood、共用 collector、其他產品與歷史資料保留。
+
+**修改的檔案：**
+- `prometheus/rules/trading-targets.yml` — 移除 Mainnet target，讓 inventory-based alerts／fleet 不再包含它。
+- `grafana/dashboards/Trading/trading-strategy-detail.json` — 策略選單使用即時 inventory query result，避免保留的歷史 series 讓已退役策略持續出現在選單。
+- `tests/trading/test-central-config.sh`、Prometheus rule fixtures — 更新剩餘兩個 active targets，確認 Mainnet 不再有 telemetry-missing alert。
+- `docs/project-brief.md` — 記錄退役範圍。
+
+**原因/備註：** 中央規則先更新，再停止單一 probe、封存 metrics 並 reload Alloy；不修改 shared collector、不重啟交易、不刪歷史時序或 Loki logs。central-config／incident taxonomy、全部 dashboard JSON、Prometheus 2.54.1 config／rule tests、Compose 與 Alertmanager config 驗證通過；部署後另查 Prometheus 即時 inventory 與 Robinhood telemetry。
+
+---
+
 ## 2026-09-14 14:46 — 統一 Trading 風控正常狀態配色
 
 **改動摘要：** 策略詳情與策略總覽的風控回報「未回報停機」改為綠色，與其他正常狀態一致；「已觸發停機」維持紅色。
