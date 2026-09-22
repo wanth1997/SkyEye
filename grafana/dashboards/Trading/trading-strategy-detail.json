@@ -1409,19 +1409,20 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(trading_target_info{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\"}, strategy)",
+        "definition": "query_result(trading_target_info{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\"})",
         "includeAll": false,
         "label": "策略",
         "multi": false,
         "name": "strategy",
         "options": [],
         "query": {
-          "query": "label_values(trading_target_info{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\"}, strategy)",
+          "query": "query_result(trading_target_info{product=\"tnauqquant\",environment=\"production\",server_id=\"$server_id\"})",
           "refId": "StandardVariableQuery"
         },
-        "refresh": 1,
+        "refresh": 2,
         "sort": 1,
-        "type": "query"
+        "type": "query",
+        "regex": "/strategy=\"([^\"]+)\"/"
       }
     ]
   },
@@ -1433,7 +1434,7 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略詳情",
   "uid": "trading-strategy-detail",
-  "version": 8,
+  "version": 9,
   "weekStart": "monday",
   "description": "單一策略的損益、餘額與執行診斷頁。監控摘要合併程序、runtime、執行綁定、config、風控與近 15 分鐘高信心事故；最新策略日誌置於關鍵執行事件上方。"
 }
