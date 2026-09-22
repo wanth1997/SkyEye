@@ -295,7 +295,8 @@ for production_value in \
   tnauqquant-prod-1 \
   toobit-mexc-btc \
   trading01 \
-  lighter-robinhood-btc-canary
+  lighter-robinhood-btc-canary \
+  ourbit-spot
 do
   rg -q -- "$production_value" "$PROM_TARGET" || {
     printf 'FAIL: inventory is missing production identity %s\n' \
@@ -304,11 +305,11 @@ do
   }
 done
 
-[[ "$(rg -c '^[[:space:]]+- record:[[:space:]]+trading_target_info' "$PROM_TARGET")" == "2" ]] || {
-  printf 'FAIL: expected exactly two generic Trading inventory rows\n' >&2
+[[ "$(rg -c '^[[:space:]]+- record:[[:space:]]+trading_target_info' "$PROM_TARGET")" == "3" ]] || {
+  printf 'FAIL: expected exactly three generic Trading inventory rows\n' >&2
   exit 1
 }
-for strategy in lighter-robinhood-btc-canary; do
+for strategy in lighter-robinhood-btc-canary ourbit-spot; do
   stanza="$(awk -v RS='' -v strategy="$strategy" '
     $0 ~ /record: trading_target_info/ && $0 ~ ("strategy: " strategy) {
       print

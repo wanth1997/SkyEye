@@ -40,6 +40,8 @@ tests:
         values: '0+30x10'
       - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
         values: '0+30x10'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="ourbit-spot"}'
+        values: '0+30x10'
       - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
         values: '0+30x10'
       - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
@@ -92,6 +94,8 @@ tests:
         eval_time: 3m
         exp_samples:
           - labels: 'trading_target_info{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary",notification_mode="shadow",quote_currency="USDT"}'
+            value: 1
+          - labels: 'trading_target_info{product="tnauqquant",environment="production",server_id="trading01",strategy="ourbit-spot",notification_mode="shadow",quote_currency="USDT"}'
             value: 1
 
   - name: expected run without runtime contract fires a dedicated shadow alert
@@ -150,6 +154,16 @@ tests:
               notification_mode: shadow
             exp_annotations:
               summary: 'trading01 lighter-robinhood-btc-canary telemetry is missing or stale'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: trading01
+              strategy: ourbit-spot
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'trading01 ourbit-spot telemetry is missing or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
   - name: duplicate production process fires a shadow alert
     interval: 30s
@@ -278,6 +292,16 @@ tests:
               notification_mode: shadow
             exp_annotations:
               summary: 'trading01 lighter-robinhood-btc-canary telemetry is missing or stale'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: trading01
+              strategy: ourbit-spot
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'trading01 ourbit-spot telemetry is missing or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
 
   - name: Trading01 stale running manifest surfaces process down without sidecar noise
