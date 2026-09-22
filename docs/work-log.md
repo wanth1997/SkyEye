@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-09-22 — 納入 Trading01 Ourbit Spot 監控
+
+**改動摘要：** 將既有 Ourbit Spot 程序加入中央 inventory 與 Grafana 動態策略列表，透過獨立唯讀 probe／Loki fragment 採集，不改交易設定或重啟交易。
+
+**修改的檔案：**
+- `prometheus/rules/trading-targets.yml`、rule fixtures、central-config check — 加入 `trading01/ourbit-spot`，沿用 shadow 告警。
+- `agents/alloy/trading/deployment-linux-ourbit.env.example` — 綁定 `ourbit-spot-btc` instance、專用 binary、config、manifest、raw-log glob 與 executor mapping；不含 credentials。
+- `docs/project-brief.md` — 更新目前監控名單。
+
+**原因/備註：** 使用既有 Linux installer 的 `--no-start` 安裝新 lane，驗證後 reload Alloy 並啟動 Ourbit probe timer。共用 collector 與 Robinhood 保持既有設定，已退役 Mainnet 不重新加入。central-config／dashboard JSON、Prometheus 2.54.1 config／rule tests、Compose、Alertmanager 與 combined Alloy config 驗證通過。Trading01 probe 首次執行 exit 0，process count、runtime contract、process／strategy／log binding 均為 1，已輸出 P&L 與 equity；共用設定與 Robinhood checksum 不變。
+
+---
+
 ## 2026-09-22 — 移除 Trading01 Lighter Mainnet 監控
 
 **改動摘要：** Mainnet 策略已停止且取消自動啟動，依 operator 指示移出中央 target inventory，停用該 lane 的 SkyEye probe timer/service，封存專用 env、Loki fragment 與 textfile。Robinhood、共用 collector、其他產品與歷史資料保留。
