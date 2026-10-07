@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-10-08 — 移除 Trading01 Ourbit Spot 監控
+
+**改動摘要：** 依 operator 指示關閉 `trading01/ourbit-spot` 監控：移出中央 target inventory，停用該 lane 的 SkyEye probe timer，封存專用 env、Alloy fragment 與 textfile 並 reload Alloy。Robinhood、共用 collector、其他產品與歷史資料保留。
+
+**修改的檔案：**
+- `prometheus/rules/trading-targets.yml` — 移除 Ourbit target，inventory-based alerts／fleet 不再包含它。
+- `prometheus/rules/tests/trading.test.yml`、`tests/trading/test-central-config.sh` — 剩一個 Trading01 target；保留 Ourbit 輸入 series 以證明退役後不再產生 telemetry-missing alert。
+- `docs/project-brief.md` — 更新監控名單。
+
+**原因/備註：** 沿用 2026-09-22 Mainnet 退役流程：中央規則先更新並 reload，再停用單一 probe、封存到 `/etc/skyeye-trading/retired/ourbit-spot-20261008/` 並 reload Alloy；不修改 shared collector、不重啟交易、不刪歷史時序或 Loki logs。驗證：central-config、incident taxonomy、dashboard JSON 本機通過；SkyEye host 上以 Prometheus 2.54.1 image 執行 `promtool check config`／`check rules`／兩個 rule test 檔皆 SUCCESS。`deployment-linux-ourbit.env.example` 保留。
+
+---
+
 ## 2026-09-22 — 納入 Trading01 Ourbit Spot 監控
 
 **改動摘要：** 將既有 Ourbit Spot 程序加入中央 inventory 與 Grafana 動態策略列表，透過獨立唯讀 probe／Loki fragment 採集，不改交易設定或重啟交易。
