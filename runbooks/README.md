@@ -17,6 +17,7 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 | `High5xxRate` / `Critical5xxRate` | [high-5xx.md](./high-5xx.md) | Medium / High |
 | `PaymentCreate5xxWarning` / `PaymentCreate5xxCritical` | [high-5xx.md](./high-5xx.md) | Medium / High (shadow) |
 | `PaymentOrderGenerationFailure` | [high-5xx.md](./high-5xx.md) | High (shadow) |
+| `LinkCourt401Surge` / `LinkCourt401SurgeByHandler` / `LinkCourt429Surge` | [linkcourt-auth-surge.md](./linkcourt-auth-surge.md) | Medium (shadow) |
 | `HostDiskLow` / `HostDiskCritical` | [disk-full.md](./disk-full.md) | Medium / High |
 | `HostHighCPU` | [high-cpu.md](./high-cpu.md) | Medium |
 | `HostOOM` | [oom.md](./oom.md) | High |

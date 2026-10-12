@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-10-13 — LinkCourt 401／429 暴增 shadow 告警
+
+**改動摘要：** 新增 LinkCourt backend 401 總量、單一 handler 401 與單一 handler 429 暴增告警，沿用付款告警的 `product="ppclub"` selector、`severity=Medium` 與 shadow routing，並補 runbook 與 rule unit tests。
+
+**修改的檔案：**
+- `prometheus/rules/app.yml` — 新增 `LinkCourt401Surge`（15m > 500，for 10m）、`LinkCourt401SurgeByHandler`（每 handler 15m > 300，for 10m）、`LinkCourt429Surge`（每 handler 15m > 30，for 5m）。
+- `prometheus/rules/tests/linkcourt-auth-surge-alerts.test.yml` — 以目前 slots 爬蟲節奏（每輪約 3 分鐘內 168 次 401、每 32 分鐘一輪）證明不觸發，並涵蓋單一 handler、分散 handler、429 與其他 product 隔離。
+- `runbooks/linkcourt-auth-surge.md`、`runbooks/README.md`、`README.md` — 新增處置步驟（Prod02 `request_complete` 來源欄位、Cloudflare 規則）與 inventory。
+
+**原因/備註：** 爬蟲 401 雖然日均僅約每 15 分鐘 50–80 次，但集中在每輪約 3 分鐘內，單一 15m 視窗峰值約 168，因此 per-handler 門檻不能用 150。門檻高於峰值；Cloudflare 擋下爬蟲後應於 canary review 依新基線下修。依專案規則先走 `notification_mode=shadow`，未部署 production。驗證：本機以官方 checksum 驗證過的 Prometheus 2.54.1 `promtool` 執行 `check rules`（7 檔皆 SUCCESS）與三個 rule test 檔（皆 SUCCESS）；mutation 檢查確認 per-handler 門檻改為 150 時 baseline 測試會失敗（峰值 168）。本機無 Docker，未跑 `docker compose config`／`amtool`（本次未改 compose 與 Alertmanager）。
+
+---
+
 ## 2026-10-08 — 移除 Trading01 Ourbit Spot 監控
 
 **改動摘要：** 依 operator 指示關閉 `trading01/ourbit-spot` 監控：移出中央 target inventory，停用該 lane 的 SkyEye probe timer，封存專用 env、Alloy fragment 與 textfile 並 reload Alloy。Robinhood、共用 collector、其他產品與歷史資料保留。
