@@ -1,0 +1,116 @@
+rule_files:
+  - ../app.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 2026-10 scraper baseline: 3 x 14 slots requests x 4 hosts (168 x 401)
+  # within ~3min every 32min, plus rare session 401s. Must not alert.
+  - name: current slots scraper baseline stays below 401 thresholds
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/courts/slots",method="GET",status="401"}'
+        values: '0 56 112 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 168 224 280 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 336 392 448 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 504 560 616 672 672'
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/session/me",method="GET",status="401"}'
+        values: '0+0.05x100'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LinkCourt401SurgeByHandler
+        exp_alerts: []
+      - eval_time: 47m
+        alertname: LinkCourt401SurgeByHandler
+        exp_alerts: []
+      - eval_time: 79m
+        alertname: LinkCourt401SurgeByHandler
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LinkCourt401Surge
+        exp_alerts: []
+      - eval_time: 47m
+        alertname: LinkCourt401Surge
+        exp_alerts: []
+      - eval_time: 79m
+        alertname: LinkCourt401Surge
+        exp_alerts: []
+
+  - name: one hammered handler fires the per-handler 401 alert only
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/courts/slots",method="GET",status="401"}'
+        values: '0+30x40'
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/session/me",method="GET",status="401"}'
+        values: '0+0.05x40'
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/courts/slots",method="GET",status="200"}'
+        values: '0+100x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LinkCourt401SurgeByHandler
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LinkCourt401SurgeByHandler
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              product: ppclub
+              handler: /api/v2/courts/slots
+            exp_annotations:
+              summary: 'ppclub /api/v2/courts/slots returned 450 HTTP 401 responses in 15min (threshold 300)'
+              description: "A single endpoint is being hammered without valid auth. On Prod02: sudo journalctl -u linkcourt.service --since \"-30min\" | grep -E 'status=(401|429)', filter to the /api/v2/courts/slots path and group by client_ip/ua/cf_ray/country. Cloudflare rule steps: PPClub docs/todo/anti-scraping-plan.md."
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/linkcourt-auth-surge.md'
+      - eval_time: 30m
+        alertname: LinkCourt401Surge
+        exp_alerts: []
+
+  - name: 401 spread across handlers fires the total alert only
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/session/me",method="GET",status="401"}'
+        values: '0+9x40'
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/courts/slots",method="GET",status="401"}'
+        values: '0+9x40'
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/bookings",method="POST",status="401"}'
+        values: '0+9x40'
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/credits/balance",method="GET",status="401"}'
+        values: '0+9x40'
+      - series: 'http_requests_total{product="enyoung",handler="/api/v2/session/me",method="GET",status="401"}'
+        values: '0+100x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LinkCourt401Surge
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              product: ppclub
+            exp_annotations:
+              summary: 'ppclub returned 540 HTTP 401 responses in 15min (threshold 500)'
+              description: "Unauthenticated/expired-session traffic is well above baseline across all handlers. On Prod02: sudo journalctl -u linkcourt.service --since \"-30min\" | grep -E 'status=(401|429)' and group by client_ip/ua/cf_ray/country. Cloudflare rule steps: PPClub docs/todo/anti-scraping-plan.md."
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/linkcourt-auth-surge.md'
+      - eval_time: 30m
+        alertname: LinkCourt401SurgeByHandler
+        exp_alerts: []
+
+  - name: 429 burst on one handler fires after 5min, low 429 noise does not
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/auth/login",method="POST",status="429"}'
+        values: '0+3x30'
+      - series: 'http_requests_total{product="ppclub",handler="/api/v2/session/me",method="GET",status="429"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LinkCourt429Surge
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: LinkCourt429Surge
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              product: ppclub
+              handler: /api/v2/auth/login
+            exp_annotations:
+              summary: 'ppclub /api/v2/auth/login returned 45 HTTP 429 responses in 15min (threshold 30)'
+              description: "Application rate limiting is rejecting a burst on this endpoint. On Prod02: sudo journalctl -u linkcourt.service --since \"-30min\" | grep -E 'status=(401|429)', filter to the /api/v2/auth/login path and check whether client_ip/ua look like real users before tightening Cloudflare rules (PPClub docs/todo/anti-scraping-plan.md)."
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/linkcourt-auth-surge.md'

@@ -117,3 +117,51 @@ groups:
           severity: Medium
         annotations:
           summary: "{{ $labels.product }} > 3 unhandled exceptions in 5min"
+
+      # LinkCourt auth/rate-limit surges. The 2026-10 slots scraper sends
+      # ~168 unauthenticated requests per round (3 x 14 dates x 4 hosts within
+      # ~3min, every ~32min), so a single 15m window peaks around 168 on
+      # /api/v2/courts/slots even though the daily average is ~50-80 per 15m.
+      # Thresholds stay above that peak; lower them in canary review once the
+      # Cloudflare block has reset the baseline.
+      - alert: LinkCourt401Surge
+        expr: |
+          sum by (product) (
+            increase(http_requests_total{product="ppclub", status="401"}[15m])
+          ) > 500
+        for: 10m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.product }} returned {{ $value | printf \"%.0f\" }} HTTP 401 responses in 15min (threshold 500)"
+          description: "Unauthenticated/expired-session traffic is well above baseline across all handlers. On Prod02: sudo journalctl -u linkcourt.service --since \"-30min\" | grep -E 'status=(401|429)' and group by client_ip/ua/cf_ray/country. Cloudflare rule steps: PPClub docs/todo/anti-scraping-plan.md."
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/linkcourt-auth-surge.md"
+
+      - alert: LinkCourt401SurgeByHandler
+        expr: |
+          sum by (product, handler) (
+            increase(http_requests_total{product="ppclub", status="401"}[15m])
+          ) > 300
+        for: 10m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.product }} {{ $labels.handler }} returned {{ $value | printf \"%.0f\" }} HTTP 401 responses in 15min (threshold 300)"
+          description: "A single endpoint is being hammered without valid auth. On Prod02: sudo journalctl -u linkcourt.service --since \"-30min\" | grep -E 'status=(401|429)', filter to the {{ $labels.handler }} path and group by client_ip/ua/cf_ray/country. Cloudflare rule steps: PPClub docs/todo/anti-scraping-plan.md."
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/linkcourt-auth-surge.md"
+
+      - alert: LinkCourt429Surge
+        expr: |
+          sum by (product, handler) (
+            increase(http_requests_total{product="ppclub", status="429"}[15m])
+          ) > 30
+        for: 5m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.product }} {{ $labels.handler }} returned {{ $value | printf \"%.0f\" }} HTTP 429 responses in 15min (threshold 30)"
+          description: "Application rate limiting is rejecting a burst on this endpoint. On Prod02: sudo journalctl -u linkcourt.service --since \"-30min\" | grep -E 'status=(401|429)', filter to the {{ $labels.handler }} path and check whether client_ip/ua look like real users before tightening Cloudflare rules (PPClub docs/todo/anti-scraping-plan.md)."
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/linkcourt-auth-surge.md"
