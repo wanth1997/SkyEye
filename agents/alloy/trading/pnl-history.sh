@@ -248,6 +248,12 @@ while IFS= read -r source_path; do
   fi
 done < <(compgen -G "$TQ_RAW_LOG_GLOB" | sort || true)
 
+# Re-sample the build time after scanning: a cycle can complete while large
+# raw logs are being scanned, and its timestamp must not be judged as future.
+if [[ -z "${TQ_PNL_HISTORY_NOW_SECONDS:-}" ]]; then
+  now_seconds="$(date '+%s')"
+fi
+
 all_events="$(mktemp "$TQ_PNL_HISTORY_CACHE_DIR/.pnl-history-all.XXXXXX")"
 unique_events="$(mktemp "$TQ_PNL_HISTORY_CACHE_DIR/.pnl-history-unique.XXXXXX")"
 boundaries="$(mktemp "$TQ_PNL_HISTORY_CACHE_DIR/.pnl-history-boundaries.XXXXXX")"

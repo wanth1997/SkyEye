@@ -252,4 +252,35 @@ if rg -q '^tnauqquant_pnl_history_current_value_usdt' "$METRICS_PATH"; then
   exit 1
 fi
 
+printf 'case: cycle completed while scanning is not treated as future\n'
+RACE_ROOT="$TEST_ROOT/race"
+mkdir -p "$RACE_ROOT/raw" "$RACE_ROOT/textfile" "$RACE_ROOT/bin"
+cat >"$RACE_ROOT/raw/run-race.raw.log" <<'EOF'
+time=2026-08-27T12:00:30.500+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=race.1 cycle_real_pnl_usdt=4 real_pnl_usdt=4
+EOF
+# The first epoch sample predates the cycle (the build started before it
+# completed); later samples reflect the clock after the scan finished.
+cat >"$RACE_ROOT/bin/date" <<EOF
+#!/usr/bin/env bash
+if [[ "\$*" == "+%s" ]]; then
+  if [[ -f "$RACE_ROOT/date-sampled" ]]; then
+    printf '1787803260\n'
+  else
+    : >"$RACE_ROOT/date-sampled"
+    printf '1787803200\n'
+  fi
+  exit 0
+fi
+exec /bin/date "\$@"
+EOF
+chmod +x "$RACE_ROOT/bin/date"
+export TQ_RAW_LOG_GLOB="$RACE_ROOT/raw/*.raw.log"
+export TQ_TEXTFILE_DIR="$RACE_ROOT/textfile"
+export TQ_PNL_HISTORY_CACHE_DIR="$RACE_ROOT/cache"
+unset TQ_PNL_HISTORY_NOW_SECONDS
+PATH="$RACE_ROOT/bin:$PATH" "$BUILDER"
+METRICS_PATH="$RACE_ROOT/textfile/tnauqquant-pnl-history.prom"
+assert_metric tnauqquant_pnl_history_build_timestamp_seconds 1787803260
+assert_metric tnauqquant_pnl_history_current_value_usdt 4
+
 printf 'PASS: historical P&L cache and accumulation contract\n'

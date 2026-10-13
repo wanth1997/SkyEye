@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-10-13 — Trading probe config 路徑與 P&L history build-time 競態
+
+**改動摘要：** 把 macOS trading 範本與 handoff 文件的 `TQ_CONFIG_PATH` 改為 tnauqquant 已改名的 `config/toobit-mexc.yaml`，並讓 `pnl-history.sh` 在掃完 raw logs 後重新取樣 build time，避免掃描期間剛完成的 cycle 被判為未來事件。
+
+**修改的檔案：**
+- `agents/alloy/trading/deployment.env.example`、`docs/trading-new-server-handoff.md` — `toobit-mexc.conf` → `toobit-mexc.yaml`。
+- `agents/alloy/trading/pnl-history.sh` — 未設定 `TQ_PNL_HISTORY_NOW_SECONDS` 時，掃描後重新取 `date +%s` 作為 build time；lock stale 判斷仍使用起始時間。
+- `tests/trading/test-pnl-history.sh` — 新增以 `date` shim 重現「build 起始早於 cycle、掃描後晚於 cycle」的回歸案例。
+
+**原因/備註：** 2026-10-13 02:02 tnauqquant config 改名後，本機 probe 因 `config not found` 每分鐘失敗、不再產生 metrics；已就地修正 `/opt/homebrew/etc/alloy/config.env`（備份 `config.env.bak-20261013`），probe 恢復且所有 identity/binding 指標為 1。P&L history 的錯誤與 10/11 18:19:48 cycle 完成、18:19:51 錯誤寫入對齊，屬同一分鐘內自動恢復的競態，但會漏一次 build 並留下錯誤 log。驗證：`tests/trading/*.sh` 全數通過；以 origin/master 舊版 builder 執行新案例會重現 `future cycle timestamp exceeds build time`。
+
+---
+
 ## 2026-10-13 — LinkCourt 401／429 暴增 shadow 告警
 
 **改動摘要：** 新增 LinkCourt backend 401 總量、單一 handler 401 與單一 handler 429 暴增告警，沿用付款告警的 `product="ppclub"` selector、`severity=Medium` 與 shadow routing，並補 runbook 與 rule unit tests。
