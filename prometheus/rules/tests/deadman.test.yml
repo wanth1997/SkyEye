@@ -1,0 +1,45 @@
+rule_files:
+  - ../deadman.yml
+
+evaluation_interval: 1m
+
+tests:
+  # The gauge holds a unix timestamp; promtool evaluates from time() = 0, so a
+  # series that keeps value 0 is "last run at t=0" and one that rises with the
+  # clock (60 per minute) is a job that keeps running.
+  - name: a stale instance does not page while another instance keeps the job fresh
+    interval: 1m
+    input_series:
+      - series: 'ppc_scheduled_job_last_run_timestamp{job="ppclub-backend",exported_job="auto_power_courts",instance="localhost:8090",product="ppclub",server_id="PROD02"}'
+        values: '0x80'
+      - series: 'ppc_scheduled_job_last_run_timestamp{job="ppclub-backend",exported_job="auto_power_courts",instance="localhost:8091",product="ppclub",server_id="PROD02"}'
+        values: '0+60x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SchedulerNoHeartbeat
+        exp_alerts: []
+
+  - name: the job pages once every instance has been silent for an hour
+    interval: 1m
+    input_series:
+      - series: 'ppc_scheduled_job_last_run_timestamp{job="ppclub-backend",exported_job="auto_power_courts",instance="localhost:8090",product="ppclub",server_id="PROD02"}'
+        values: '0x80'
+      - series: 'ppc_scheduled_job_last_run_timestamp{job="ppclub-backend",exported_job="auto_power_courts",instance="localhost:8091",product="ppclub",server_id="PROD02"}'
+        values: '0+60x5 300x75'
+      - series: 'ppc_scheduled_job_last_run_timestamp{job="ppclub-backend",exported_job="reconcile_pending_payments",instance="localhost:8091",product="ppclub",server_id="PROD02"}'
+        values: '0+60x80'
+    alert_rule_test:
+      - eval_time: 64m
+        alertname: SchedulerNoHeartbeat
+        exp_alerts: []
+      - eval_time: 72m
+        alertname: SchedulerNoHeartbeat
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: ppclub
+              server_id: PROD02
+              exported_job: auto_power_courts
+            exp_annotations:
+              summary: "ppclub scheduler job 'auto_power_courts' silent for > 1hr"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/scheduler-dead.md"

@@ -3,9 +3,13 @@ groups:
     interval: 1m
     rules:
       # Scheduler jobs push a timestamp gauge; if nothing updates it for 1hr,
-      # the scheduler is probably dead.
+      # the scheduler is probably dead. LinkCourt may run several app
+      # processes (API instances plus linkcourt-scheduler.service on :8091),
+      # and only the one holding the scheduler lock updates the gauge, so take
+      # the newest value per job across instances: a process that stopped
+      # running jobs must not page while another one keeps them fresh.
       - alert: SchedulerNoHeartbeat
-        expr: time() - ppc_scheduled_job_last_run_timestamp > 3600
+        expr: time() - max by (product, server_id, exported_job) (ppc_scheduled_job_last_run_timestamp) > 3600
         for: 5m
         labels:
           severity: High

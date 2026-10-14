@@ -3,10 +3,12 @@
 ## Symptoms
 
 ```promql
-time() - ppc_scheduled_job_last_run_timestamp > 3600   # for 5 minutes
+time() - max by (product, server_id, exported_job) (ppc_scheduled_job_last_run_timestamp) > 3600   # for 5 minutes
 ```
 
 A specific scheduler job hasn't updated its heartbeat gauge for an hour. The job's label lands under `exported_job` (Prometheus renames collision with reserved `job` label).
+
+LinkCourt can run more than one app process: the API on `localhost:8090` and, after the scheduler split, `linkcourt-scheduler.service` on `localhost:8091` (both scraped as job `ppclub-backend`, told apart by `instance`). Only the process holding the scheduler lock runs jobs, so the alert takes the newest heartbeat per job across instances. To see which process last ran a job, query without the `max by`.
 
 - High — Telegram (loud).
 - Usually affects ONE job; if ALL 4 PPClub scheduled jobs go silent, the scheduler itself (not a single job) is dead.
