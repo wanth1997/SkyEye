@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-10-14 — SchedulerNoHeartbeat 跨 instance 取最新值
+
+**改動摘要：** `SchedulerNoHeartbeat` 改為 `max by (product, server_id, exported_job)` 取各 instance 中最新的 heartbeat，讓 LinkCourt 拆出排程 process 後，不跑 job 的 process 不會誤報，任一 job 在所有 instance 都停一小時才告警。
+
+**修改的檔案：**
+- `prometheus/rules/deadman.yml` — expr 加上 `max by`，註解說明多 process 的情況。
+- `prometheus/rules/tests/deadman.test.yml` — 新增：一個 instance 停、另一個持續更新時不告警；所有 instance 都停一小時後告警（labels 與 annotations 不變）。
+- `runbooks/scheduler-dead.md` — Symptoms 改為新 expr，補上 :8090／:8091 兩個 instance 的說明。
+
+**原因/備註：** LinkCourt 後端並行計畫 S2.8（PPClub PR #409）：排程拆成 `linkcourt-scheduler.service`（:8091）前，deadman 告警要能跨 instance 聚合。單一 process 時結果與舊規則相同。驗證：在 SkyEye 主機以 `prom/prometheus:v2.54.1` 的 promtool 執行 `check rules`（deadman、app）與四個 rule test 檔皆 SUCCESS；把 expr 改回舊規則時，新測試的第一個案例會失敗（:8090 的舊值觸發告警）。Prod02 Alloy 新增 :8091 抓取目標要等 production 切換時一起做（提前加會讓 `BackendDown` 因目標不存在而觸發）。
+
+---
+
 ## 2026-10-13 — Trading probe config 路徑與 P&L history build-time 競態
 
 **改動摘要：** 把 macOS trading 範本與 handoff 文件的 `TQ_CONFIG_PATH` 改為 tnauqquant 已改名的 `config/toobit-mexc.yaml`，並讓 `pnl-history.sh` 在掃完 raw logs 後重新取樣 build time，避免掃描期間剛完成的 cycle 被判為未來事件。
