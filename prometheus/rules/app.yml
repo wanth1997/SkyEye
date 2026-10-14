@@ -110,8 +110,11 @@ groups:
         annotations:
           summary: "{{ $labels.product }} p99 latency > 3s for 10min"
 
+      # Summed across instances: LinkCourt runs two API instances behind
+      # Caddy (plus a scheduler process), and a per-instance threshold would
+      # need twice as many exceptions to fire.
       - alert: UnhandledException
-        expr: increase(ppc_unhandled_exception_total[5m]) > 3
+        expr: sum without (instance, service) (increase(ppc_unhandled_exception_total[5m])) > 3
         for: 0m
         labels:
           severity: Medium
