@@ -15,6 +15,18 @@
 ---
 -->
 
+## 2026-10-14 — UnhandledException 跨 instance 加總
+
+**改動摘要：** `UnhandledException` 改為 `sum without (instance, service)` 後再比較門檻，LinkCourt 改成兩個 API instance 後，分散在兩個 instance 的例外仍會觸發告警（同一 path／exc_type）。
+
+**修改的檔案：**
+- `prometheus/rules/app.yml` — expr 加總跨 instance，註解說明原因。
+- `prometheus/rules/tests/unhandled-exception.test.yml`（新）— 兩個 instance 各 2 次會觸發；合計 3 次不觸發；labels 與 annotation 不變。
+
+**原因/備註：** PPClub 後端並行計畫 S3b（PPClub PR #425）。其他 LinkCourt 規則原本就以 `sum by` 聚合，`SchedulerNoHeartbeat` 已於 SkyEye #50 改為 `max by`。驗證：SkyEye 主機以 `prom/prometheus:v2.54.1` 的 promtool 執行 `check rules` 與所有 rule test 檔。
+
+---
+
 ## 2026-10-14 — SchedulerNoHeartbeat 跨 instance 取最新值
 
 **改動摘要：** `SchedulerNoHeartbeat` 改為 `max by (product, server_id, exported_job)` 取各 instance 中最新的 heartbeat，讓 LinkCourt 拆出排程 process 後，不跑 job 的 process 不會誤報，任一 job 在所有 instance 都停一小時才告警。

@@ -1,0 +1,38 @@
+rule_files:
+  - ../app.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: exceptions split across two API instances still fire
+    interval: 1m
+    input_series:
+      - series: 'ppc_unhandled_exception_total{job="ppclub-backend",instance="localhost:8090",service="ppclub-backend",product="ppclub",server_id="PROD02",path="/api/v2/me",exc_type="KeyError"}'
+        values: '0 0 0 1 2 2 2'
+      - series: 'ppc_unhandled_exception_total{job="ppclub-backend",instance="localhost:8092",service="ppclub-backend",product="ppclub",server_id="PROD02",path="/api/v2/me",exc_type="KeyError"}'
+        values: '0 0 0 1 2 2 2'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: UnhandledException
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              job: ppclub-backend
+              product: ppclub
+              server_id: PROD02
+              path: /api/v2/me
+              exc_type: KeyError
+            exp_annotations:
+              summary: "ppclub > 3 unhandled exceptions in 5min"
+
+  - name: a few exceptions across instances stay quiet
+    interval: 1m
+    input_series:
+      - series: 'ppc_unhandled_exception_total{job="ppclub-backend",instance="localhost:8090",service="ppclub-backend",product="ppclub",server_id="PROD02",path="/api/v2/me",exc_type="KeyError"}'
+        values: '0 0 0 1 1 1 1'
+      - series: 'ppc_unhandled_exception_total{job="ppclub-backend",instance="localhost:8092",service="ppclub-backend",product="ppclub",server_id="PROD02",path="/api/v2/me",exc_type="KeyError"}'
+        values: '0 0 0 1 2 2 2'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: UnhandledException
+        exp_alerts: []
