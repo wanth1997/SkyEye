@@ -15,6 +15,18 @@
 ---
 -->
 
+## 2026-10-27 — Trading probe timer 開機後不會啟動
+
+**改動摘要：** `skyeye-trading-probe@.timer` 移除 `Persistent=true`，主機重開機後 probe 會在開機約 5 秒後自動開始、之後每 15 秒執行。
+
+**修改的檔案：**
+- `agents/alloy/trading/skyeye-trading-probe@.timer.tmpl` — 刪除 `Persistent=true`，註解說明原因。
+- `tests/trading/test-linux-setup.sh` — 斷言 timer 保留 `OnBootSec=5s` 且不含 `Persistent=`。
+
+**原因/備註：** Trading01 於 2026-10-27 換規格重開機後，timer `active` 但 `NextElapseUSecMonotonic=infinity`，probe 一次都沒跑，SkyEye 誤報 `TradingProcessDown`／`TradingTelemetryMissing`，手動 `systemctl start` 該 service 後恢復。`Persistent=` 只對 `OnCalendar=` 有意義；有它時 systemd 會從 stamp 讀回上次開機的觸發時間，timer 啟動時若已過了 `OnBootSec=5s`，就把這個一次性觸發視為已觸發而丟棄，service 本次開機又沒跑過，`OnUnitActiveSec=` 沒有基準，整個 timer 停擺。已在 Staging01 用兩個臨時 timer（帶舊 stamp、目標 service 未曾執行）重現：有 `Persistent=true` 的下一次觸發為 `infinity`、service 未執行；沒有的立即觸發並排程下一次。驗證：`tests/trading/test-linux-setup.sh`（ripgrep 14.1.1）通過。Timer 模板沒有 placeholder，部署時依共用檔案規則先 `disable --now` 所有 probe timer，安裝新模板到 `/etc/systemd/system/skyeye-trading-probe@.timer`、`daemon-reload`，再 `enable --now` 並手動 start 一次 service。
+
+---
+
 ## 2026-10-27 — 所有容器加上 Docker log rotation
 
 **改動摘要：** `docker-compose.yml` 新增 `x-logging` anchor（json-file，`max-size: 50m`、`max-file: 5`），套用到全部 6 個 service，每個容器 stdout log 上限 250 MB。
