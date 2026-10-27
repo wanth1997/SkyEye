@@ -93,7 +93,7 @@ services:
       - "127.0.0.1:9115:9115"
 
   cloudflared:
-    image: cloudflare/cloudflared:2024.10.0
+    image: cloudflare/cloudflared:2026.10.3
     restart: unless-stopped
     depends_on:
       - grafana
