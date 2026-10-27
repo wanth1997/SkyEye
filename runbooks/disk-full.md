@@ -17,6 +17,7 @@
 
 1. Backend / proxy logs rotated but old files not removed (logrotate config missing)
 2. Docker image / volume bloat on the monitoring machine (`docker system df`)
+   — container stdout logs are capped by `x-logging` in `docker-compose.yml` (5 × 50 MB each); a large `/var/lib/docker/containers/*/*-json.log` means that container was created before the cap or outside compose, so recreate it with `sudo docker compose up -d <service>`
 3. Prometheus TSDB exceeded configured size (should be bounded at 4 GB but misconfig possible)
 4. PPClub `ppc.db` SQLite grew unexpectedly (audit trail / session table)
 5. Core dumps in `/var/crash` or `/var/lib/systemd/coredump`
