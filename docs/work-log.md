@@ -15,6 +15,18 @@
 ---
 -->
 
+## 2026-10-27 — cloudflared 升級至 2026.10.3（Cloudflare eMudhra 憑證通知）
+
+**改動摘要：** 中央 tunnel `skyeye-monitoring-prod` 的 cloudflared image 由 `2024.10.0` 升到 `2026.10.3`，並在 operations playbook 新增 cloudflared 升級／驗證／回滾流程。
+
+**修改的檔案：**
+- `docker-compose.yml` — `cloudflare/cloudflared:2024.10.0` → `2026.10.3`，其他 image 不變。
+- `docs/operations.md` — 新增「Upgrade cloudflared」：`git pull`、`docker compose pull cloudflared`、`up -d`（`restart` 不會換 image）、版本與 tunnel Healthy／Grafana 檢查、回滾。
+
+**原因/備註：** Cloudflare 2026-10 通知：2026.10.2 以前的 cloudflared 仍信任使用弱私鑰的 eMudhra（emSign）中繼憑證，Docker 部署需 pull 並重建 2026.10.3。選 2026.10.3（2026-10-21 發布、通知指名版本），不用 2026-10-26 才發布的 2026.10.4。ingress origin 全是 `http://`（grafana／prometheus／loki），新版較嚴格的 origin 憑證驗證不影響。2024.10.0 → 2026.10.3 唯一相關變更是 2026.4.0 起 `edge-ip-version` 預設由 `4` 改 `auto`；若升級後 tunnel 無法註冊，在 `cloudflared/config.yml` 加 `edge-ip-version: 4`。2026.10.3 有 linux/arm64 image。工作站無 Docker，`docker compose config --quiet` 與實際執行新版確認版本號留待 monitoring-prod 部署時執行；單一 replica，重建時連線中斷數秒，Alloy 會重送。
+
+---
+
 ## 2026-10-14 — UnhandledException 跨 instance 加總
 
 **改動摘要：** `UnhandledException` 改為 `sum without (instance, service)` 後再比較門檻，LinkCourt 改成兩個 API instance 後，分散在兩個 instance 的例外仍會觸發告警（同一 path／exc_type）。

@@ -107,6 +107,32 @@ sudo docker compose up -d prometheus
 
 Estimated recovery: 45-60 minutes from cold start.
 
+### Upgrade cloudflared
+
+Use this for quarterly image bumps and for Cloudflare security notices. Run it on monitoring-prod after the pin change in `docker-compose.yml` has merged.
+
+The tunnel runs a single replica, so the restart drops connections for a few seconds. Alloy remote-write and Loki push retry, so a short gap in metrics and logs is expected and fine.
+
+1. Pull the repo and the new image:
+   ```bash
+   cd /home/ubuntu/SkyEye
+   git pull
+   sudo docker compose pull cloudflared
+   ```
+2. Recreate the container. A plain `restart` keeps running the old image; `up -d` replaces it:
+   ```bash
+   sudo docker compose up -d cloudflared
+   ```
+3. Check the running version matches the pin:
+   ```bash
+   sudo docker compose exec cloudflared cloudflared --version
+   # or: sudo docker compose logs --tail=30 cloudflared   (look for "Version <pin>" and "Registered tunnel connection")
+   ```
+4. In the Cloudflare dashboard (Zero Trust → Networks → Tunnels), `skyeye-monitoring-prod` shows **Healthy**.
+5. https://grafana.wanbrain.com loads, and the Overview `Products UP` panel recovers within a few minutes.
+
+**Rollback:** set the `cloudflared` image back to the previous pin in `docker-compose.yml` (revert the commit), then `sudo docker compose pull cloudflared && sudo docker compose up -d cloudflared` and repeat steps 3-5.
+
 ---
 
 ## Rotating secrets
