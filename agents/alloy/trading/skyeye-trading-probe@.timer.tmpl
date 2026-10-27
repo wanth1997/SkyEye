@@ -5,7 +5,10 @@ Description=Run the SkyEye trading telemetry probe for %i
 OnBootSec=5s
 OnUnitActiveSec=15s
 AccuracySec=1s
-Persistent=true
+# No Persistent=: it only applies to OnCalendar=. With it, the stamp left by
+# the previous boot makes systemd drop an OnBootSec= that has already passed
+# when the timer starts, and OnUnitActiveSec= never arms because the service
+# has not run since boot, so no probe runs until the service is started by hand.
 Unit=skyeye-trading-probe@%i.service
 
 [Install]
