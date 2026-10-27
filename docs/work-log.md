@@ -15,6 +15,18 @@
 ---
 -->
 
+## 2026-10-27 — 所有容器加上 Docker log rotation
+
+**改動摘要：** `docker-compose.yml` 新增 `x-logging` anchor（json-file，`max-size: 50m`、`max-file: 5`），套用到全部 6 個 service，每個容器 stdout log 上限 250 MB。
+
+**修改的檔案：**
+- `docker-compose.yml` — 新增 `x-logging: &default-logging`，每個 service 加 `logging: *default-logging`。
+- `runbooks/disk-full.md` — Docker bloat 的成因補充：容器 log 已有上限，若仍有巨大 `*-json.log` 代表容器在上限之前建立，需 `docker compose up -d` 重建。
+
+**原因/備註：** monitoring-prod 根磁碟 30 GB 用到 77%，其中 `skyeye-loki-1` 的 json-file log 單檔 14.4 GB（2026-05 建立後未輪替，Loki 以 info 級別記錄每筆 query）；主機沒有 `/etc/docker/daemon.json`，Docker 預設不輪替。Log 設定只在容器重建時生效，部署要 `git pull` 後 `sudo docker compose up -d`，舊容器連同舊 log 一起移除。重建時各服務中斷數秒，Alloy remote-write／Loki push 會重送。
+
+---
+
 ## 2026-10-27 — cloudflared 升級至 2026.10.3（Cloudflare eMudhra 憑證通知）
 
 **改動摘要：** 中央 tunnel `skyeye-monitoring-prod` 的 cloudflared image 由 `2024.10.0` 升到 `2026.10.3`，並在 operations playbook 新增 cloudflared 升級／驗證／回滾流程。

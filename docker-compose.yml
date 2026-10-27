@@ -1,7 +1,17 @@
+# Cap every container's json-file log. Docker's default is unbounded, and
+# Loki's per-query stdout log had grown to 14 GB on the 30 GB root disk.
+# Takes effect when a container is (re)created, e.g. `docker compose up -d`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   prometheus:
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       # Mount whole directory (not individual file) so edits that change inode
       # — like atomic-rename editors — propagate into the container.
@@ -22,6 +32,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       # Mount whole directory (includes ./alertmanager/secrets/) so file
       # edits via atomic rename propagate without needing container restart.
@@ -37,6 +48,7 @@ services:
   loki:
     image: grafana/loki:3.1.1
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./loki/loki-config.yml:/etc/loki/local-config.yaml:ro
       - loki_data:/loki
@@ -52,6 +64,7 @@ services:
   grafana:
     image: grafana/grafana:11.2.0
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - prometheus
       - loki
@@ -85,6 +98,7 @@ services:
   blackbox:
     image: prom/blackbox-exporter:v0.25.0
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./blackbox:/etc/blackbox_exporter:ro
     command:
@@ -95,6 +109,7 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:2026.10.3
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - grafana
       - prometheus
