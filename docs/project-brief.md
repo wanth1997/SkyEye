@@ -41,6 +41,6 @@
 
 ## 待辦 / 下一步
 
-- 部署並觀察三個 Trading production targets 的 shadow alerts；在 Trading01 驗證兩個 probe output、共享 collector 與 fleet/detail dashboard 的同 server 雙策略隔離後，再另案決定是否啟用通知。
+- 依目前 `prometheus/rules/trading-targets.yml` 的兩個 active targets（`toobit-mexc-btc`、`lighter-robinhood-btc-canary`）觀察 shadow alerts；Mainnet／Ourbit 已退役，不沿用原三個 targets／同 server 雙策略的 rollout 待辦。重新納入策略時另驗證 probe、collector 與隔離，再決定是否啟用通知。
 - 設定 Cloudflare service token 到期通知，並在到期前完成可獨立回復的 rotation。
 - 觀察 LinkCourt 付款 shadow 告警，完成 canary review 後另案決定是否啟用通知。

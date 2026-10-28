@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-10-29 03:20 — 專案文件與主分支程式狀態對帳
+
+**改動摘要：** 修正過期的未完成／未發布標籤，將程式實作、歷史驗證、合併／tag 與 production 部署證據分開。
+
+**修改的檔案：**
+- `docs/documentation-status-audit-20261029.md` — 更新狀態與證據界線
+- `docs/project-brief.md` — 更新狀態與證據界線
+- `docs/superpowers/plans/2026-09-13-trading-log-order-refresh.md` — 更新狀態與證據界線
+- `docs/superpowers/plans/2026-09-13-trading-mobile-summary.md` — 更新狀態與證據界線
+- `docs/trading-monitoring-development-plan.md` — 更新狀態與證據界線
+- `docs/trading-runtime-contract-agent-spec.md` — 更新狀態與證據界線
+
+**原因/備註：** 基準 `f5bb183e344d08ed00269cabd3065d86a6c0221c`；靜態核對文件、主分支程式／tests 與既有證據；本次未重跑全部 runtime 驗收。PR 的 required CI 結果另留於 PR。 所有變更限文件，未部署、未操作真實帳號。
+
+---
+
 ## 2026-10-27 — Trading probe timer 開機後不會啟動
 
 **改動摘要：** `skyeye-trading-probe@.timer` 移除 `Persistent=true`，主機重開機後 probe 會在開機約 5 秒後自動開始、之後每 15 秒執行。

@@ -1,5 +1,8 @@
 # Trading mobile summary implementation plan
 
+> **2026-10-29 對帳：** dashboard JSON 與對應 central-config tests 已在 master；Phase 3 的空白發布／部署 checkbox 是當時 checkpoint，不代表程式尚未合併。未有新的中央 binary／provisioning identity 與瀏覽器證據時，不把 Git 合併標成現在 production 已驗證。
+
+
 > **For agentic workers:** Use executing-plans in this dedicated worktree.
 
 **Goal:** Keep all ten statuses in one monitoring summary and make its mobile labels and values readable.

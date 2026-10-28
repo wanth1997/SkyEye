@@ -1,5 +1,8 @@
 # Trading Monitoring Development and Server Onboarding Plan
 
+> **2026-10-29 對帳：** 這份原始建置清單不可當作目前全未完成：`agents/alloy/trading/probe.sh`、`tests/trading/`、`prometheus/rules/trading-targets.yml` 與 Trading fleet/detail dashboard 已在主分支；producer runtime contract 需對 tnauqquant 版本另核對。現行 inventory 只有 Toobit/MEXC 與 Lighter RH，Mainnet／Ourbit 已退役；Access allowlist、shadow→paging、目前部署版號仍須各自證據。
+
+
 > **狀態：** Initial production monitoring live; Trading01 multi-strategy extension implemented for shadow rollout
 >
 > **日期：** 2026-07-17
