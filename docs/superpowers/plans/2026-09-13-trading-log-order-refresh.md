@@ -1,5 +1,8 @@
 # Trading 日誌順序與刷新延遲 Implementation Plan
 
+> **2026-10-29 對帳：** dashboard JSON 與對應 central-config tests 已在 master；Phase 3 的空白發布／部署 checkbox 是當時 checkpoint，不代表程式尚未合併。未有新的中央 binary／provisioning identity 與瀏覽器證據時，不把 Git 合併標成現在 production 已驗證。
+
+
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task in this dedicated worktree.
 
 **Goal:** 將最新策略日誌排在關鍵執行事件上方，找出手動刷新轉圈過久的原因並修正可重現的瓶頸。

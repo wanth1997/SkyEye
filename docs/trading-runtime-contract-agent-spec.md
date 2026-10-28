@@ -1,5 +1,8 @@
 # tnauqquant Trading Run Contract Implementation Spec
 
+> **2026-10-29 對帳：** 這份原始建置清單不可當作目前全未完成：`agents/alloy/trading/probe.sh`、`tests/trading/`、`prometheus/rules/trading-targets.yml` 與 Trading fleet/detail dashboard 已在主分支；producer runtime contract 需對 tnauqquant 版本另核對。現行 inventory 只有 Toobit/MEXC 與 Lighter RH，Mainnet／Ourbit 已退役；Access allowlist、shadow→paging、目前部署版號仍須各自證據。
+
+
 > **Copy/paste handoff:** 將本文件完整貼給負責 tnauqquant 的 agent。該 agent 不需要本次對話的其他內容。
 >
 > **For agentic workers:** Use a dedicated worktree from the latest `origin/master`. Implement task-by-task with tests first. Do not touch a live process, sidecar, exchange, credential, or real order.
