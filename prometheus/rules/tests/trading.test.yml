@@ -93,6 +93,8 @@ tests:
       - expr: 'trading_target_info{server_id="trading01"}'
         eval_time: 3m
         exp_samples:
+          - labels: 'trading_target_info{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary",notification_mode="shadow",quote_currency="USDT"}'
+            value: 1
           - labels: 'trading_target_info{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary",notification_mode="shadow",quote_currency="USDT"}'
             value: 1
 
@@ -281,6 +283,106 @@ tests:
             exp_annotations:
               summary: 'trading01 lighter-robinhood-btc-canary telemetry is missing or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
+          - exp_labels:
+              product: tnauqquant
+              environment: production
+              server_id: trading01
+              strategy: lighter-mainnet-btc-canary
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: 'trading01 lighter-mainnet-btc-canary telemetry is missing or stale'
+              runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
+
+  - name: stopped Trading01 Mainnet with run not expected stays quiet
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+        values: '1x10'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0+30x10'
+      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_config_snapshot_match{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_sidecar_required{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_sidecar_up{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_sidecar_identity_ok{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_current_pnl_valid{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_current_position_valid{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+      - series: 'tnauqquant_risk_stopped{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TradingDuplicateProcess
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingUnexpectedProcess
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingProcessDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingCriticalSafetyState
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingRiskStopped
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingRuntimeContractMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingRunBindingInvalid
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingSidecarUnavailable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingPnlTelemetryStale
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingTelemetryMissing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TradingPnlHistoryUnavailable
+        exp_alerts: []
+    promql_expr_test:
+      - expr: 'trading_target_info{server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'trading_target_info{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary",notification_mode="shadow",quote_currency="USDT"}'
+            value: 1
+      - expr: 'trading_strategy_run_expected{strategy="lighter-mainnet-btc-canary"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'trading_strategy_run_expected{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
+            value: 0
+      - expr: 'ALERTS{strategy="lighter-mainnet-btc-canary"}'
+        eval_time: 5m
+        exp_samples: []
 
   - name: Trading01 stale running manifest surfaces process down without sidecar noise
     interval: 30s
