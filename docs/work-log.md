@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-01 02:20 — Trading 監控目標一鍵新增／移除與中央部署指令
+
+**改動摘要：** 新增 `scripts/trading-target`（inventory add/remove/check/render-test）、`setup-linux.sh add` 與 `retire`（主機端一步安裝／退役，預設只 reload Alloy）、`scripts/central-deploy`（monitoring-prod 拉取已 merge 的設定，驗證後 reload，記錄最後成功套用的 commit）。
+
+**修改的檔案：**
+- `scripts/trading-target` — 管理 `prometheus/rules/trading-targets.yml` 並重算測試 fixture
+- `scripts/central-deploy` — fetch／ff、promtool/amtool 驗證、reload Prometheus／Alertmanager；失敗後重跑即重試；拒絕需重建 container 的變更（含手動 `git pull` 帶進來的）與載入路徑中未追蹤的檔案（只允許 `alertmanager/secrets/tg_token`）；`--manual-applied SHA` 在手動重建後確認套用
+- `agents/alloy/trading/setup-linux.sh`、`retire-linux.sh`、`linux-common.sh` — add/retire 交易式安裝與 rollback；未帶 `--restart-alloy` 時 rollback 絕不重啟 Alloy；retire 先停 probe 再封存 metrics；env 引號值 add 與 retire 一致解碼
+- `prometheus/rules/tests/fixtures/trading-targets.yml`、`prometheus/rules/tests/trading.test.yml` — inventory 測試 fixture
+- `tests/trading/test-trading-target.sh`、`test-linux-setup.sh`、`test-central-deploy.sh`、`test-central-config.sh` — 新指令與回歸測試
+- `agents/alloy/trading/README.md`、`README.md`、`AGENTS.md`、`docs/trading-new-server-handoff.md`、`docs/project-brief.md` — 操作說明
+
+**原因/備註：** 使用者要求新增或移除監控目標只需一個指令。Code review 三輪：R1 C1–C5、R2 C7 皆已修正並有回歸測試，R3 READY。主機與中央行為以本機 Git fixture 與 systemd／Docker／curl stub 驗證，尚未在 monitoring-prod 或 Trading 主機實際執行；`central-deploy` 首次實跑沒有套用紀錄，會各 reload Prometheus 與 Alertmanager 一次。
+
+---
+
 ## 2026-10-31 14:40 — 恢復 Trading01 Lighter Mainnet 監控名單
 
 **改動摘要：** 在中央 Trading inventory 加回 `trading01` / `lighter-mainnet-btc-canary`（shadow），讓使用者以新帳號 765446 重啟 Mainnet lane 前先在 Grafana 看到該策略。
