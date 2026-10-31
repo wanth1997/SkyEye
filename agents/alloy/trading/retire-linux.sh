@@ -167,7 +167,7 @@ record_relative() {
 }
 
 restore_retire() {
-  local target_path relative_path
+  local target_path relative_path alloy_pending=0
   [[ -n "$RECORD" && -f "$RECORD/paths.list" ]] || return 0
   while IFS= read -r target_path; do
     [[ -n "$target_path" ]] || continue
@@ -178,8 +178,8 @@ restore_retire() {
     fi
   done <"$RECORD/paths.list"
   if [[ "$ALLOY_ACTION" == "reload" ]]; then
-    "$SYSTEMCTL_BIN" reload alloy >/dev/null 2>&1 || \
-      "$SYSTEMCTL_BIN" restart alloy >/dev/null 2>&1 || true
+    # A reload-only invocation never escalates to a restart, even here.
+    "$SYSTEMCTL_BIN" reload alloy >/dev/null 2>&1 || alloy_pending=1
   elif [[ "$ALLOY_ACTION" == "restart" ]]; then
     "$SYSTEMCTL_BIN" restart alloy >/dev/null 2>&1 || true
   fi
@@ -190,6 +190,13 @@ restore_retire() {
     "$SYSTEMCTL_BIN" start "$INSTANCE_TIMER" >/dev/null 2>&1 || true
   fi
   printf 'status=rolled_back\n' >>"$RECORD/retire.meta"
+  if [[ "$alloy_pending" -eq 1 ]]; then
+    printf 'alloy_recovery=reload_pending\n' >>"$RECORD/retire.meta"
+    printf '%s\n' \
+      "SkyEye trading Linux retire: files and timer state are restored, but the restoring 'systemctl reload alloy' failed; Alloy may still run without trading-$STRATEGY.alloy." \
+      "Remaining recovery action: sudo systemctl reload alloy. If reload keeps failing, sudo systemctl restart alloy, which interrupts every Alloy pipeline: $alloy_fragments" \
+      "Rollback record: $RECORD" >&2
+  fi
 }
 
 cleanup() {

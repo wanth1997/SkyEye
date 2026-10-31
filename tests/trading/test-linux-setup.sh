@@ -641,13 +641,22 @@ assert_no_mutation 'refused add'
   exit 1
 }
 
-printf 'case: failed add update restores files and the prior timer state\n'
+printf 'case: failed add update restores files and timer state without restarting Alloy\n'
 : >"$SYSTEMCTL_LOG"
-if SYSTEMCTL_FAIL_RELOAD=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
-  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" >/dev/null 2>&1; then
+if add_output="$(SYSTEMCTL_FAIL_RELOAD=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" 2>&1)"; then
   printf 'FAIL: forced Alloy reload failure was accepted\n' >&2
   exit 1
 fi
+assert_not_contains "$SYSTEMCTL_LOG" '^restart alloy$'
+[[ "$(rg -c '^reload alloy$' "$SYSTEMCTL_LOG")" == "2" ]] || {
+  printf 'FAIL: add rollback did not attempt the restoring reload\n' >&2
+  exit 1
+}
+[[ "$add_output" == *'sudo systemctl reload alloy'* && "$add_output" == *'Rollback record: '* ]] || {
+  printf 'FAIL: add rollback did not print the remaining recovery action: %s\n' "$add_output" >&2
+  exit 1
+}
 [[ "$mainnet_before_sha" == "$(sha_of "$MAINNET_INSTALLED_ENV")" ]] || {
   printf 'FAIL: failed add update did not restore the installed env\n' >&2
   exit 1
@@ -814,6 +823,44 @@ if rg -q -l '^status=committed$' --glob 'retire.meta' \
   printf 'FAIL: a rolled-back retirement was recorded as committed\n' >&2
   exit 1
 fi
+
+printf 'case: retire with a persistent reload failure rolls back without restarting Alloy\n'
+RETIRED_DIR="$SYSTEM_ROOT/etc/skyeye-trading/retired"
+list_retire_records() {
+  find "$RETIRED_DIR" -mindepth 1 -maxdepth 1 -type d -name "$MAINNET-*" | sort
+}
+records_before="$(list_retire_records)"
+mainnet_env_sha="$(sha_of "$MAINNET_INSTALLED_ENV")"
+: >"$SYSTEMCTL_LOG"
+if retire_output="$(SYSTEMCTL_FAIL_RELOAD=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" retire --strategy "$MAINNET" 2>&1)"; then
+  printf 'FAIL: retire accepted a failed Alloy reload\n' >&2
+  exit 1
+fi
+assert_not_contains "$SYSTEMCTL_LOG" '^restart alloy$'
+[[ "$(rg -c '^reload alloy$' "$SYSTEMCTL_LOG")" == "2" ]] || {
+  printf 'FAIL: retire rollback did not attempt the restoring reload\n' >&2
+  exit 1
+}
+[[ "$retire_output" == *'sudo systemctl reload alloy'* ]] || {
+  printf 'FAIL: retire rollback did not print the remaining recovery action: %s\n' "$retire_output" >&2
+  exit 1
+}
+[[ -f "$MAINNET_INSTALLED_ENV" && -f "$MAINNET_FRAGMENT" &&
+   "$mainnet_env_sha" == "$(sha_of "$MAINNET_INSTALLED_ENV")" &&
+   -e "$SYSTEMCTL_STATE/enabled_skyeye-trading-probe@$MAINNET.timer" &&
+   -e "$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.timer" ]] || {
+  printf 'FAIL: retire rollback did not restore the Mainnet files and timer state\n' >&2
+  exit 1
+}
+reload_failed_record="$(comm -13 <(printf '%s\n' "$records_before") <(list_retire_records))"
+[[ -n "$reload_failed_record" && -f "$reload_failed_record/retire.meta" ]] || {
+  printf 'FAIL: retire rollback did not keep its record\n' >&2
+  exit 1
+}
+assert_contains "$reload_failed_record/retire.meta" '^status=rolled_back$'
+assert_contains "$reload_failed_record/retire.meta" '^alloy_recovery=reload_pending$'
+assert_not_contains "$reload_failed_record/retire.meta" '^status=committed$'
 
 if rg -q 'tnauqquant' "$SYSTEMCTL_LOG_ALL"; then
   printf 'FAIL: monitoring installer attempted to control a trading service\n' >&2

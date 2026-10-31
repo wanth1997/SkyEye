@@ -340,6 +340,7 @@ LEGACY_TIMER_WAS_ACTIVE=0
 LEGACY_SERVICE_WAS_ACTIVE=0
 ALLOY_WAS_ACTIVE=0
 ALLOY_ACTION=restart
+ROLLBACK_ALLOY_PENDING=0
 TARGET_TIMER_WAS_ENABLED=0
 TARGET_TIMER_WAS_ACTIVE=0
 
@@ -388,9 +389,11 @@ restore_transaction() {
     done <"$TRANSACTION_BACKUP/present.list"
   fi
   "$SYSTEMCTL_BIN" daemon-reload >/dev/null 2>&1 || true
-  if [[ "$ALLOY_WAS_ACTIVE" -eq 1 && "$ALLOY_ACTION" == "reload" ]]; then
-    "$SYSTEMCTL_BIN" reload alloy >/dev/null 2>&1 || \
-      "$SYSTEMCTL_BIN" restart alloy >/dev/null 2>&1 || true
+  if [[ "$ALLOY_ACTION" == "none" ]]; then
+    : # add --no-start never touched Alloy, so rollback leaves it alone too.
+  elif [[ "$ALLOY_WAS_ACTIVE" -eq 1 && "$ALLOY_ACTION" == "reload" ]]; then
+    # A reload-only invocation never escalates to a restart, even here.
+    "$SYSTEMCTL_BIN" reload alloy >/dev/null 2>&1 || ROLLBACK_ALLOY_PENDING=1
   elif [[ "$ALLOY_WAS_ACTIVE" -eq 1 ]]; then
     "$SYSTEMCTL_BIN" restart alloy >/dev/null 2>&1 || true
   else
@@ -410,6 +413,13 @@ restore_transaction() {
   fi
   if [[ "$TARGET_TIMER_WAS_ACTIVE" -eq 1 ]]; then
     "$SYSTEMCTL_BIN" start "$INSTANCE_TIMER" >/dev/null 2>&1 || true
+  fi
+  if [[ "$ROLLBACK_ALLOY_PENDING" -eq 1 ]]; then
+    printf 'alloy_recovery=reload_pending\n' >>"$TRANSACTION_BACKUP/transaction.meta"
+    printf '%s\n' \
+      "SkyEye trading Linux setup: files and timer state are restored, but the restoring 'systemctl reload alloy' failed; Alloy may still run the configuration from this failed attempt." \
+      "Remaining recovery action: sudo systemctl reload alloy. If reload keeps failing, sudo systemctl restart alloy, which interrupts every Alloy pipeline: ${alloy_fragments:-}" \
+      "Rollback record: $TRANSACTION_BACKUP" >&2
   fi
 }
 
@@ -585,6 +595,7 @@ if [[ "$SUBCOMMAND" == "add" ]]; then
   fi
   alloy_fragments="$(list_alloy_fragments "$ALLOY_CONFIG_DIR")"
   if [[ "$NO_START" -eq 1 ]]; then
+    ALLOY_ACTION=none
     printf 'Alloy action: none (--no-start); fragments on disk: %s\n' "$alloy_fragments"
   elif [[ "$RESTART_ALLOY" -eq 1 ]]; then
     ALLOY_ACTION=restart

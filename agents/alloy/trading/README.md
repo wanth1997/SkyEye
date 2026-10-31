@@ -164,7 +164,12 @@ install, keep the printed record until Alloy and the probe output have been
 verified. Rollback touches only the recorded `skyeye-trading-probe@...` timers
 and paths, reloads (or, for a restart install, restarts) Alloy, and for the
 first migration restores the legacy timer state. It never controls a
-tnauqquant trading service.
+tnauqquant trading service. `add` and `retire` restart Alloy during rollback
+only when the run was given `--restart-alloy` (`add --no-start` leaves Alloy
+alone). If the restoring reload also fails, the command exits non-zero with
+the files and timer state restored, appends `alloy_recovery=reload_pending` to
+the record and prints the remaining action: `sudo systemctl reload alloy`, or a
+restart once interrupting every Alloy pipeline is acceptable.
 
 ## Secret and access requirements
 
