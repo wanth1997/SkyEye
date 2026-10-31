@@ -8,18 +8,32 @@ SERVICE_TEMPLATE="$SCRIPT_DIR/skyeye-trading-probe@.service.tmpl"
 TIMER_TEMPLATE="$SCRIPT_DIR/skyeye-trading-probe@.timer.tmpl"
 SOURCE_PROBE="$SCRIPT_DIR/probe.sh"
 SOURCE_ACCESS="$SCRIPT_DIR/ensure-log-access.sh"
+COMMON_LIB="$SCRIPT_DIR/linux-common.sh"
 ENV_FILE=""
 RENDER_ONLY_DIR=""
 NO_START=0
 MIGRATE_SINGLETON=0
 COMPONENT_ID=""
+SUBCOMMAND=""
+RESTART_ALLOY=0
 
 usage() {
   printf '%s\n' \
-    'Usage: setup-linux.sh --env-file PATH [--render-only DIR] [--no-start] [--migrate-singleton]' \
+    'Usage: setup-linux.sh add --env-file PATH [--restart-alloy | --no-start] [--migrate-singleton]' \
+    '       setup-linux.sh retire --strategy NAME [--restart-alloy]' \
+    '       setup-linux.sh --env-file PATH [--render-only DIR] [--no-start] [--migrate-singleton]' \
     '' \
-    'Installs a trading fragment into an existing Alloy deployment. The base' \
-    'configuration must define prometheus.remote_write.central and loki.write.central.'
+    'add      validate, install, reload Alloy and enable this strategy probe in one step.' \
+    '         Idempotent; an installed instance with a changed env is updated in place.' \
+    '         Reloads Alloy by default; a restart (which interrupts every Alloy' \
+    '         pipeline) needs --restart-alloy. --no-start stages files only.' \
+    'retire   disable this strategy probe, archive its env, fragment and metrics' \
+    '         under /etc/skyeye-trading/retired/, and reload Alloy (see retire-linux.sh).' \
+    '' \
+    'Without a subcommand the original installer behaviour is unchanged: it restarts' \
+    'Alloy unless --no-start is given. The base configuration must define' \
+    'prometheus.remote_write.central and loki.write.central. Neither form starts,' \
+    'stops or signals a trading process.'
 }
 
 die() {
@@ -32,17 +46,9 @@ require_env() {
   [[ -n "${!name:-}" ]] || die "$name is required in $ENV_FILE"
 }
 
-file_mode() {
-  if stat -c '%a' "$1" >/dev/null 2>&1; then
-    stat -c '%a' "$1"
-  else
-    stat -f '%Lp' "$1"
-  fi
-}
-
-valid_label_value() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
-}
+[[ -f "$COMMON_LIB" ]] || die "missing shared helper library: $COMMON_LIB"
+# shellcheck source=agents/alloy/trading/linux-common.sh
+source "$COMMON_LIB"
 
 escape_sed_replacement() {
   printf '%s' "$1" | sed 's/[&|]/\\&/g'
@@ -129,8 +135,24 @@ render_artifacts() {
     "$target_dir/skyeye-trading-probe@.timer"
 }
 
+case "${1:-}" in
+  add)
+    SUBCOMMAND=add
+    shift
+    ;;
+  retire)
+    shift
+    exec "$SCRIPT_DIR/retire-linux.sh" "$@"
+    ;;
+esac
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --restart-alloy)
+      [[ "$SUBCOMMAND" == "add" ]] || die "--restart-alloy is only valid with the add subcommand"
+      RESTART_ALLOY=1
+      shift
+      ;;
     --env-file)
       [[ $# -ge 2 ]] || die "--env-file requires a path"
       ENV_FILE="$2"
@@ -160,6 +182,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$ENV_FILE" ]] || die "--env-file is required"
+if [[ "$SUBCOMMAND" == "add" ]]; then
+  [[ -z "$RENDER_ONLY_DIR" ]] || die "add does not take --render-only; use the flag form to render"
+  [[ "$RESTART_ALLOY" -eq 0 || "$NO_START" -eq 0 ]] || \
+    die "--restart-alloy and --no-start are mutually exclusive"
+fi
 [[ -f "$INSTANCE_TEMPLATE" ]] || die "missing Alloy instance template: $INSTANCE_TEMPLATE"
 [[ -f "$METRICS_TEMPLATE" ]] || die "missing Alloy metrics template: $METRICS_TEMPLATE"
 [[ -f "$SERVICE_TEMPLATE" ]] || die "missing systemd service template: $SERVICE_TEMPLATE"
@@ -252,52 +279,13 @@ if [[ -n "$RENDER_ONLY_DIR" ]]; then
   exit 0
 fi
 
-TEST_SYSTEM_ROOT="${SKYEYE_TRADING_TEST_ROOT:-}"
-if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
-  [[ "$TEST_SYSTEM_ROOT" == /* && "$TEST_SYSTEM_ROOT" != "/" ]] || \
-    die "SKYEYE_TRADING_TEST_ROOT must be an absolute non-root path"
-  mkdir -p "$TEST_SYSTEM_ROOT"
-  TEST_SYSTEM_ROOT="$(cd "$TEST_SYSTEM_ROOT" && pwd -P)"
-  for test_scoped_path in "$ENV_FILE" "$TQ_REPO_ROOT" "$TQ_TEXTFILE_DIR"; do
-    if [[ -d "$test_scoped_path" ]]; then
-      resolved_test_path="$(cd "$test_scoped_path" && pwd -P)"
-    else
-      resolved_test_path="$(cd "$(dirname "$test_scoped_path")" && pwd -P)/$(basename "$test_scoped_path")"
-    fi
-    case "$resolved_test_path" in
-      "$TEST_SYSTEM_ROOT"/*) ;;
-      *) die "test-mode paths must stay below SKYEYE_TRADING_TEST_ROOT" ;;
-    esac
-  done
-else
-  [[ "$(id -u)" -eq 0 ]] || die "installation must run as root"
-fi
-
-system_path() {
-  local absolute_path="$1"
-  if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
-    printf '%s%s\n' "$TEST_SYSTEM_ROOT" "$absolute_path"
-  else
-    printf '%s\n' "$absolute_path"
-  fi
-}
+init_system_root "$ENV_FILE" "$TQ_REPO_ROOT" "$TQ_TEXTFILE_DIR"
 
 for command_name in alloy awk cmp cp date find getent getfacl grep install runuser sed setfacl systemctl tail
 do
   command -v "$command_name" >/dev/null 2>&1 || die "missing required command: $command_name"
 done
-SYSTEMCTL_BIN="$(command -v systemctl)"
-[[ "$SYSTEMCTL_BIN" == /* && -f "$SYSTEMCTL_BIN" && -x "$SYSTEMCTL_BIN" ]] || \
-  die "systemctl must resolve to an absolute executable file"
-SYSTEMCTL_BIN="$(cd "$(dirname "$SYSTEMCTL_BIN")" && pwd -P)/$(basename "$SYSTEMCTL_BIN")"
-if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
-  [[ ! -L "$SYSTEMCTL_BIN" ]] || \
-    die "test mode requires a non-symlink systemctl stub below SKYEYE_TRADING_TEST_ROOT"
-  case "$SYSTEMCTL_BIN" in
-    "$TEST_SYSTEM_ROOT"/*) ;;
-    *) die "test mode requires a systemctl stub below SKYEYE_TRADING_TEST_ROOT" ;;
-  esac
-fi
+resolve_systemctl
 if [[ -z "$TEST_SYSTEM_ROOT" ]]; then
   id "$TQ_PROBE_USER" >/dev/null 2>&1 || die "probe user not found: $TQ_PROBE_USER"
   id "$TQ_ALLOY_USER" >/dev/null 2>&1 || die "Alloy user not found: $TQ_ALLOY_USER"
@@ -330,6 +318,11 @@ LEGACY_METRICS="$TQ_TEXTFILE_DIR/tnauqquant.prom"
 LEGACY_SERVICE=skyeye-trading-probe.service
 LEGACY_TIMER=skyeye-trading-probe.timer
 
+ALLOY_DIRECTORY_SETTING='CONFIG_FILE="/etc/alloy"'
+if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
+  ALLOY_DIRECTORY_SETTING="CONFIG_FILE=\"$ALLOY_CONFIG_DIR\""
+fi
+
 [[ -f "$ALLOY_ENV_FILE" ]] || die "existing Alloy environment file not found: $ALLOY_ENV_FILE"
 
 grep -R -q --include='*.alloy' 'prometheus.remote_write "central"' "$ALLOY_CONFIG_DIR" || \
@@ -346,10 +339,9 @@ LEGACY_TIMER_WAS_ENABLED=0
 LEGACY_TIMER_WAS_ACTIVE=0
 LEGACY_SERVICE_WAS_ACTIVE=0
 ALLOY_WAS_ACTIVE=0
-
-path_exists() {
-  [[ -e "$1" || -L "$1" ]]
-}
+ALLOY_ACTION=restart
+TARGET_TIMER_WAS_ENABLED=0
+TARGET_TIMER_WAS_ACTIVE=0
 
 backup_path() {
   local source_path="$1"
@@ -396,7 +388,10 @@ restore_transaction() {
     done <"$TRANSACTION_BACKUP/present.list"
   fi
   "$SYSTEMCTL_BIN" daemon-reload >/dev/null 2>&1 || true
-  if [[ "$ALLOY_WAS_ACTIVE" -eq 1 ]]; then
+  if [[ "$ALLOY_WAS_ACTIVE" -eq 1 && "$ALLOY_ACTION" == "reload" ]]; then
+    "$SYSTEMCTL_BIN" reload alloy >/dev/null 2>&1 || \
+      "$SYSTEMCTL_BIN" restart alloy >/dev/null 2>&1 || true
+  elif [[ "$ALLOY_WAS_ACTIVE" -eq 1 ]]; then
     "$SYSTEMCTL_BIN" restart alloy >/dev/null 2>&1 || true
   else
     "$SYSTEMCTL_BIN" stop alloy >/dev/null 2>&1 || true
@@ -409,6 +404,12 @@ restore_transaction() {
   fi
   if [[ "$LEGACY_SERVICE_WAS_ACTIVE" -eq 1 ]]; then
     "$SYSTEMCTL_BIN" start "$LEGACY_SERVICE" >/dev/null 2>&1 || true
+  fi
+  if [[ "$TARGET_TIMER_WAS_ENABLED" -eq 1 ]]; then
+    "$SYSTEMCTL_BIN" enable "$INSTANCE_TIMER" >/dev/null 2>&1 || true
+  fi
+  if [[ "$TARGET_TIMER_WAS_ACTIVE" -eq 1 ]]; then
+    "$SYSTEMCTL_BIN" start "$INSTANCE_TIMER" >/dev/null 2>&1 || true
   fi
 }
 
@@ -467,12 +468,6 @@ fi
 if "$SYSTEMCTL_BIN" is-active --quiet alloy >/dev/null 2>&1; then
   ALLOY_WAS_ACTIVE=1
 fi
-
-installed_env_value() {
-  local name="$1"
-  local path="$2"
-  sed -n "s/^${name}=//p" "$path" | tail -n 1
-}
 
 if [[ -d "$INSTALL_ENV_ROOT" ]]; then
   for sibling_env in "$INSTALL_ENV_ROOT"/*.env; do
@@ -541,7 +536,16 @@ if [[ "$shared_changed" -eq 1 ]]; then
     done
   fi
 fi
-if "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_SERVICE" >/dev/null 2>&1 || \
+if [[ "$SUBCOMMAND" == "add" && "$NO_START" -eq 0 ]]; then
+  # add converges: an installed instance is updated in place. Its own timer is
+  # stopped during the transaction and its prior state restored on failure.
+  if "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1; then
+    TARGET_TIMER_WAS_ENABLED=1
+  fi
+  if "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1; then
+    TARGET_TIMER_WAS_ACTIVE=1
+  fi
+elif "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_SERVICE" >/dev/null 2>&1 || \
   "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 || \
   "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1; then
   die "target probe instance must be inactive and disabled before installation: $TQ_STRATEGY"
@@ -563,6 +567,44 @@ install -m 644 "$RENDER_ROOT/trading-metrics.alloy" \
   "$STAGING_CONFIG/trading-metrics.alloy"
 install -m 644 "$RENDER_ROOT/trading-$TQ_STRATEGY.alloy" \
   "$STAGING_CONFIG/trading-$TQ_STRATEGY.alloy"
+
+if [[ "$SUBCOMMAND" == "add" ]]; then
+  alloy_env_current=0
+  if grep -qxF -- "$ALLOY_DIRECTORY_SETTING" "$ALLOY_ENV_FILE" && \
+    [[ "$(grep -c '^CONFIG_FILE=' "$ALLOY_ENV_FILE")" == "1" ]]; then
+    alloy_env_current=1
+  fi
+  if [[ "$NO_START" -eq 0 && "$shared_changed" -eq 0 && "$legacy_present" -eq 0 &&
+        "$alloy_env_current" -eq 1 && "$ALLOY_WAS_ACTIVE" -eq 1 &&
+        "$TARGET_TIMER_WAS_ENABLED" -eq 1 && "$TARGET_TIMER_WAS_ACTIVE" -eq 1 ]] && \
+    [[ -f "$INSTALL_ENV" && -f "$ALLOY_INSTANCE_FRAGMENT" ]] && \
+    cmp -s "$ENV_FILE" "$INSTALL_ENV" && \
+    cmp -s "$RENDER_ROOT/trading-$TQ_STRATEGY.alloy" "$ALLOY_INSTANCE_FRAGMENT"; then
+    printf 'Already installed and running: %s (no changes; Alloy untouched)\n' "$TQ_STRATEGY"
+    exit 0
+  fi
+  alloy_fragments="$(list_alloy_fragments "$ALLOY_CONFIG_DIR")"
+  if [[ "$NO_START" -eq 1 ]]; then
+    printf 'Alloy action: none (--no-start); fragments on disk: %s\n' "$alloy_fragments"
+  elif [[ "$RESTART_ALLOY" -eq 1 ]]; then
+    ALLOY_ACTION=restart
+    printf 'Alloy action: restart (--restart-alloy). This briefly interrupts every Alloy pipeline: %s\n' \
+      "$alloy_fragments"
+  else
+    if [[ "$alloy_env_current" -ne 1 ]]; then
+      die "Alloy must switch CONFIG_FILE to directory mode, which needs a restart that interrupts every Alloy pipeline ($alloy_fragments); re-run with --restart-alloy or --no-start"
+    fi
+    if [[ "$ALLOY_WAS_ACTIVE" -ne 1 ]]; then
+      die "Alloy is not active; starting it needs --restart-alloy (or stage only with --no-start)"
+    fi
+    if [[ "$(alloy_can_reload)" != "yes" ]]; then
+      die "systemd cannot reload the alloy unit; re-run with --restart-alloy, which interrupts every Alloy pipeline ($alloy_fragments)"
+    fi
+    ALLOY_ACTION=reload
+    printf 'Alloy action: reload. Re-evaluates these fragments; unchanged pipelines keep running: %s\n' \
+      "$alloy_fragments"
+  fi
+fi
 
 printf 'Validating the combined Alloy configuration before installation\n'
 alloy validate "$STAGING_CONFIG"
@@ -593,8 +635,23 @@ done
   printf 'legacy_timer_was_active=%s\n' "$LEGACY_TIMER_WAS_ACTIVE"
   printf 'legacy_service_was_active=%s\n' "$LEGACY_SERVICE_WAS_ACTIVE"
   printf 'created_at_utc=%s\n' "$timestamp"
+  if [[ "$SUBCOMMAND" == "add" ]]; then
+    printf 'subcommand=add\n'
+    printf 'target_timer_was_enabled=%s\n' "$TARGET_TIMER_WAS_ENABLED"
+    printf 'target_timer_was_active=%s\n' "$TARGET_TIMER_WAS_ACTIVE"
+    printf 'alloy_action=%s\n' "$ALLOY_ACTION"
+  fi
 } >"$TRANSACTION_BACKUP/transaction.meta"
 MUTATION_STARTED=1
+
+if [[ "$SUBCOMMAND" == "add" ]] && \
+  [[ "$TARGET_TIMER_WAS_ENABLED" -eq 1 || "$TARGET_TIMER_WAS_ACTIVE" -eq 1 ]]; then
+  printf 'Updating installed instance in place; pausing its probe timer: %s\n' "$INSTANCE_TIMER"
+  "$SYSTEMCTL_BIN" disable --now "$INSTANCE_TIMER"
+  "$SYSTEMCTL_BIN" stop "$INSTANCE_SERVICE" >/dev/null 2>&1 || true
+  ! "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 || \
+    die "target probe timer remained active after disable --now"
+fi
 
 if [[ "$MIGRATE_SINGLETON" -eq 1 ]]; then
   if [[ "$legacy_present" -eq 1 || "$LEGACY_TIMER_WAS_ENABLED" -eq 1 || \
@@ -650,10 +707,6 @@ fi
 
 runuser -u "$TQ_PROBE_USER" -- "$INSTALL_ROOT/ensure-log-access.sh"
 
-ALLOY_DIRECTORY_SETTING='CONFIG_FILE="/etc/alloy"'
-if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
-  ALLOY_DIRECTORY_SETTING="CONFIG_FILE=\"$ALLOY_CONFIG_DIR\""
-fi
 if grep -q '^CONFIG_FILE=' "$ALLOY_ENV_FILE"; then
   sed "s|^CONFIG_FILE=.*$|$ALLOY_DIRECTORY_SETTING|" "$ALLOY_ENV_FILE" \
     >"$ALLOY_ENV_FILE.tmp"
@@ -674,7 +727,9 @@ if [[ "$NO_START" -eq 1 ]]; then
   exit 0
 fi
 
-if ! "$SYSTEMCTL_BIN" restart alloy; then
+if [[ "$ALLOY_ACTION" == "reload" ]]; then
+  "$SYSTEMCTL_BIN" reload alloy || die "Alloy reload failed"
+elif ! "$SYSTEMCTL_BIN" restart alloy; then
   die "Alloy restart failed"
 fi
 
@@ -693,3 +748,8 @@ INSTALL_COMMITTED=1
 printf 'Installed Linux trading monitoring fragment: %s\n' "$ALLOY_INSTANCE_FRAGMENT"
 printf 'Rollback record: %s\n' "$TRANSACTION_BACKUP"
 printf 'Probe metrics: %s/%s\n' "$TQ_TEXTFILE_DIR" "$TQ_TEXTFILE_NAME"
+if [[ "$SUBCOMMAND" == "add" ]]; then
+  printf 'Alloy %s done; probe timer enabled: %s\n' "$ALLOY_ACTION" "$INSTANCE_TIMER"
+  printf 'Next: add the central inventory row (scripts/trading-target add --server %s --strategy %s), merge, then run scripts/central-deploy on monitoring-prod\n' \
+    "$TQ_SERVER_ID" "$TQ_STRATEGY"
+fi

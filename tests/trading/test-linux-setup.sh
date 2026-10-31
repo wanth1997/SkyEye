@@ -12,6 +12,8 @@ TIMER_TEMPLATE="$TRADING_DIR/skyeye-trading-probe@.timer.tmpl"
 ROBINHOOD_EXAMPLE="$TRADING_DIR/deployment-linux-robinhood.env.example"
 MAINNET_EXAMPLE="$TRADING_DIR/deployment-linux-mainnet.env.example"
 ACCESS_HELPER="$TRADING_DIR/ensure-log-access.sh"
+RETIRE="$TRADING_DIR/retire-linux.sh"
+COMMON_LIB="$TRADING_DIR/linux-common.sh"
 
 for required_file in \
   "$SETUP" \
@@ -21,7 +23,9 @@ for required_file in \
   "$TIMER_TEMPLATE" \
   "$ROBINHOOD_EXAMPLE" \
   "$MAINNET_EXAMPLE" \
-  "$ACCESS_HELPER"
+  "$ACCESS_HELPER" \
+  "$RETIRE" \
+  "$COMMON_LIB"
 do
   [[ -f "$required_file" ]] || {
     printf 'FAIL: required Linux deployment file is missing: %s\n' "$required_file" >&2
@@ -29,7 +33,7 @@ do
   }
 done
 
-[[ -x "$SETUP" && -x "$ACCESS_HELPER" ]] || {
+[[ -x "$SETUP" && -x "$ACCESS_HELPER" && -x "$RETIRE" ]] || {
   printf 'FAIL: Linux setup and access helper must be executable\n' >&2
   exit 1
 }
@@ -70,8 +74,9 @@ assert_contains "$SETUP" '"[$]SYSTEMCTL_BIN" disable --now "[$]LEGACY_TIMER"'
 assert_contains "$SETUP" 'legacy singleton artifacts exist'
 assert_contains "$SETUP" 'install -d -o .* -g .* -m 2770'
 assert_contains "$SETUP" '"[$]SYSTEMCTL_BIN" restart alloy'
-assert_contains "$SETUP" 'test mode requires a non-symlink systemctl stub below SKYEYE_TRADING_TEST_ROOT'
+assert_contains "$COMMON_LIB" 'test mode requires a non-symlink systemctl stub below SKYEYE_TRADING_TEST_ROOT'
 assert_not_contains "$SETUP" 'systemctl.*tnauqquant'
+assert_not_contains "$RETIRE" 'systemctl.*tnauqquant'
 assert_not_contains "$SERVICE_TEMPLATE" 'quant'
 assert_contains "$SERVICE_TEMPLATE" 'Type=oneshot'
 assert_contains "$SERVICE_TEMPLATE" 'EnvironmentFile=@@ENV_ROOT@@/%i.env'
@@ -345,6 +350,13 @@ case "$cmd" in
     ;;
   daemon-reload)
     ;;
+  reload)
+    [[ "${SYSTEMCTL_FAIL_RELOAD:-0}" != "1" ]] || exit 1
+    [[ -e "$(state_path active "$1")" ]] || exit 1
+    ;;
+  show)
+    printf '%s\n' "${FAKE_ALLOY_CAN_RELOAD:-yes}"
+    ;;
   *)
     printf 'unexpected fake systemctl command: %s\n' "$cmd" >&2
     exit 2
@@ -566,6 +578,240 @@ if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" --env-file "$MAINNET_ENV" --no-start >/dev/null 2>&1
 then
   printf 'FAIL: shared artifact update was accepted while a sibling timer was enabled\n' >&2
+  exit 1
+fi
+
+printf 'case: the legacy flag form never reloads Alloy or queries reload support\n'
+if rg -q '^(reload|show) ' "$SYSTEMCTL_LOG_ALL"; then
+  printf 'FAIL: the flag-form installer changed its systemctl behaviour\n' >&2
+  exit 1
+fi
+
+# Undo the previous case's shared drift so add/retire start from a converged host.
+install -m 755 "$TRADING_DIR/probe.sh" "$SYSTEM_ROOT/usr/local/libexec/skyeye-trading/probe.sh"
+MAINNET_INSTALLED_ENV="$SYSTEM_ROOT/etc/skyeye-trading/instances/$MAINNET.env"
+MAINNET_FRAGMENT="$SYSTEM_ROOT/etc/alloy/trading-$MAINNET.alloy"
+sha_of() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+assert_no_mutation() {
+  if rg -q '^(restart|reload|enable|disable|start|stop|daemon-reload)( |$)' "$SYSTEMCTL_LOG"; then
+    printf 'FAIL: %s changed systemd state:\n' "$1" >&2
+    cat "$SYSTEMCTL_LOG" >&2
+    exit 1
+  fi
+}
+
+printf 'case: add rejects ambiguous Alloy flags\n'
+if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_ENV" --restart-alloy --no-start >/dev/null 2>&1; then
+  printf 'FAIL: add accepted --restart-alloy with --no-start\n' >&2
+  exit 1
+fi
+if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" --env-file "$MAINNET_ENV" --restart-alloy >/dev/null 2>&1; then
+  printf 'FAIL: the flag form accepted the add-only --restart-alloy flag\n' >&2
+  exit 1
+fi
+
+printf 'case: add on a converged instance is a no-op\n'
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_ENV")"
+[[ "$add_output" == *"Already installed and running: $MAINNET"* ]] || {
+  printf 'FAIL: converged add did not report a no-op: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'converged add'
+
+printf 'case: add refuses a restart-only Alloy change without --restart-alloy\n'
+: >"$SYSTEMCTL_LOG"
+mainnet_before_sha="$(sha_of "$MAINNET_INSTALLED_ENV")"
+if add_output="$(FAKE_ALLOY_CAN_RELOAD=no SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" 2>&1)"; then
+  printf 'FAIL: add restarted Alloy implicitly when reload is unsupported\n' >&2
+  exit 1
+fi
+[[ "$add_output" == *'--restart-alloy'* && "$add_output" == *'base.alloy'* ]] || {
+  printf 'FAIL: restart refusal did not name the flag and interrupted fragments: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'refused add'
+[[ "$mainnet_before_sha" == "$(sha_of "$MAINNET_INSTALLED_ENV")" ]] || {
+  printf 'FAIL: refused add changed the installed env\n' >&2
+  exit 1
+}
+
+printf 'case: failed add update restores files and the prior timer state\n'
+: >"$SYSTEMCTL_LOG"
+if SYSTEMCTL_FAIL_RELOAD=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" >/dev/null 2>&1; then
+  printf 'FAIL: forced Alloy reload failure was accepted\n' >&2
+  exit 1
+fi
+[[ "$mainnet_before_sha" == "$(sha_of "$MAINNET_INSTALLED_ENV")" ]] || {
+  printf 'FAIL: failed add update did not restore the installed env\n' >&2
+  exit 1
+}
+[[ -e "$SYSTEMCTL_STATE/enabled_skyeye-trading-probe@$MAINNET.timer" &&
+   -e "$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.timer" ]] || {
+  printf 'FAIL: failed add update did not restore the Mainnet timer state\n' >&2
+  exit 1
+}
+
+printf 'case: add updates an installed instance in place with an Alloy reload\n'
+: >"$SYSTEMCTL_LOG"
+robinhood_fragment_sha="$(sha_of "$ROBINHOOD_FRAGMENT")"
+robinhood_env_sha="$(sha_of "$ROBINHOOD_INSTALLED_ENV")"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" >/dev/null
+assert_contains "$SYSTEMCTL_LOG" "^disable --now skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_contains "$SYSTEMCTL_LOG" '^reload alloy$'
+assert_not_contains "$SYSTEMCTL_LOG" '^restart alloy$'
+assert_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_not_contains "$SYSTEMCTL_LOG" "skyeye-trading-probe@${ROBINHOOD}"
+cmp -s "$MAINNET_CHANGED_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: add did not install the updated env\n' >&2
+  exit 1
+}
+[[ "$robinhood_fragment_sha" == "$(sha_of "$ROBINHOOD_FRAGMENT")" &&
+   "$robinhood_env_sha" == "$(sha_of "$ROBINHOOD_INSTALLED_ENV")" ]] || {
+  printf 'FAIL: Mainnet add update rewrote Robinhood artifacts\n' >&2
+  exit 1
+}
+
+printf 'case: add --restart-alloy restarts instead of reloading\n'
+: >"$SYSTEMCTL_LOG"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_ENV" --restart-alloy >/dev/null
+assert_contains "$SYSTEMCTL_LOG" '^restart alloy$'
+assert_not_contains "$SYSTEMCTL_LOG" '^reload alloy$'
+cmp -s "$MAINNET_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: add --restart-alloy did not install the env\n' >&2
+  exit 1
+}
+
+printf 'case: retire archives only the target instance and reloads Alloy\n'
+mainnet_metrics="$TEXTFILE_DIR/tnauqquant-$MAINNET.prom"
+[[ -f "$mainnet_metrics" ]] || {
+  printf 'FAIL: fixture expected a Mainnet metrics output before retirement\n' >&2
+  exit 1
+}
+mainnet_env_sha="$(sha_of "$MAINNET_INSTALLED_ENV")"
+mainnet_fragment_sha="$(sha_of "$MAINNET_FRAGMENT")"
+shared_paths=(
+  "$SYSTEM_ROOT/etc/alloy/trading-metrics.alloy"
+  "$SYSTEM_ROOT/usr/local/libexec/skyeye-trading/probe.sh"
+  "$SYSTEM_ROOT/usr/local/libexec/skyeye-trading/ensure-log-access.sh"
+  "$SYSTEM_ROOT/etc/systemd/system/skyeye-trading-probe@.service"
+  "$SYSTEM_ROOT/etc/systemd/system/skyeye-trading-probe@.timer"
+  "$ROBINHOOD_FRAGMENT"
+  "$ROBINHOOD_INSTALLED_ENV"
+  "$TEXTFILE_DIR/tnauqquant-$ROBINHOOD.prom"
+)
+shared_shas=()
+for shared_path in "${shared_paths[@]}"; do
+  shared_shas+=("$(sha_of "$shared_path")")
+done
+: >"$SYSTEMCTL_LOG"
+retire_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" retire --strategy "$MAINNET")"
+assert_contains "$SYSTEMCTL_LOG" "^disable --now skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_contains "$SYSTEMCTL_LOG" '^reload alloy$'
+assert_not_contains "$SYSTEMCTL_LOG" '^restart alloy$'
+assert_not_contains "$SYSTEMCTL_LOG" "skyeye-trading-probe@${ROBINHOOD}"
+for index in "${!shared_paths[@]}"; do
+  [[ "${shared_shas[$index]}" == "$(sha_of "${shared_paths[$index]}")" ]] || {
+    printf 'FAIL: retire changed a shared or sibling artifact: %s\n' "${shared_paths[$index]}" >&2
+    exit 1
+  }
+done
+for retired_path in "$MAINNET_INSTALLED_ENV" "$MAINNET_FRAGMENT" "$mainnet_metrics"; do
+  [[ ! -e "$retired_path" ]] || {
+    printf 'FAIL: retire left %s in place\n' "$retired_path" >&2
+    exit 1
+  }
+done
+[[ ! -e "$SYSTEMCTL_STATE/enabled_skyeye-trading-probe@$MAINNET.timer" &&
+   ! -e "$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.timer" ]] || {
+  printf 'FAIL: retire left the Mainnet timer enabled or active\n' >&2
+  exit 1
+}
+retire_records=("$SYSTEM_ROOT/etc/skyeye-trading/retired/$MAINNET"-*)
+[[ "${#retire_records[@]}" == "1" && -d "${retire_records[0]}" ]] || {
+  printf 'FAIL: expected exactly one Mainnet retire record\n' >&2
+  exit 1
+}
+RETIRE_RECORD="${retire_records[0]}"
+record_mode="$(stat -f '%Lp' "$RETIRE_RECORD" 2>/dev/null || stat -c '%a' "$RETIRE_RECORD")"
+[[ "$record_mode" == "700" ]] || {
+  printf 'FAIL: retire record mode expected=700 actual=%s\n' "$record_mode" >&2
+  exit 1
+}
+[[ "$(wc -l <"$RETIRE_RECORD/paths.list" | tr -d ' ')" == "3" ]] || {
+  printf 'FAIL: retire record must list exactly env, fragment and metrics\n' >&2
+  cat "$RETIRE_RECORD/paths.list" >&2
+  exit 1
+}
+assert_contains "$RETIRE_RECORD/retire.meta" '^status=committed$'
+assert_contains "$RETIRE_RECORD/retire.meta" '^timer_was_enabled=1$'
+ARCHIVED_ENV="$RETIRE_RECORD/previous/etc/skyeye-trading/instances/$MAINNET.env"
+[[ "$mainnet_env_sha" == "$(sha_of "$ARCHIVED_ENV")" &&
+   "$mainnet_fragment_sha" == "$(sha_of "$RETIRE_RECORD/previous/etc/alloy/trading-$MAINNET.alloy")" ]] || {
+  printf 'FAIL: retire record does not hold the exact retired files\n' >&2
+  exit 1
+}
+[[ "$retire_output" == *"Re-add with: sudo "*"/setup-linux.sh add --env-file "*"/$(basename "$RETIRE_RECORD")/previous/etc/skyeye-trading/instances/$MAINNET.env"* ]] || {
+  printf 'FAIL: retire did not print the re-add command: %s\n' "$retire_output" >&2
+  exit 1
+}
+
+printf 'case: retiring twice is a no-op\n'
+: >"$SYSTEMCTL_LOG"
+retire_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" retire --strategy "$MAINNET")"
+[[ "$retire_output" == *"Already retired: $MAINNET"* ]] || {
+  printf 'FAIL: second retire did not report a no-op: %s\n' "$retire_output" >&2
+  exit 1
+}
+assert_no_mutation 'second retire'
+
+printf 'case: retire rejects unknown and invalid strategies\n'
+for bad_strategy in never-installed '../etc' ''; do
+  if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+    "$SETUP" retire --strategy "$bad_strategy" >/dev/null 2>&1; then
+    printf 'FAIL: retire accepted strategy %q\n' "$bad_strategy" >&2
+    exit 1
+  fi
+done
+
+printf 'case: add re-installs a retired instance from its record\n'
+: >"$SYSTEMCTL_LOG"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$ARCHIVED_ENV" >/dev/null
+cmp -s "$ARCHIVED_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: re-add did not install the archived env\n' >&2
+  exit 1
+}
+assert_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]timer$"
+
+printf 'case: failed retire restores files and the prior timer state\n'
+printf '0\n' >"$ALLOY_CALL_COUNT"
+mainnet_env_sha="$(sha_of "$MAINNET_INSTALLED_ENV")"
+if ALLOY_FAIL_ON_CALL=2 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" retire --strategy "$MAINNET" >/dev/null 2>&1; then
+  printf 'FAIL: forced post-retire validation failure was accepted\n' >&2
+  exit 1
+fi
+[[ -f "$MAINNET_INSTALLED_ENV" && -f "$MAINNET_FRAGMENT" &&
+   "$mainnet_env_sha" == "$(sha_of "$MAINNET_INSTALLED_ENV")" ]] || {
+  printf 'FAIL: failed retire did not restore the Mainnet files\n' >&2
+  exit 1
+}
+[[ -e "$SYSTEMCTL_STATE/enabled_skyeye-trading-probe@$MAINNET.timer" &&
+   -e "$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.timer" ]] || {
+  printf 'FAIL: failed retire did not restore the Mainnet timer state\n' >&2
+  exit 1
+}
+if rg -q -l '^status=committed$' --glob 'retire.meta' \
+  "$SYSTEM_ROOT/etc/skyeye-trading/retired" | grep -v -F "$RETIRE_RECORD" | grep -q .; then
+  printf 'FAIL: a rolled-back retirement was recorded as committed\n' >&2
   exit 1
 fi
 
