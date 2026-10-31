@@ -14,8 +14,10 @@ Neither component starts, stops, signals, or attaches to the trading process.
 |---|---|
 | `config-linux.alloy.tmpl` | Per-strategy Loki fragment that reuses the existing central receiver |
 | `config-linux-metrics.alloy.tmpl` | Shared textfile collector for all Linux strategy outputs |
-| `deployment-linux-{robinhood,mainnet}.env.example` | Credential-free Trading01 instance contracts |
-| `setup-linux.sh` | Incremental render/validate/install and explicit singleton migration |
+| `deployment-linux-{robinhood,mainnet,ourbit}.env.example` | Credential-free Trading01 instance contracts |
+| `setup-linux.sh` | `add` (one-step install/update), `retire`, render-only, and explicit singleton migration |
+| `retire-linux.sh` | Per-strategy retirement with an exact rollback record (run via `setup-linux.sh retire`) |
+| `linux-common.sh` | Shared test-root, systemctl and path guards for the Linux scripts |
 | `skyeye-trading-probe@.service.tmpl` | Linux per-strategy read-only oneshot probe |
 | `skyeye-trading-probe@.timer.tmpl` | Linux per-strategy 15-second timer |
 | `config-macos.alloy.tmpl` | Logfmt pipeline, source-side scrub, Loki push and Prometheus remote write |
@@ -68,59 +70,70 @@ shared `/etc/alloy/trading-metrics.alloy` collector and one
 other product pipelines such as ZenIncome. Each strategy has its own env,
 systemd instance, exact executable/config/log binding and metrics file.
 
-1. Copy and edit the non-secret environment contract:
+### Add or remove a Trading target
+
+A target is one strategy on one server. Every Trading alert is shadow-only, so
+a routine add or remove needs no canary; the checks below are enough. Changing
+`trading.yml`, Alertmanager routing or `notification_mode` still requires the
+full shadow → canary process.
+
+**Add** (host first, then central):
+
+1. Host, from a SkyEye checkout, with a mode-`0600` env copied from a
+   `deployment-linux-*.env.example` and edited for the strategy:
 
    ~~~bash
-   install -m 600 agents/alloy/trading/deployment-linux-robinhood.env.example \
-     /tmp/lighter-robinhood-btc-canary.env
-   install -m 600 agents/alloy/trading/deployment-linux-mainnet.env.example \
-     /tmp/lighter-mainnet-btc-canary.env
+   sudo agents/alloy/trading/setup-linux.sh add --env-file /root/STRATEGY.env
    ~~~
 
-2. Render and validate without changing services:
+   It validates the combined `/etc/alloy` directory, installs the env and Loki
+   fragment, **reloads** Alloy (printing the fragments it re-evaluates),
+   enables `skyeye-trading-probe@STRATEGY.timer` and runs the probe once. A
+   failure restores the printed rollback record. Re-running is a no-op; a
+   changed env updates the instance in place. When only a restart would work
+   (first switch to directory mode, reload unsupported, or Alloy stopped) it
+   refuses and names the pipelines a restart interrupts; re-run with
+   `--restart-alloy` once that is acceptable. `--no-start` stages files only.
+   It never starts, stops or signals a trading process: a Mainnet env with
+   `TQ_POC_RUN_EXPECTED=0` gets only its read-only probe.
+2. Repo:
 
    ~~~bash
-   render_dir="$(mktemp -d /tmp/skyeye-trading-render.XXXXXX)"
-   agents/alloy/trading/setup-linux.sh \
-     --env-file /tmp/lighter-robinhood-btc-canary.env \
-     --render-only "$render_dir/robinhood"
-   agents/alloy/trading/setup-linux.sh \
-     --env-file /tmp/lighter-mainnet-btc-canary.env \
-     --render-only "$render_dir/mainnet"
-
-   validate_dir="$(mktemp -d /tmp/skyeye-alloy-validate.XXXXXX)"
-   cp /etc/alloy/*.alloy "$validate_dir/"
-   rm -f "$validate_dir/trading.alloy"
-   cp "$render_dir/robinhood/trading-metrics.alloy" "$validate_dir/"
-   cp "$render_dir/robinhood/trading-lighter-robinhood-btc-canary.alloy" "$validate_dir/"
-   cp "$render_dir/mainnet/trading-lighter-mainnet-btc-canary.alloy" "$validate_dir/"
-   alloy validate "$validate_dir"
+   scripts/trading-target add --server SERVER_ID --strategy STRATEGY [--quote USDT] [--history]
+   tests/trading/test-central-config.sh
    ~~~
 
-3. During the one-time maintenance cutover, stop and migrate the legacy
-   singleton, then install the inactive sibling. `--no-start` never restarts
-   Alloy and never enables a probe:
+   Commit, PR, merge. Tests derive their expectations from the inventory, so
+   no test edits are needed.
+3. Central, on monitoring-prod in `/home/ubuntu/SkyEye`: `scripts/central-deploy`
+   (optionally `--dry-run` first). It validates the merged commit in a
+   temporary worktree, fast-forwards, reloads Prometheus and prints the live
+   `trading_target_info` rows. Glance at the fleet dashboard once.
 
-   ~~~bash
-   sudo agents/alloy/trading/setup-linux.sh \
-     --env-file /tmp/lighter-robinhood-btc-canary.env \
-     --migrate-singleton --no-start
-   sudo agents/alloy/trading/setup-linux.sh \
-     --env-file /tmp/lighter-mainnet-btc-canary.env \
-     --no-start
-   sudo alloy validate /etc/alloy
-   sudo systemctl restart alloy
-   sudo systemctl enable --now \
-     skyeye-trading-probe@lighter-robinhood-btc-canary.timer \
-     skyeye-trading-probe@lighter-mainnet-btc-canary.timer
-   sudo systemctl start \
-     skyeye-trading-probe@lighter-robinhood-btc-canary.service \
-     skyeye-trading-probe@lighter-mainnet-btc-canary.service
-   ~~~
+**Remove** (central first, so `TradingTelemetryMissing` cannot fire):
 
-   Mainnet's monitoring probe is safe to enable before the strategy. Its
-   example starts with `TQ_POC_RUN_EXPECTED=0`; a canonical runtime manifest
-   makes the probe report the run as expected after the operator starts it.
+1. Repo: `scripts/trading-target remove --server SERVER_ID --strategy STRATEGY`,
+   then PR and merge.
+2. Central: `scripts/central-deploy`.
+3. Host: `sudo agents/alloy/trading/setup-linux.sh retire --strategy STRATEGY`.
+   It validates `/etc/alloy` without the fragment, disables only that probe,
+   moves its env, fragment and metrics file into
+   `/etc/skyeye-trading/retired/STRATEGY-<UTC>/` (with `paths.list` and
+   `retire.meta`) and reloads Alloy. Shared artifacts, sibling strategies,
+   history and Loki data stay. It prints the `add --env-file` command that
+   re-installs the archived env; re-running reports "Already retired".
+
+Shared collector, units and `probe.sh` are rewritten only while every
+templated probe is stopped and disabled; both commands refuse otherwise.
+
+### Legacy flag form and singleton migration
+
+Without a subcommand, `setup-linux.sh --env-file PATH` keeps its original
+behaviour: `--render-only DIR` renders without touching the host, `--no-start`
+installs without restarting Alloy or enabling the probe, and the default
+restarts Alloy. `--migrate-singleton` removed the pre-2026-09 singleton
+`trading.alloy`/`skyeye-trading-probe` on Trading01 during a one-time
+maintenance cutover and is not needed for new targets.
 
 The installer requires setfacl. It grants Alloy read/traverse only on the
 raw-log directory and traverse-only access on the exact parent chain under the
@@ -138,11 +151,12 @@ after a new run creates a fresh log.
 
 Every install prints a private rollback-record directory containing only the
 exact files it replaced or removed and their prior timer state. A failed
-started installation restores that record automatically. For a `--no-start`
-cutover, keep both printed records until Alloy and both probe outputs have been
-verified. Rollback disables only the two `skyeye-trading-probe@...` timers,
-restores those recorded paths, validates `/etc/alloy`, restarts Alloy, and (for
-the first migration) restores the legacy timer state. It never controls a
+started installation restores that record automatically, including the
+instance's own prior timer state for an `add` update. For a `--no-start`
+install, keep the printed record until Alloy and the probe output have been
+verified. Rollback touches only the recorded `skyeye-trading-probe@...` timers
+and paths, reloads (or, for a restart install, restarts) Alloy, and for the
+first migration restores the legacy timer state. It never controls a
 tnauqquant trading service.
 
 ## Secret and access requirements
