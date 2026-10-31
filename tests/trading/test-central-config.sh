@@ -8,6 +8,8 @@ DETAIL_DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/trading-strategy-detail.
 FLEET_DASHBOARD="$REPO_ROOT/grafana/dashboards/Trading/trading-strategy-fleet.json"
 PROM_RULES="$REPO_ROOT/prometheus/rules/trading.yml"
 PROM_TARGET="$REPO_ROOT/prometheus/rules/trading-targets.yml"
+PROM_TARGET_FIXTURE="$REPO_ROOT/prometheus/rules/tests/fixtures/trading-targets.yml"
+TARGET_TOOL="$REPO_ROOT/scripts/trading-target"
 LOKI_RULES="$REPO_ROOT/loki/rules/fake/tnauqquant.yml"
 INCIDENT_FIXTURE="$REPO_ROOT/tests/fixtures/tnauqquant/trading-incident.raw.log"
 INCIDENT_TEST="$REPO_ROOT/tests/trading/test-incident-taxonomy.sh"
@@ -17,6 +19,8 @@ for required_file in \
   "$FLEET_DASHBOARD" \
   "$PROM_RULES" \
   "$PROM_TARGET" \
+  "$PROM_TARGET_FIXTURE" \
+  "$TARGET_TOOL" \
   "$LOKI_RULES" \
   "$INCIDENT_FIXTURE" \
   "$INCIDENT_TEST"
@@ -290,55 +294,33 @@ then
   exit 1
 fi
 
-for production_value in \
-  production \
-  tnauqquant-prod-1 \
-  toobit-mexc-btc \
-  trading01 \
-  lighter-robinhood-btc-canary \
-  lighter-mainnet-btc-canary
-do
-  rg -q -- "$production_value" "$PROM_TARGET" || {
-    printf 'FAIL: inventory is missing production identity %s\n' \
-      "$production_value" >&2
-    exit 1
-  }
-done
-
-[[ "$(rg -c '^[[:space:]]+- record:[[:space:]]+trading_target_info' "$PROM_TARGET")" == "3" ]] || {
-  printf 'FAIL: expected exactly three generic Trading inventory rows\n' >&2
+# Inventory membership is data, not test code: the tool enforces canonical
+# shape, unique identities and shadow-only rows, and the derived promtool test
+# below checks that exactly the inventoried targets drive the inventory alerts.
+"$TARGET_TOOL" check "$PROM_TARGET" "$PROM_TARGET_FIXTURE" >/dev/null || {
+  printf 'FAIL: Trading inventory or rule fixture is not canonical\n' >&2
   exit 1
 }
-for strategy in lighter-robinhood-btc-canary lighter-mainnet-btc-canary; do
-  stanza="$(awk -v RS='' -v strategy="$strategy" '
-    $0 ~ /record: trading_target_info/ && $0 ~ ("strategy: " strategy) {
-      print
-      found = 1
-      exit
-    }
-    END { if (!found) exit 1 }
-  ' "$PROM_TARGET")" || {
-    printf 'FAIL: missing Trading01 inventory stanza for %s\n' "$strategy" >&2
-    exit 1
-  }
-  printf '%s\n' "$stanza" | rg -q 'server_id:[[:space:]]+trading01' || {
-    printf 'FAIL: %s inventory row is not bound to trading01\n' "$strategy" >&2
-    exit 1
-  }
-  printf '%s\n' "$stanza" | rg -q 'quote_currency:[[:space:]]+USDT' || {
-    printf 'FAIL: %s inventory row must use USDT\n' "$strategy" >&2
-    exit 1
-  }
-  if printf '%s\n' "$stanza" | rg -q 'history_capable'; then
-    printf 'FAIL: %s must not claim a history builder\n' "$strategy" >&2
-    exit 1
-  fi
-done
-
-rg -q 'history_capable:[[:space:]]+"true"' "$PROM_TARGET" || {
-  printf 'FAIL: history-capable Trading inventory contract is missing\n' >&2
+inventory_rows="$("$TARGET_TOOL" --file "$PROM_TARGET" list)"
+[[ -n "$inventory_rows" ]] || {
+  printf 'FAIL: Trading inventory has no trading_target_info rows\n' >&2
   exit 1
 }
+inventory_identities=()
+while IFS=$'\t' read -r inventory_server inventory_strategy _ _; do
+  inventory_identities+=("$inventory_server" "$inventory_strategy")
+done <<<"$inventory_rows"
+for inventory_identity in "${inventory_identities[@]}"; do
+  identity_pattern="(^|[^A-Za-z0-9_.-])${inventory_identity//./\\.}([^A-Za-z0-9_.-]|\$)"
+  for central_file in "$DETAIL_DASHBOARD" "$FLEET_DASHBOARD" "$PROM_RULES" "$LOKI_RULES"; do
+    if rg -q -- "$identity_pattern" "$central_file"; then
+      printf 'FAIL: %s hard-codes inventory identity %s\n' \
+        "$central_file" "$inventory_identity" >&2
+      exit 1
+    fi
+  done
+done
+
 rg -q 'alert:[[:space:]]+TradingPnlHistoryUnavailable' "$PROM_RULES" || {
   printf 'FAIL: P&L history health alert is missing\n' >&2
   exit 1
@@ -434,7 +416,13 @@ then
   exit 1
 fi
 
+derived_test="$(mktemp "${TMPDIR:-/tmp}/skyeye-trading-derived.XXXXXX")"
+trap 'rm -f "$derived_test"' EXIT
 if command -v docker >/dev/null 2>&1; then
+  "$TARGET_TOOL" --file "$PROM_TARGET" render-test \
+    --rule-file /etc/prometheus/rules/trading-targets.yml \
+    --rule-file /etc/prometheus/rules/trading.yml \
+    --output "$derived_test"
   docker run --rm \
     -v "$REPO_ROOT/prometheus:/etc/prometheus:ro" \
     --entrypoint /bin/promtool \
@@ -442,14 +430,20 @@ if command -v docker >/dev/null 2>&1; then
     check rules \
     /etc/prometheus/rules/trading-targets.yml \
     /etc/prometheus/rules/trading.yml
-  docker run --rm \
+  # The derived test is piped in so it never needs a host bind mount.
+  docker run --rm -i \
     -v "$REPO_ROOT/prometheus:/etc/prometheus:ro" \
-    --entrypoint /bin/promtool \
+    --entrypoint /bin/sh \
     prom/prometheus:v2.54.1 \
-    test rules /etc/prometheus/rules/tests/trading.test.yml
+    -c 'cat >/tmp/trading-derived.test.yml &&
+      promtool test rules \
+        /tmp/trading-derived.test.yml \
+        /etc/prometheus/rules/tests/trading.test.yml' \
+    <"$derived_test"
 elif command -v promtool >/dev/null 2>&1; then
+  "$TARGET_TOOL" --file "$PROM_TARGET" render-test --output "$derived_test"
   promtool check rules "$PROM_TARGET" "$PROM_RULES"
-  promtool test rules "$REPO_ROOT/prometheus/rules/tests/trading.test.yml"
+  promtool test rules "$derived_test" "$REPO_ROOT/prometheus/rules/tests/trading.test.yml"
 else
   printf 'SKIP: docker/promtool unavailable; Prometheus rule execution was not run\n'
 fi

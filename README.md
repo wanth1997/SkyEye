@@ -33,7 +33,7 @@ PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
 - `business.yml` — PaymentSuccessRateLow, RefundVolumeHigh, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
 - `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, DailyHeartbeat
 - `stack-health.yml` — SkyEye components, resource pressure, rule evaluation health
-- `trading-targets.yml` / `trading.yml` — production Trading target inventory and shadow alerts
+- `trading-targets.yml` / `trading.yml` — production Trading target inventory (edit with `scripts/trading-target add|remove`) and shadow alerts
 
 Severity → routing:
 - **High** → 🚨 Telegram (sound) (24/7)
@@ -90,7 +90,9 @@ SkyEye/
 ├── scripts/
 │   ├── bootstrap-monitoring-ec2.sh      Docker + AWS CLI install
 │   ├── backup-prometheus.sh             TSDB snapshot → S3 (cron)
-│   └── install-prometheus-backup-cron.sh
+│   ├── install-prometheus-backup-cron.sh
+│   ├── trading-target                   add/remove/check Trading inventory rows
+│   └── central-deploy                   validate → fast-forward → reload on the central host
 │
 ├── runbooks/                            per-alert response guides
 │   ├── _template.md
@@ -120,7 +122,7 @@ See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest
 
 ## Change workflow
 
-- Everything is in git. Config changes → edit file → `docker compose up -d --force-recreate <service>` (or `curl -X POST localhost:<port>/-/reload` for Prom/AM live reload).
+- Everything is in git. Config changes → edit file → `docker compose up -d --force-recreate <service>` (or `curl -X POST localhost:<port>/-/reload` for Prom/AM live reload). For merged rule/dashboard/Alertmanager changes, `scripts/central-deploy` on the central host validates, fast-forwards and reloads in one step.
 - Dashboards: edit JSON in `grafana/dashboards/<folder>/<uid>.json`; Grafana picks up via provisioning within 60 s.
 - Alloy agents: on the target host, `git pull` + `sudo -E bash agents/alloy/setup.sh`.
 

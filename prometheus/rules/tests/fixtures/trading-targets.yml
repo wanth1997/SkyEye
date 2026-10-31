@@ -1,0 +1,47 @@
+# Frozen rule-semantics fixture for trading.test.yml. Do NOT edit when adding or
+# removing a live target; edit only when a rule test needs a different fixture.
+
+groups:
+  - name: trading-target-inventory
+    interval: 1m
+    rules:
+      - record: tnauqquant_target_info
+        expr: vector(1)
+        labels:
+          product: tnauqquant
+          environment: production
+          server_id: tnauqquant-prod-1
+          strategy: toobit-mexc-btc
+          notification_mode: shadow
+          quote_currency: USDT
+
+      - record: trading_target_info
+        expr: vector(1)
+        labels:
+          product: tnauqquant
+          environment: production
+          server_id: tnauqquant-prod-1
+          strategy: toobit-mexc-btc
+          notification_mode: shadow
+          quote_currency: USDT
+          history_capable: "true"
+
+      - record: trading_target_info
+        expr: vector(1)
+        labels:
+          product: tnauqquant
+          environment: production
+          server_id: trading01
+          strategy: lighter-robinhood-btc-canary
+          notification_mode: shadow
+          quote_currency: USDT
+
+      - record: trading_target_info
+        expr: vector(1)
+        labels:
+          product: tnauqquant
+          environment: production
+          server_id: trading01
+          strategy: lighter-mainnet-btc-canary
+          notification_mode: shadow
+          quote_currency: USDT

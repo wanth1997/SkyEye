@@ -1,0 +1,330 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bring a merged config change live on the central SkyEye host.
+#
+# Run on monitoring-prod from the SkyEye checkout (/home/ubuntu/SkyEye):
+#   scripts/central-deploy --dry-run   # fetch + validate the target commit only
+#   scripts/central-deploy             # validate, fast-forward, reload, verify
+#   scripts/central-deploy --status    # show reload health and live inventory
+#
+# Validation runs on a temporary worktree of the target commit BEFORE the live
+# checkout moves, using the image tags pinned in that commit's compose file, so
+# a failed check changes nothing. Only hot-reloadable paths are deployed; a
+# change that needs a container recreate is refused and must be done by hand.
+#
+# The last commit that was validated AND reloaded successfully is recorded in
+# .git/skyeye-central-deploy.applied. A run whose checkout is already at the
+# target but not recorded (a failed reload, or a checkout updated by git pull)
+# validates and reloads it again, so rerunning the command is always the retry.
+# Everything that differs from HEAD or from that record counts as not yet live,
+# so a recreate-only change pulled by hand is refused too. After applying such a
+# change by hand, `--manual-applied SHA` (the target commit, with the checkout
+# already there) records it once validation and reloads pass.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REMOTE=origin
+BRANCH=master
+MODE=deploy
+MANUAL_APPLIED=""
+DOCKER_BIN="${SKYEYE_DOCKER:-docker}"
+CURL_BIN="${SKYEYE_CURL:-curl}"
+PROM_URL="${SKYEYE_PROM_URL:-http://127.0.0.1:9090}"
+AM_URL="${SKYEYE_AM_URL:-http://127.0.0.1:9093}"
+
+usage() {
+  printf '%s\n' \
+    'Usage: scripts/central-deploy [--dry-run | --status] [--remote NAME] [--branch NAME]' \
+    '                              [--manual-applied SHA]' \
+    '' \
+    'Validates REMOTE/BRANCH in a temporary worktree (promtool check config,' \
+    'promtool test rules, the derived Trading inventory test and, when changed,' \
+    'amtool check-config), then fast-forwards this checkout and hot-reloads' \
+    'Prometheus/Alertmanager. Refuses dirty trees, untracked files in loaded' \
+    'config paths, non-fast-forward updates and changes that need a container' \
+    'recreate since HEAD or the last successful apply. Rerunning retries a' \
+    'reload that did not complete.' \
+    '' \
+    '--manual-applied SHA states that the recreate-only changes up to SHA were' \
+    'applied by hand (docker compose up -d <service>); SHA must be the target' \
+    'commit and the checkout must already be there. It is recorded as applied' \
+    'only after the same validation and reloads pass.'
+}
+
+die() {
+  printf 'central-deploy: %s\n' "$*" >&2
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) MODE=dry-run; shift ;;
+    --status) MODE=status; shift ;;
+    --remote)
+      [[ $# -ge 2 ]] || die "--remote requires a name"
+      REMOTE="$2"; shift 2 ;;
+    --branch)
+      [[ $# -ge 2 ]] || die "--branch requires a name"
+      BRANCH="$2"; shift 2 ;;
+    --manual-applied)
+      [[ $# -ge 2 ]] || die "--manual-applied requires the target commit applied by hand"
+      [[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || die "--manual-applied takes a commit hash, got: $2"
+      MANUAL_APPLIED="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+cd "$REPO_ROOT"
+
+# Directories the running services load straight from this checkout, and the
+# only untracked files allowed inside them (local secrets, never in Git).
+LOADED_CONFIG_PATHS=(prometheus alertmanager grafana/dashboards grafana/provisioning loki/rules)
+ALLOWED_LOCAL_FILES=(alertmanager/secrets/tg_token)
+
+applied_file() {
+  printf '%s/skyeye-central-deploy.applied\n' "$(git rev-parse --absolute-git-dir)"
+}
+
+# Prints the last successfully applied commit, or nothing if none is recorded.
+read_applied() {
+  local path recorded
+  path="$(applied_file)"
+  [[ -f "$path" ]] || return 0
+  recorded="$(head -n 1 "$path")"
+  if [[ "$recorded" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$recorded^{commit}" 2>/dev/null; then
+    printf '%s\n' "$recorded"
+  fi
+}
+
+prom_query() {
+  # Prints one "label=value ..." line per result sample.
+  local query="$1"
+  "$CURL_BIN" -fsS --get --data-urlencode "query=$query" "$PROM_URL/api/v1/query" | \
+    python3 -c '
+import json, sys
+payload = json.load(sys.stdin)
+if payload.get("status") != "success":
+    sys.exit("query failed: %s" % payload.get("error"))
+for sample in payload["data"]["result"]:
+    labels = sample["metric"]
+    keys = [k for k in ("server_id", "strategy", "quote_currency", "history_capable") if k in labels]
+    fields = ["%s=%s" % (k, labels[k]) for k in keys] or ["value=%s" % sample["value"][1]]
+    print(" ".join(fields))
+'
+}
+
+show_status() {
+  local reload_ok
+  reload_ok="$(prom_query 'prometheus_config_last_reload_successful')" || \
+    die "cannot query Prometheus at $PROM_URL"
+  printf 'Prometheus last reload successful: %s\n' "${reload_ok#value=}"
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local applied
+    applied="$(read_applied)"
+    printf 'Checkout HEAD: %s; last applied by central-deploy: %s\n' \
+      "$(git rev-parse --short=12 HEAD)" "${applied:0:12}"
+  fi
+  printf 'Live trading_target_info rows (recording rules evaluate every 1m):\n'
+  prom_query 'trading_target_info' | sort | sed 's/^/  /'
+}
+
+if [[ "$MODE" == "status" ]]; then
+  show_status
+  exit 0
+fi
+
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git checkout: $REPO_ROOT"
+current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+[[ "$current_branch" == "$BRANCH" ]] || \
+  die "checkout is on '${current_branch:-detached HEAD}', expected $BRANCH"
+[[ -z "$(git status --porcelain --untracked-files=no)" ]] || \
+  die "tracked files have local changes; commit, upstream or discard them before deploying"
+
+# The services load these directories directly, so an untracked file there
+# would go live without passing the validation below.
+unexpected_files=()
+while IFS= read -r -d '' untracked_path; do
+  allowed=0
+  for allowed_path in "${ALLOWED_LOCAL_FILES[@]}"; do
+    if [[ "$untracked_path" == "$allowed_path" ]]; then
+      allowed=1
+    fi
+  done
+  if [[ "$allowed" -eq 0 ]]; then
+    unexpected_files+=("$untracked_path")
+  fi
+done < <(git ls-files -z --others -- "${LOADED_CONFIG_PATHS[@]}")
+if [[ "${#unexpected_files[@]}" -gt 0 ]]; then
+  printf 'Untracked files in loaded config paths (%s) would go live unvalidated:\n' \
+    "${LOADED_CONFIG_PATHS[*]}" >&2
+  printf '  %s\n' "${unexpected_files[@]}" >&2
+  die "refusing to deploy; commit them upstream or move them out of the checkout (allowed untracked local files: ${ALLOWED_LOCAL_FILES[*]})"
+fi
+
+git fetch --quiet "$REMOTE" "$BRANCH"
+head_sha="$(git rev-parse HEAD)"
+target_sha="$(git rev-parse "refs/remotes/$REMOTE/$BRANCH")"
+applied_sha="$(read_applied)"
+manual_sha=""
+if [[ -n "$MANUAL_APPLIED" ]]; then
+  manual_sha="$(git rev-parse --verify --quiet "$MANUAL_APPLIED^{commit}")" || \
+    die "--manual-applied: unknown commit $MANUAL_APPLIED"
+  [[ "$manual_sha" == "$target_sha" ]] || \
+    die "--manual-applied names ${manual_sha:0:12}, but $REMOTE/$BRANCH is ${target_sha:0:12}; name the target commit you applied by hand"
+  [[ "$head_sha" == "$target_sha" ]] || \
+    die "--manual-applied needs the checkout already at ${target_sha:0:12} (HEAD is ${head_sha:0:12}); apply the change by hand first"
+fi
+if [[ "$head_sha" == "$target_sha" && "$applied_sha" == "$target_sha" ]]; then
+  printf 'Already up to date and applied at %s; nothing to deploy\n' "${head_sha:0:12}"
+  exit 0
+fi
+
+prom_reload=0
+am_reload=0
+loki_rules=0
+dashboards=0
+manual_paths=()
+classify_path() {
+  case "$1" in
+    prometheus/prometheus.yml|prometheus/rules/*) prom_reload=1 ;;
+    alertmanager/alertmanager.yml|alertmanager/templates/*) am_reload=1 ;;
+    loki/rules/*) loki_rules=1 ;;
+    grafana/dashboards/*) dashboards=1 ;;
+    docs/*|runbooks/*|agents/*|tests/*|scripts/*|infra/*|*.md|.gitignore) ;;
+    *) return 1 ;;
+  esac
+}
+
+if [[ "$head_sha" != "$target_sha" ]]; then
+  git merge-base --is-ancestor "$head_sha" "$target_sha" || \
+    die "$REMOTE/$BRANCH is not a fast-forward of HEAD; resolve by hand"
+  printf 'Deploying %s -> %s\n' "${head_sha:0:12}" "${target_sha:0:12}"
+  git log --oneline "$head_sha..$target_sha" | sed 's/^/  /'
+else
+  printf 'Checkout is already at %s but central-deploy has not applied it (last applied: %s); validating and reloading\n' \
+    "${head_sha:0:12}" "${applied_sha:0:12}"
+fi
+
+# A path that differs from HEAD or from the last successful apply may not be
+# live yet: reload it if it can be, refuse it if it cannot. The last-apply diff
+# covers a reload that failed earlier and commits pulled by hand since then.
+change_bases=("$head_sha")
+if [[ -n "$applied_sha" ]]; then
+  change_bases+=("$applied_sha")
+else
+  printf 'No record of a successful central-deploy; reloading Prometheus and Alertmanager\n'
+  prom_reload=1
+  am_reload=1
+fi
+for change_base in "${change_bases[@]}"; do
+  [[ "$change_base" != "$target_sha" ]] || continue
+  changed_paths="$(git diff --name-only "$change_base" "$target_sha")" || \
+    die "cannot list the changes from ${change_base:0:12} to ${target_sha:0:12}"
+  while IFS= read -r changed_path; do
+    [[ -n "$changed_path" ]] || continue
+    classify_path "$changed_path" || manual_paths+=("$changed_path")
+  done <<<"$changed_paths"
+done
+
+if [[ "${#manual_paths[@]}" -gt 0 ]]; then
+  if [[ -n "$applied_sha" ]]; then
+    printf 'These paths changed since the last central-deploy apply (%s) and need a service recreate or a manual decision:\n' \
+      "${applied_sha:0:12}" >&2
+  else
+    printf 'These paths change between HEAD (%s) and %s and need a service recreate or a manual decision:\n' \
+      "${head_sha:0:12}" "${target_sha:0:12}" >&2
+  fi
+  printf '%s\n' "${manual_paths[@]}" | sort -u | sed 's/^/  /' >&2
+  if [[ -z "$manual_sha" ]]; then
+    by_hand="docker compose up -d <service> for each change above"
+    [[ "$head_sha" == "$target_sha" ]] || by_hand="git merge --ff-only ${target_sha:0:12}, then $by_hand"
+    die "refusing to deploy; nothing was reloaded or recorded. Apply it by hand from this checkout ($by_hand), then record it with: scripts/central-deploy --manual-applied ${target_sha:0:12}"
+  fi
+  printf 'Treating them as applied by hand at %s (--manual-applied)\n' "${target_sha:0:12}"
+fi
+
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-central-deploy.XXXXXX")"
+TREE="$WORK_DIR/tree"
+cleanup() {
+  local status=$?
+  git worktree remove --force "$TREE" >/dev/null 2>&1 || true
+  rm -rf "$WORK_DIR"
+  exit "$status"
+}
+trap cleanup EXIT
+git worktree add --quiet --detach "$TREE" "$target_sha"
+
+compose_image() {
+  awk -v want="$1" '$1 == "image:" && index($2, want ":") == 1 { print $2; exit }' \
+    "$TREE/docker-compose.yml"
+}
+prom_image="$(compose_image prom/prometheus)"
+am_image="$(compose_image prom/alertmanager)"
+[[ -n "$prom_image" ]] || die "cannot find the pinned Prometheus image in docker-compose.yml"
+
+printf 'Validating %s with %s\n' "${target_sha:0:12}" "$prom_image"
+"$DOCKER_BIN" run --rm -v "$TREE/prometheus:/etc/prometheus:ro" --entrypoint /bin/promtool \
+  "$prom_image" check config /etc/prometheus/prometheus.yml
+rule_tests=()
+while IFS= read -r rule_test; do
+  rule_tests+=("/etc/prometheus/rules/tests/$(basename "$rule_test")")
+done < <(find "$TREE/prometheus/rules/tests" -maxdepth 1 -type f -name '*.yml' | sort)
+if [[ "${#rule_tests[@]}" -gt 0 ]]; then
+  "$DOCKER_BIN" run --rm -v "$TREE/prometheus:/etc/prometheus:ro" --entrypoint /bin/promtool \
+    "$prom_image" test rules "${rule_tests[@]}"
+fi
+if [[ -x "$TREE/scripts/trading-target" ]]; then
+  "$TREE/scripts/trading-target" --file "$TREE/prometheus/rules/trading-targets.yml" check >/dev/null
+  "$TREE/scripts/trading-target" --file "$TREE/prometheus/rules/trading-targets.yml" render-test \
+    --rule-file /etc/prometheus/rules/trading-targets.yml \
+    --rule-file /etc/prometheus/rules/trading.yml \
+    --output "$WORK_DIR/trading-derived.test.yml"
+  "$DOCKER_BIN" run --rm -v "$TREE/prometheus:/etc/prometheus:ro" \
+    -v "$WORK_DIR/trading-derived.test.yml:/tmp/trading-derived.test.yml:ro" \
+    --entrypoint /bin/promtool "$prom_image" test rules /tmp/trading-derived.test.yml
+fi
+if [[ "$am_reload" -eq 1 ]]; then
+  [[ -n "$am_image" ]] || die "cannot find the pinned Alertmanager image in docker-compose.yml"
+  "$DOCKER_BIN" run --rm -v "$TREE/alertmanager:/etc/alertmanager:ro" --entrypoint /bin/amtool \
+    "$am_image" check-config /etc/alertmanager/alertmanager.yml
+fi
+
+if [[ "$MODE" == "dry-run" ]]; then
+  printf 'Dry run: validation passed; checkout left at %s and nothing reloaded (would reload: Prometheus=%s Alertmanager=%s)\n' \
+    "${head_sha:0:12}" "$prom_reload" "$am_reload"
+  exit 0
+fi
+
+if [[ "$head_sha" != "$target_sha" ]]; then
+  git merge --ff-only --quiet "$target_sha"
+  printf 'Checkout fast-forwarded to %s (previous %s)\n' "${target_sha:0:12}" "${head_sha:0:12}"
+fi
+
+undo_sha="${applied_sha:-$head_sha}"
+rollback_hint="rerun scripts/central-deploy after fixing the cause to retry; to return to the previous config instead: git reset --hard $undo_sha && curl -fsS -X POST $PROM_URL/-/reload"
+if [[ "$prom_reload" -eq 1 ]]; then
+  "$CURL_BIN" -fsS -X POST "$PROM_URL/-/reload" >/dev/null || \
+    die "Prometheus rejected the reload; $rollback_hint"
+  printf 'Prometheus reloaded\n'
+fi
+if [[ "$am_reload" -eq 1 ]]; then
+  "$CURL_BIN" -fsS -X POST "$AM_URL/-/reload" >/dev/null || \
+    die "Alertmanager rejected the reload; $rollback_hint"
+  printf 'Alertmanager reloaded\n'
+fi
+[[ "$loki_rules" -eq 0 ]] || \
+  printf 'Loki rules changed: the ruler picks them up on its next poll (no reload needed)\n'
+[[ "$dashboards" -eq 0 ]] || \
+  printf 'Dashboards changed: Grafana provisioning picks them up within 60s\n'
+
+if [[ "$prom_reload" -eq 1 ]]; then
+  show_status
+  [[ "$(prom_query 'prometheus_config_last_reload_successful')" == "value=1" ]] || \
+    die "Prometheus reports an unsuccessful config reload; $rollback_hint"
+fi
+applied_path="$(applied_file)"
+printf '%s\n' "$target_sha" >"$applied_path.tmp"
+mv "$applied_path.tmp" "$applied_path"
+printf 'central-deploy: done; applied %s\n' "${target_sha:0:12}"
