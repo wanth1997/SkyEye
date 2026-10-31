@@ -8,7 +8,7 @@ tests:
   - name: total equity stays scoped to the inventoried strategy
     interval: 30s
     input_series:
-      - series: 'tnauqquant_current_equity_usdt{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_current_equity_usdt{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '3000.75x2'
       - series: 'tnauqquant_current_equity_usdt{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
         values: '501.4083x2'
@@ -17,10 +17,10 @@ tests:
       - series: 'tnauqquant_current_equity_usdt{product="tnauqquant",environment="development",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
         values: '99999x2'
     promql_expr_test:
-      - expr: 'trading_strategy_current_equity_usdt{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - expr: 'trading_strategy_current_equity_usdt{server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         eval_time: 1m
         exp_samples:
-          - labels: 'trading_strategy_current_equity_usdt{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+          - labels: 'trading_strategy_current_equity_usdt{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
             value: 3000.75
       - expr: 'trading_strategy_current_equity_usdt{server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
         eval_time: 1m
@@ -36,7 +36,7 @@ tests:
   - name: healthy production contract remains quiet
     interval: 30s
     input_series:
-      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0+30x10'
       - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
         values: '0+30x10'
@@ -44,21 +44,21 @@ tests:
         values: '0+30x10'
       - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary"}'
         values: '0+30x10'
-      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_config_snapshot_match{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_config_snapshot_match{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
     alert_rule_test:
       - eval_time: 3m
@@ -80,15 +80,15 @@ tests:
         alertname: TradingTelemetryMissing
         exp_alerts: []
     promql_expr_test:
-      - expr: 'trading_strategy_runtime_binding_ok{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - expr: 'trading_strategy_runtime_binding_ok{server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         eval_time: 3m
         exp_samples:
-          - labels: 'trading_strategy_runtime_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+          - labels: 'trading_strategy_runtime_binding_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
             value: 1
-      - expr: 'trading_strategy_config_snapshot_match{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - expr: 'trading_strategy_config_snapshot_match{server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         eval_time: 3m
         exp_samples:
-          - labels: 'trading_strategy_config_snapshot_match{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+          - labels: 'trading_strategy_config_snapshot_match{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
             value: 1
       - expr: 'trading_target_info{server_id="trading01"}'
         eval_time: 3m
@@ -101,11 +101,11 @@ tests:
   - name: expected run without runtime contract fires a dedicated shadow alert
     interval: 30s
     input_series:
-      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0+30x5'
-      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x5'
-      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0x5'
     alert_rule_test:
       - eval_time: 1m
@@ -114,18 +114,18 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               severity: High
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc expected run has no runtime contract'
+              summary: 'macmini-m2 toobit-mexc-btc expected run has no runtime contract'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md#runtime-contract-missing'
 
   - name: frozen probe timestamps alert even while stale textfiles keep scraping
     interval: 30s
     input_series:
-      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0x10'
       - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
         values: '0x10'
@@ -138,12 +138,12 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               severity: High
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc telemetry is missing or stale'
+              summary: 'macmini-m2 toobit-mexc-btc telemetry is missing or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
           - exp_labels:
               product: tnauqquant
@@ -158,9 +158,9 @@ tests:
   - name: duplicate production process fires a shadow alert
     interval: 30s
     input_series:
-      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0+30x5'
-      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '2x5'
     alert_rule_test:
       - eval_time: 1m
@@ -169,34 +169,34 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               severity: High
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc has duplicate trading processes'
+              summary: 'macmini-m2 toobit-mexc-btc has duplicate trading processes'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-process-down.md'
 
   - name: invalid production binding fires and suppresses process down
     interval: 30s
     input_series:
-      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0+30x10'
-      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_process_count{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0x10'
-      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_config_snapshot_match{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_config_snapshot_match{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0x10'
-      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
     alert_rule_test:
       - eval_time: 2m
@@ -205,12 +205,12 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               severity: High
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc run binding is invalid'
+              summary: 'macmini-m2 toobit-mexc-btc run binding is invalid'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md'
       - eval_time: 3m
         alertname: TradingProcessDown
@@ -219,17 +219,17 @@ tests:
   - name: running config drift remains visible as an invalid binding
     interval: 30s
     input_series:
-      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_runtime_contract_available{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_process_identity_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_strategy_identity_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_config_snapshot_match{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_config_snapshot_match{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0x10'
-      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_log_binding_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
-      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_marker_binding_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
     alert_rule_test:
       - eval_time: 2m
@@ -238,23 +238,23 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               severity: High
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc run binding is invalid'
+              summary: 'macmini-m2 toobit-mexc-btc run binding is invalid'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md'
     promql_expr_test:
-      - expr: 'trading_strategy_runtime_binding_ok{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - expr: 'trading_strategy_runtime_binding_ok{server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         eval_time: 2m
         exp_samples:
-          - labels: 'trading_strategy_runtime_binding_ok{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+          - labels: 'trading_strategy_runtime_binding_ok{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
             value: 1
-      - expr: 'trading_strategy_config_snapshot_match{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - expr: 'trading_strategy_config_snapshot_match{server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         eval_time: 2m
         exp_samples:
-          - labels: 'trading_strategy_config_snapshot_match{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+          - labels: 'trading_strategy_config_snapshot_match{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
             value: 0
 
   - name: missing production telemetry fires independently
@@ -266,12 +266,12 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               severity: High
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc telemetry is missing or stale'
+              summary: 'macmini-m2 toobit-mexc-btc telemetry is missing or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md'
           - exp_labels:
               product: tnauqquant
@@ -297,11 +297,11 @@ tests:
   - name: stopped Trading01 Mainnet with run not expected stays quiet
     interval: 30s
     input_series:
-      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0+30x10'
-      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0+30x10'
-      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
       - series: 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
         values: '0+30x10'
@@ -471,9 +471,9 @@ tests:
   - name: healthy PnL history remains quiet
     interval: 30s
     input_series:
-      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0+30x10'
-      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x10'
     alert_rule_test:
       - eval_time: 4m
@@ -483,9 +483,9 @@ tests:
   - name: frozen PnL history builder alerts through capability inventory
     interval: 30s
     input_series:
-      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0x12'
-      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '1x12'
     alert_rule_test:
       - eval_time: 5m
@@ -494,22 +494,22 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               quote_currency: USDT
               history_capable: "true"
               severity: Medium
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc P&L history is unavailable or stale'
+              summary: 'macmini-m2 toobit-mexc-btc P&L history is unavailable or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#pnl-history-unavailable'
 
   - name: invalid PnL history alerts while build timestamps advance
     interval: 30s
     input_series:
-      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0+30x12'
-      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}'
+      - series: 'tnauqquant_pnl_history_valid{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
         values: '0x12'
     alert_rule_test:
       - eval_time: 5m
@@ -518,14 +518,14 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               quote_currency: USDT
               history_capable: "true"
               severity: Medium
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc P&L history is unavailable or stale'
+              summary: 'macmini-m2 toobit-mexc-btc P&L history is unavailable or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#pnl-history-unavailable'
 
   - name: absent PnL history metrics alert only for capable targets
@@ -537,12 +537,12 @@ tests:
           - exp_labels:
               product: tnauqquant
               environment: production
-              server_id: tnauqquant-prod-1
+              server_id: macmini-m2
               strategy: toobit-mexc-btc
               quote_currency: USDT
               history_capable: "true"
               severity: Medium
               notification_mode: shadow
             exp_annotations:
-              summary: 'tnauqquant-prod-1 toobit-mexc-btc P&L history is unavailable or stale'
+              summary: 'macmini-m2 toobit-mexc-btc P&L history is unavailable or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#pnl-history-unavailable'

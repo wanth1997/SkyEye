@@ -201,7 +201,7 @@ jq -e '
   ([.panels[].targets[].datasource.uid] | all(. == "prometheus" or . == "loki")) and
   ([.panels[] | .targets[] | select(.datasource.uid == "prometheus") | .expr] |
     all(contains("trading_strategy_"))) and
-  ((tostring | contains("tnauqquant-prod-1")) | not) and
+  ((tostring | contains("macmini-m2")) | not) and
   ((tostring | contains("toobit-mexc-btc")) | not) and
   ((tostring | contains("trading01")) | not) and
   ((tostring | contains("lighter-robinhood-btc-canary")) | not) and
@@ -280,7 +280,7 @@ jq -e '
     all((startswith("sum(") or startswith("sum by")) | not)) and
   ([.. | objects | .datasource?.uid? | select(. != null)] |
     all(. == "prometheus" or . == "loki" or . == "alertmanager")) and
-  ((tostring | contains("tnauqquant-prod-1")) | not) and
+  ((tostring | contains("macmini-m2")) | not) and
   ((tostring | contains("toobit-mexc-btc")) | not) and
   ((tostring | contains("trading01")) | not) and
   ((tostring | contains("lighter-robinhood-btc-canary")) | not) and
@@ -387,7 +387,7 @@ rg -q 'msg!~' "$LOKI_RULES" || {
 
 "$INCIDENT_TEST"
 
-if rg -q 'tnauqquant-prod-1|toobit-mexc-btc|trading01|lighter-robinhood-btc-canary|lighter-mainnet-btc-canary' \
+if rg -q 'macmini-m2|toobit-mexc-btc|trading01|lighter-robinhood-btc-canary|lighter-mainnet-btc-canary' \
   "$PROM_RULES" "$LOKI_RULES"
 then
   printf 'FAIL: generic Trading rules still hard-code a server or strategy\n' >&2

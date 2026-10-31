@@ -28,7 +28,7 @@ Restarting Alloy or reloading the probe launchd job is allowed after diagnosis b
 ## Verify recovery
 
 ```promql
-time() - tnauqquant_probe_timestamp_seconds{product="tnauqquant",server_id="tnauqquant-prod-1"}
+time() - tnauqquant_probe_timestamp_seconds{product="tnauqquant",server_id="macmini-m2"}
 ```
 
 The series must return within 30 seconds and remain below 30 seconds for two probe intervals. Also verify that Loki resumes without a large unexpected historical replay.
@@ -49,7 +49,7 @@ sed -n '1,240p' "$(brew --prefix)/var/lib/alloy/trading-textfile/tnauqquant-pnl-
 Verify recovery centrally:
 
 ```promql
-time() - tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",server_id="tnauqquant-prod-1"}
+time() - tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",server_id="macmini-m2"}
 ```
 
 The age must fall below 180 seconds and `tnauqquant_pnl_history_valid` must equal `1`. Diagnose malformed or conflicting source events before restarting only the history LaunchAgent. Do not delete the private history cache or raw logs: retained per-run summaries may be the only source for rotated runs.

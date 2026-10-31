@@ -8,12 +8,14 @@ This is the self-contained, non-secret contract for production Trading hosts. Th
 |---|---|
 | `product` | `tnauqquant` |
 | `environment` | `production` |
-| `server_id` | `tnauqquant-prod-1` |
+| `server_id` | `macmini-m2` |
 | `strategy` | `toobit-mexc-btc` |
 | launch mode | `scripts/tq live run --human <config>` inside operator tmux |
 | auto-restart | disabled |
 | primary PNL | latest `stable=true` `real_pnl_usdt` |
 | Alloy version | the development-accepted version; record exact output |
+
+The macOS host's `server_id` is `macmini-m2` since the 2026-10-31 rename (decision D14). Pre-rename data and the host cutover procedure are described in `docs/trading-serverid-cutover-macmini-m2.md`.
 
 Paths are intentionally not fixed. A different username or repo root changes only the host deployment env, never central labels, rules or dashboard queries.
 
@@ -23,7 +25,7 @@ Paths are intentionally not fixed. A different username or repo root changes onl
 - The untracked Trading `.env` sets `TQ_STRATEGY=toobit-mexc-btc`.
 - The canonical Trading launcher creates `run-state/toobit-mexc-btc/current.json` and `current.done.json` using schema v1.
 - A host-specific Cloudflare service token is authorized only for `prom-push` and `loki-push`; do not include it in the report or Git.
-- The SkyEye operator has registered `tnauqquant-prod-1` centrally in shadow mode.
+- The SkyEye operator has registered `macmini-m2` centrally in shadow mode.
 
 ## Required report before changes
 
@@ -49,7 +51,7 @@ Copy `agents/alloy/trading/deployment.env.example` to `$(brew --prefix)/etc/allo
 
 ```text
 TQ_ENVIRONMENT=production
-TQ_SERVER_ID=tnauqquant-prod-1
+TQ_SERVER_ID=macmini-m2
 TQ_STRATEGY=toobit-mexc-btc
 TQ_REPO_ROOT=/Users/wan/projects/tnauqquant
 TQ_REPO_ROOT_REGEX=(/Users/wan/projects/tnauqquant)

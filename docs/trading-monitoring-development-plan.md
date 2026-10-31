@@ -2,6 +2,8 @@
 
 > **2026-10-29 對帳：** 這份原始建置清單不可當作目前全未完成：`agents/alloy/trading/probe.sh`、`tests/trading/`、`prometheus/rules/trading-targets.yml` 與 Trading fleet/detail dashboard 已在主分支；producer runtime contract 需對 tnauqquant 版本另核對。現行 inventory 只有 Toobit/MEXC 與 Lighter RH，Mainnet／Ourbit 已退役；Access allowlist、shadow→paging、目前部署版號仍須各自證據。
 
+> **2026-10-31 更名（D14）：** production Mac mini 的 `server_id` 已改為 `macmini-m2`。下文決策表與 checklist 中的舊 production ID 為 2026-07-17 的歷史記錄，保留原文；現行值以 `prometheus/rules/trading-targets.yml` 與 `docs/trading-serverid-cutover-macmini-m2.md` 為準。
+
 
 > **狀態：** Initial production monitoring live; Trading01 multi-strategy extension implemented for shadow rollout
 >
