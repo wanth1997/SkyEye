@@ -116,7 +116,13 @@ full shadow → canary process.
    `trading_target_info` rows. Glance at the fleet dashboard once. It records
    the last successfully applied commit in `.git/skyeye-central-deploy.applied`,
    so if a reload fails, re-running the same command validates and reloads the
-   checkout again (also the first run on a checkout updated by `git pull`). It
+   checkout again (also the first run on a checkout updated by `git pull`).
+   A change that needs a container recreate (such as `docker-compose.yml`) is
+   refused when it differs from HEAD or from that record, so a `git pull` by
+   hand cannot slip one past it. Apply it by hand (`docker compose up -d
+   SERVICE`), then run `scripts/central-deploy --manual-applied TARGET_SHA`
+   with the checkout at that commit; it validates, reloads and only then
+   records the commit. It
    refuses untracked files under `prometheus/`, `alertmanager/`,
    `grafana/dashboards/`, `grafana/provisioning/` and `loki/rules/`, because
    those directories go live unvalidated; the only allowed local file there is

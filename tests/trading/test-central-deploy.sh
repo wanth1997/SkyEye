@@ -205,14 +205,65 @@ rg -q 'prom/alertmanager:v0[.]27[.]0 check-config /etc/alertmanager/alertmanager
 rg -q -- '-X POST http://127.0.0.1:9093/-/reload' "$CURL_LOG" || fail "Alertmanager was not reloaded"
 
 printf 'case: changes that need a container recreate are refused\n'
+applied_record="$(git -C "$LIVE" rev-parse --absolute-git-dir)/skyeye-central-deploy.applied"
 printf '# recreate needed\n' >>"$SEED/docker-compose.yml"
 publish 'compose change'
 before="$(live_head)"
+[[ "$(cat "$applied_record")" == "$before" ]] || fail "fixture expected the last apply at $before"
 if output="$(deploy 2>&1)"; then
   fail "deploy accepted a docker-compose.yml change"
 fi
 [[ "$output" == *docker-compose.yml* ]] || fail "refusal did not name the manual path"
 [[ "$(live_head)" == "$before" ]] || fail "refused deploy moved the checkout"
+if deploy --manual-applied "$(git -C "$SEED" rev-parse --short=12 HEAD)" >/dev/null 2>&1; then
+  fail "--manual-applied was accepted before the checkout reached the target"
+fi
+[[ "$(live_head)" == "$before" ]] || fail "--manual-applied moved the checkout"
+
+printf 'case: a recreate change pulled by hand after an apply is refused and not recorded\n'
+"$SEED/scripts/trading-target" --file "$SEED/prometheus/rules/trading-targets.yml" \
+  add --server trading02 --strategy deploy-lane-eth >/dev/null
+publish 'add deploy-lane-eth'
+target="$(git -C "$SEED" rev-parse HEAD)"
+git_q -C "$LIVE" pull --quiet --ff-only origin master
+[[ "$(live_head)" == "$target" ]] || fail "fixture expected the manual pull to reach $target"
+for attempt in 1 2; do
+  reset_logs
+  if output="$(deploy 2>&1)"; then
+    fail "deploy recorded a hand-pulled docker-compose.yml change as applied (attempt $attempt)"
+  fi
+  [[ "$output" == *docker-compose.yml* ]] || fail "refusal did not name docker-compose.yml: $output"
+  [[ "$output" == *"--manual-applied ${target:0:12}"* ]] || \
+    fail "refusal did not say how to record a manual apply: $output"
+  [[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "refused deploy validated or reloaded"
+  [[ "$(cat "$applied_record")" == "$before" ]] || fail "refused deploy advanced the applied record"
+done
+if deploy --dry-run >/dev/null 2>&1; then
+  fail "dry run accepted the hand-pulled docker-compose.yml change"
+fi
+
+printf 'case: a manual apply is recorded only for the named target and after validation\n'
+if deploy --manual-applied "${before:0:12}" >/dev/null 2>&1; then
+  fail "--manual-applied accepted a commit other than the target"
+fi
+[[ "$(cat "$applied_record")" == "$before" ]] || fail "a rejected --manual-applied advanced the record"
+reset_logs
+if FAKE_DOCKER_STATUS=1 deploy --manual-applied "${target:0:12}" >/dev/null 2>&1; then
+  fail "--manual-applied recorded a target that failed validation"
+fi
+[[ "$(cat "$applied_record")" == "$before" ]] || fail "failed validation advanced the record"
+reset_logs
+output="$(deploy --manual-applied "${target:0:12}" 2>&1)" || \
+  fail "deploy refused the acknowledged manual apply: $output"
+[[ "$output" == *"applied by hand at ${target:0:12}"* ]] || \
+  fail "manual apply did not say which recreate-only change it records: $output"
+rg -q 'test rules /tmp/trading-derived.test.yml' "$DOCKER_LOG" || \
+  fail "manual apply was recorded without validating the target"
+rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || \
+  fail "manual apply did not reload Prometheus for the inventory change"
+[[ "$(cat "$applied_record")" == "$target" ]] || fail "acknowledged manual apply was not recorded"
+output="$(deploy)"
+[[ "$output" == Already\ up\ to\ date* ]] || fail "recorded manual apply was not a no-op: $output"
 
 printf 'case: a diverged checkout is refused\n'
 git_q -C "$LIVE" commit --quiet --allow-empty -m 'local divergence'
