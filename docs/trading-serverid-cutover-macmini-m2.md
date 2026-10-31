@@ -7,7 +7,8 @@
 ## 執行前必讀
 
 - **Step 2 必須在 production Mac mini 上、以 Trading 使用者執行**（repo root `/Users/wan/projects/tnauqquant` 的那臺 host）。開發機連不到這臺 host，所以 Step 2 要由使用者本人執行，或由使用者提供可用的 SSH 目標後代為執行。
-- **Cutover 時窗之前，monitoring-prod 不得 `git pull` 這次 merge。** 提前 pull 再 reload（或 Prometheus 重啟）會在 host agent 改名前就把中央 inventory 改成 `macmini-m2`，導致舊名資料不再被 recording rules 收錄，新名也同時觸發 `TradingTelemetryMissing`。若 master 在此之前另有需要部署的變更，只能部署到這次 merge 之前的 commit。
+- **Cutover 時窗之前，monitoring-prod 不得 `git pull`，也不得執行 `scripts/central-deploy`。** 提前部署（或 Prometheus 重啟）會在 host agent 改名前就把中央 inventory 改成 `macmini-m2`，導致舊名資料不再被 recording rules 收錄，新名也同時觸發 `TradingTelemetryMissing`。
+- `scripts/central-deploy` 一律部署 `origin/master` 的最新 commit，無法指定 SHA。所以這個 PR 一旦 merge，**任何中央部署（即使是為了其他無關變更）都會把改名一起上線**。這個 PR 應在 cutover 時窗開始時才 merge；merge 後到 Step 4 完成前，不得部署其他變更。
 - 所有 Trading 告警目前都是 `notification_mode="shadow"`（送往 `shadow-null`），cutover 不會發出 Telegram／email。Step 1 的 silence 是安全網，避免 cutover 前已有告警被 promote 成正式通知。
 - 順序固定為**先 host agent、後中央 rules**，兩步間隔目標 ≤ 5 分鐘。這段時間舊名會短暫出現 shadow `TradingTelemetryMissing`，新名在 inventory 更新前不會被評估。
 - Cutover 時窗（UTC 起訖）必須記錄，並從 Trading shadow/canary 證據中排除。此更名不改任何告警 expression、threshold、`for`、severity 或 routing，所以不需要新一輪 shadow/canary；Step 5 的前後比對就是新 identity 的 smoke check。
@@ -16,8 +17,8 @@
 
 | 名稱 | 說明 |
 |---|---|
-| `MERGE` | 此更名 PR 在 master 的 merge commit SHA |
-| `OLD` | Step 0 時 monitoring-prod 已部署的 HEAD |
+| `MERGE` | 此更名 PR 在 master 的 merge commit SHA；Step 4 部署時 `origin/master` 必須仍等於它 |
+| `OLD` | Step 0 時 monitoring-prod 已部署的 HEAD（Rollback B 由它還原 inventory 檔案） |
 | `CUT` | monitoring-prod 上保存 cutover 證據的目錄，例如 `$HOME/serverid-cutover-20261031` |
 
 monitoring-prod 上的共用 helper：
@@ -36,8 +37,11 @@ CUT="$HOME/serverid-cutover-20261031"; mkdir -p "$CUT"
 cd /home/ubuntu/SkyEye
 OLD=$(git rev-parse HEAD); echo "$OLD" | tee "$CUT/old-head"
 git fetch origin
-git merge-base --is-ancestor "$OLD" "$MERGE" && echo OK-ancestor
-git diff --stat "$OLD" "$MERGE"     # 只應出現此更名 PR 的檔案；若有其他未部署變更，先確認可一起上線
+[ "$(git rev-parse origin/master)" = "$MERGE" ] && echo OK-master-is-merge   # 否則先確認 merge 後多出的 commit
+# 只驗證、不移動 checkout、不 reload：在暫時 worktree 跑 promtool check config、全部 rule tests
+# 與衍生的 Trading inventory test，並列出將被部署的 commits（只應是此更名 PR）
+scripts/central-deploy --dry-run 2>&1 | tee "$CUT/central-deploy-dry-run.log"
+scripts/central-deploy --status | tee "$CUT/central-status-pre.log"
 
 # 必須為 []；若舊名有任何 firing 告警，先處理事件、延後 cutover
 q 'ALERTS{product="tnauqquant",server_id="tnauqquant-prod-1",alertstate="firing"}'
@@ -52,6 +56,8 @@ q 'count by (__name__) ({__name__=~"trading_strategy_.+",server_id="tnauqquant-p
 ```
 
 `expected-targets.json` 必須只把 `tnauqquant-prod-1` 換成 `macmini-m2`，其他 target 原樣保留。
+
+`--dry-run` 必須以 `Dry run: validation passed` 結束。若它拒絕部署（dirty tree、checkout 不在 master、loaded config paths 內有 untracked 檔案、需要 container recreate 的路徑），先在 cutover 時窗外排除原因，不要改用手動 `git pull`。
 
 也檢查 Alertmanager silences（`http://127.0.0.1:9093/#/silences`）：記下 matcher 含 `server_id="tnauqquant-prod-1"` 的 silence，Step 6 再處理。
 
@@ -120,10 +126,13 @@ Step 3 失敗時，中央尚未變更，執行 **Rollback A**。
 
 ```bash
 cd /home/ubuntu/SkyEye
-git merge --ff-only "$MERGE" && git rev-parse HEAD       # 必須等於 $MERGE
-sudo docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" prom/prometheus:v2.54.1 \
-  promtool check config /etc/prometheus/prometheus.yml
-curl -fsS -X POST http://127.0.0.1:9090/-/reload
+git fetch origin
+[ "$(git rev-parse origin/master)" = "$MERGE" ] || echo 'STOP: origin/master moved since Step 0; rerun scripts/central-deploy --dry-run and review'
+# central-deploy 先在暫時 worktree 用 --entrypoint /bin/promtool 跑 check config、rule tests
+# 與衍生的 inventory test；全部通過才 fast-forward 並 reload，任一失敗就不移動 checkout、不 reload
+scripts/central-deploy 2>&1 | tee "$CUT/central-deploy.log"; echo "rc=${PIPESTATUS[0]}"
+git rev-parse HEAD                                       # 必須等於 $MERGE
+scripts/central-deploy --status | tee "$CUT/central-status-post.log"   # Prometheus last reload successful: 1
 sleep 70
 targets | tee "$CUT/post-targets.json"
 diff "$CUT/expected-targets.json" "$CUT/post-targets.json" && echo TARGETS-OK
@@ -132,9 +141,15 @@ jq -S 'map(if .server_id == "tnauqquant-prod-1" then .server_id = "macmini-m2" e
   "$CUT/pre-legacy-targets.json" | diff - "$CUT/post-legacy-targets.json" && echo LEGACY-OK
 ```
 
+依 `central-deploy.log` 判斷結果：
+
+- **`rc=0` 且最後一行是 `central-deploy: done; applied <MERGE>`**：成功，繼續比對 inventory。
+- **在 `Checkout fast-forwarded` 之前失敗**（promtool check、rule test、inventory test 或前置檢查失敗）：中央沒有任何變更，Prometheus 仍是舊 inventory。不要重試或手動 reload，執行 **Rollback A**。
+- **在 `Checkout fast-forwarded` 之後失敗**（`Prometheus rejected the reload` 或 `unsuccessful config reload`）：磁碟已是新版，Prometheus 未套用。不要重啟 Prometheus，也不要照 central-deploy 提示的 `git reset --hard`；執行 **Rollback B**，再執行 **Rollback A**。
+
 預期的 inventory 等於 **cutover 前的集合，只把 `tnauqquant-prod-1` 換成 `macmini-m2`**，其他 target（包括可能已存在的 `trading01/lighter-mainnet-btc-canary`）都要原樣保留。不要拿固定筆數比對。
 
-Loki rules、Grafana dashboards 與 Alertmanager config 沒有變更，不需重啟。
+Loki rules、Grafana dashboards 與 Alertmanager config 沒有變更。若 monitoring-prod 從未用 central-deploy 成功部署過（沒有 `.git/skyeye-central-deploy.applied`），它會另外跑 `amtool check-config` 並 reload Alertmanager；config 未變，silence 不受影響。
 
 ## Step 5 — 驗證（Step 4 後 ≥ 5 分鐘）
 
@@ -195,16 +210,23 @@ launchctl kickstart -k "gui/$(id -u)/com.wanbrain.skyeye-trading-pnl-history"
 grep -ho 'server_id="[^"]*"' "$(brew --prefix)/var/lib/alloy/trading-textfile"/*.prom | sort | uniq -c   # 只剩 tnauqquant-prod-1
 ```
 
-**B — 中央已部署（Step 4 後）**：先做 A，再在 monitoring-prod 執行：
+**B — 中央已部署，或 Step 4 在 fast-forward 之後失敗**：先做 A，再在 monitoring-prod 執行：
 
 ```bash
 cd /home/ubuntu/SkyEye
 git checkout "$(cat "$CUT/old-head")" -- prometheus/rules/trading-targets.yml
-curl -fsS -X POST http://127.0.0.1:9090/-/reload
+# 與 Step 4 相同的閘門：promtool check 成功才 reload
+sudo docker run --rm --entrypoint promtool -v "$PWD/prometheus:/etc/prometheus:ro" \
+  prom/prometheus:v2.54.1 check config /etc/prometheus/prometheus.yml \
+  && curl -fsS -X POST http://127.0.0.1:9090/-/reload && echo RELOADED
 sleep 70
 targets | diff "$CUT/pre-targets.json" - && echo ROLLBACK-OK
 ```
 
-接著以 revert PR 讓 master 與部署一致。revert merge 之前，monitoring-prod 不得 `git pull`，因為 `prometheus/rules/trading-targets.yml` 目前是 local modification。
+- 這裡不用 `scripts/central-deploy`：它只能部署到 `origin/master` 的最新 commit，而那仍包含改名。
+- 也不用它提示的 `git reset --hard`：那會讓 checkout 落後 master，下一次 `scripts/central-deploy` 會直接把改名部署回來。
+- 改用單檔還原：`prometheus/rules/trading-targets.yml` 成為 local modification 後，`scripts/central-deploy` 會因 dirty tree 拒絕部署，直到 revert 完成。
+
+接著以 revert PR 讓 master 回到舊 inventory。revert merge 後，在 monitoring-prod 執行 `git checkout -- prometheus/rules/trading-targets.yml && scripts/central-deploy`，讓 checkout 與 applied 記錄回到 revert commit。
 
 Rollback 同樣會觸發一次 positions 重讀，log 會以原始時間戳補進舊 label，不影響正確性。最後依 Step 6 處理 silence 與 cutover 記錄。
