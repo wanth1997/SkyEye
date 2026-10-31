@@ -104,27 +104,9 @@ Central acceptance requires logs, probe metrics, stable Real PNL equality, corre
 | sidecar required | `0` |
 | repo root | `/home/ubuntu/tnauqquant` |
 
-Trading01 already runs Alloy for ZenIncome. Do not run the generic Linux installer that overwrites `/etc/alloy/config.alloy`, and do not define another central remote-write or Loki sink. Copy the two `deployment-linux-{robinhood,mainnet}.env.example` files to private mode-`0600` staging paths, verify their dedicated executable/config/log/manifest bindings, then render both coexistence instances:
+Trading01 already runs Alloy for ZenIncome. Do not run the generic Linux installer that overwrites `/etc/alloy/config.alloy`, and do not define another central remote-write or Loki sink. Copy the strategy's `deployment-linux-*.env.example` to a private mode-`0600` path, verify its dedicated executable/config/log/manifest bindings, then follow [Add or remove a Trading target](../agents/alloy/trading/README.md#add-or-remove-a-trading-target): one `setup-linux.sh add` on the host, one `scripts/trading-target add` PR, and one `scripts/central-deploy` on monitoring-prod.
 
-```bash
-render_dir="$(mktemp -d /tmp/skyeye-trading-render.XXXXXX)"
-agents/alloy/trading/setup-linux.sh \
-  --env-file /tmp/lighter-robinhood-btc-canary.env \
-  --render-only "$render_dir/robinhood"
-agents/alloy/trading/setup-linux.sh \
-  --env-file /tmp/lighter-mainnet-btc-canary.env \
-  --render-only "$render_dir/mainnet"
-
-validate_dir="$(mktemp -d /tmp/skyeye-alloy-validate.XXXXXX)"
-sudo cp /etc/alloy/*.alloy "$validate_dir/"
-rm -f "$validate_dir/trading.alloy"
-cp "$render_dir/robinhood/trading-metrics.alloy" "$validate_dir/"
-cp "$render_dir/robinhood/trading-lighter-robinhood-btc-canary.alloy" "$validate_dir/"
-cp "$render_dir/mainnet/trading-lighter-mainnet-btc-canary.alloy" "$validate_dir/"
-alloy validate "$validate_dir"
-```
-
-The first install uses `--migrate-singleton --no-start`; the second uses `--no-start`. The installer changes Alloy's `CONFIG_FILE` to `/etc/alloy`, installs a shared textfile fragment plus two exact Loki fragments, and adds only read-only `skyeye-trading-probe@STRATEGY` systemd templates. It validates the combined directory and prints an exact rollback record without restarting Alloy. The textfile directory is setgid `ubuntu:alloy` mode `2770`, each strategy output is `0640`, and Alloy receives only the ACL permissions needed to discover/read each exact raw-log glob. Mainnet begins with `TQ_POC_RUN_EXPECTED=0`; monitoring it does not start the strategy.
+`add` validates the combined `/etc/alloy` directory, installs the per-strategy env and Loki fragment plus the shared textfile collector and read-only `skyeye-trading-probe@STRATEGY` templates, reloads Alloy and enables only that probe, with an exact rollback record. The textfile directory is setgid `ubuntu:alloy` mode `2770`, each strategy output is `0640`, and Alloy receives only the ACL permissions needed to discover/read each exact raw-log glob. Mainnet begins with `TQ_POC_RUN_EXPECTED=0`; monitoring it does not start the strategy. (The 2026-09 singleton migration used the flag form with `--migrate-singleton --no-start`; new targets do not need it.)
 
 Before and after installation record:
 
@@ -143,5 +125,6 @@ The installer must not start, stop, or restart the trading process. If `current.
 ## Rotation, revocation and retirement
 
 - Rotate a token by authorizing a new token for the two push apps, replacing only this host's `config.env`, restarting Alloy and verifying both streams before revoking the old token.
-- On retirement, first change/remove the target inventory and rules so `TradingTelemetryMissing` cannot page, then stop Alloy/probe, revoke the host token and archive host state.
+- To retire one strategy, run `scripts/trading-target remove` (PR, merge, `scripts/central-deploy`) first so `TradingTelemetryMissing` cannot fire, then `sudo agents/alloy/trading/setup-linux.sh retire --strategy STRATEGY` on the host; see [Add or remove a Trading target](../agents/alloy/trading/README.md#add-or-remove-a-trading-target).
+- To retire a whole host, retire each strategy as above, then stop Alloy, revoke the host token and archive remaining host state.
 - Never reuse the development token on production or leave the development target active after that Mac stops running Trading.

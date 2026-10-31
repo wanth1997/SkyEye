@@ -1,3 +1,6 @@
+# Live Trading target inventory. Edit only with scripts/trading-target add|remove;
+# tests derive their expectations from this file (scripts/trading-target render-test).
+
 groups:
   - name: trading-target-inventory
     interval: 1m
