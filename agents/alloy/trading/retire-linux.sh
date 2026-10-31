@@ -85,10 +85,14 @@ TEXTFILE_DIR=""
 TEXTFILE_NAME=""
 if [[ -f "$INSTALL_ENV" ]]; then
   [[ ! -L "$INSTALL_ENV" ]] || die "installed env must not be a symlink: $INSTALL_ENV"
-  [[ "$(installed_env_value TQ_STRATEGY "$INSTALL_ENV")" == "$STRATEGY" ]] || \
+  installed_strategy="$(installed_env_value TQ_STRATEGY "$INSTALL_ENV")" || \
+    die "installed env TQ_STRATEGY cannot be read safely: $INSTALL_ENV"
+  [[ "$installed_strategy" == "$STRATEGY" ]] || \
     die "installed env TQ_STRATEGY does not match $STRATEGY: $INSTALL_ENV"
-  TEXTFILE_DIR="$(installed_env_value TQ_TEXTFILE_DIR "$INSTALL_ENV")"
-  TEXTFILE_NAME="$(installed_env_value TQ_TEXTFILE_NAME "$INSTALL_ENV")"
+  TEXTFILE_DIR="$(installed_env_value TQ_TEXTFILE_DIR "$INSTALL_ENV")" || \
+    die "installed env TQ_TEXTFILE_DIR cannot be read safely: $INSTALL_ENV"
+  TEXTFILE_NAME="$(installed_env_value TQ_TEXTFILE_NAME "$INSTALL_ENV")" || \
+    die "installed env TQ_TEXTFILE_NAME cannot be read safely: $INSTALL_ENV"
   [[ "$TEXTFILE_DIR" == /* && "$TEXTFILE_DIR" != *[[:space:]\"\']* ]] || \
     die "installed env has an unsafe TQ_TEXTFILE_DIR: $TEXTFILE_DIR"
   [[ "$TEXTFILE_NAME" == "tnauqquant-$STRATEGY.prom" ]] || \

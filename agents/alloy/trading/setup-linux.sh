@@ -233,6 +233,27 @@ do
   require_env "$required_name"
 done
 
+if [[ "$SUBCOMMAND" == "add" ]]; then
+  # retire and later sibling adds read these back from the installed env
+  # without executing it, so they must decode to exactly what sourcing gave.
+  for readback_name in \
+    TQ_STRATEGY \
+    TQ_INSTANCE_ID \
+    TQ_EXECUTABLE \
+    TQ_CONFIG_PATH \
+    TQ_RAW_LOG_GLOB \
+    TQ_RUN_MANIFEST \
+    TQ_DONE_MARKER \
+    TQ_TEXTFILE_DIR \
+    TQ_TEXTFILE_NAME
+  do
+    readback_value="$(installed_env_value "$readback_name" "$ENV_FILE")" || \
+      die "$readback_name in $ENV_FILE uses syntax the host tools cannot read without executing it"
+    [[ "$readback_value" == "${!readback_name}" ]] || \
+      die "$readback_name in $ENV_FILE must be a literal NAME=value, NAME=\"value\" or NAME='value' assignment so retire can read it back"
+  done
+fi
+
 COMPONENT_ID="$(component_id_for_strategy "$TQ_STRATEGY")"
 [[ "$COMPONENT_ID" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || \
   die "cannot derive a safe Alloy component ID from TQ_STRATEGY"
@@ -483,7 +504,8 @@ if [[ -d "$INSTALL_ENV_ROOT" ]]; then
   for sibling_env in "$INSTALL_ENV_ROOT"/*.env; do
     [[ -f "$sibling_env" ]] || continue
     [[ "$sibling_env" == "$INSTALL_ENV" ]] && continue
-    sibling_textfile_dir="$(installed_env_value TQ_TEXTFILE_DIR "$sibling_env")"
+    sibling_textfile_dir="$(installed_env_value TQ_TEXTFILE_DIR "$sibling_env")" || \
+      die "sibling env cannot be read safely: $sibling_env"
     [[ "$sibling_textfile_dir" == "$TQ_TEXTFILE_DIR" ]] || \
       die "all probe instances must share one TQ_TEXTFILE_DIR"
     for unique_name in \
@@ -495,7 +517,8 @@ if [[ -d "$INSTALL_ENV_ROOT" ]]; then
       TQ_DONE_MARKER \
       TQ_TEXTFILE_NAME
     do
-      sibling_value="$(installed_env_value "$unique_name" "$sibling_env")"
+      sibling_value="$(installed_env_value "$unique_name" "$sibling_env")" || \
+        die "sibling env cannot be read safely: $sibling_env"
       current_value="${!unique_name}"
       [[ -n "$sibling_value" && "$sibling_value" != "$current_value" ]] || \
         die "$unique_name must be non-empty and distinct across probe instances"

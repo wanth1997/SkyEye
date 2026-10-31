@@ -910,6 +910,52 @@ assert_contains "$race_record/retire.meta" '^status=committed$'
   exit 1
 }
 
+printf 'case: quoted env values installed by add are read back by retire\n'
+QUOTED_ENV="$TEST_ROOT/$MAINNET.quoted.env"
+sed -E \
+  -e 's/^(TQ_STRATEGY|TQ_INSTANCE_ID|TQ_TEXTFILE_DIR)=(.*)$/\1="\2"/' \
+  -e "s/^(TQ_TEXTFILE_NAME|TQ_EXECUTABLE)=(.*)\$/\1='\2'/" \
+  "$MAINNET_ENV" >"$QUOTED_ENV"
+chmod 600 "$QUOTED_ENV"
+assert_contains "$QUOTED_ENV" '^TQ_TEXTFILE_DIR="/'
+assert_contains "$QUOTED_ENV" "^TQ_TEXTFILE_NAME='tnauqquant-"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$QUOTED_ENV" >/dev/null
+cmp -s "$QUOTED_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: add did not install the quoted env\n' >&2
+  exit 1
+}
+if ! retire_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" retire --strategy "$MAINNET" 2>&1)"; then
+  printf 'FAIL: retire could not read the quoted env that add installed: %s\n' "$retire_output" >&2
+  exit 1
+fi
+[[ ! -e "$MAINNET_INSTALLED_ENV" && ! -e "$MAINNET_FRAGMENT" ]] || {
+  printf 'FAIL: retire of the quoted env left its files in place\n' >&2
+  exit 1
+}
+
+printf 'case: add refuses env syntax that the host tools cannot read without executing it\n'
+EXPANDING_ENV="$TEST_ROOT/$MAINNET.expanding.env"
+# The literal ${TQ_STRATEGY} is the point of this fixture.
+# shellcheck disable=SC2016
+sed -e 's/^TQ_INSTANCE_ID=.*$/TQ_INSTANCE_ID="${TQ_STRATEGY}"/' "$MAINNET_ENV" >"$EXPANDING_ENV"
+chmod 600 "$EXPANDING_ENV"
+: >"$SYSTEMCTL_LOG"
+if add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$EXPANDING_ENV" 2>&1)"; then
+  printf 'FAIL: add accepted an env value that only a shell can expand\n' >&2
+  exit 1
+fi
+[[ "$add_output" == *TQ_INSTANCE_ID* ]] || {
+  printf 'FAIL: refusal did not name the unreadable variable: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'add with an expanding env'
+[[ ! -e "$MAINNET_INSTALLED_ENV" ]] || {
+  printf 'FAIL: refused add installed the env\n' >&2
+  exit 1
+}
+
 if rg -q 'tnauqquant' "$SYSTEMCTL_LOG_ALL"; then
   printf 'FAIL: monitoring installer attempted to control a trading service\n' >&2
   exit 1

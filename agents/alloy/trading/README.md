@@ -94,6 +94,11 @@ full shadow → canary process.
    (first switch to directory mode, reload unsupported, or Alloy stopped) it
    refuses and names the pipelines a restart interrupts; re-run with
    `--restart-alloy` once that is acceptable. `--no-start` stages files only.
+   Identity and path values (`TQ_STRATEGY`, `TQ_INSTANCE_ID`, the executable,
+   config, log, manifest and textfile settings) must be literal `NAME=value`,
+   `NAME="value"` or `NAME='value'` assignments with no `$`, backquote or
+   backslash, because `retire` and sibling installs read them back without
+   executing the env; `add` refuses anything else.
    It never starts, stops or signals a trading process: a Mainnet env with
    `TQ_POC_RUN_EXPECTED=0` gets only its read-only probe.
 2. Repo:

@@ -71,11 +71,45 @@ resolve_systemctl() {
   fi
 }
 
-# Reads NAME=value from an env file without executing it.
+# Reads NAME's value from an env file without executing it, decoding the
+# assignment forms that bash `source` and systemd EnvironmentFile= both read
+# the same way: NAME=value (no whitespace, quotes, $, backquote, backslash,
+# ~ or shell operators), NAME="value" (no $, backquote, backslash or ") and
+# NAME='value' (no '). Trailing whitespace is ignored and the last assignment
+# wins. Prints nothing when NAME is absent; fails on any other syntax.
 installed_env_value() {
   local name="$1"
   local path="$2"
-  sed -n "s/^${name}=//p" "$path" | tail -n 1
+  local line="" candidate value readable=1
+  while IFS= read -r candidate || [[ -n "$candidate" ]]; do
+    if [[ "$candidate" == "$name="* ]]; then
+      line="$candidate"
+    fi
+  done <"$path"
+  [[ -n "$line" ]] || return 0
+  value="${line#"$name"=}"
+  value="${value%"${value##*[![:space:]]}"}"
+  case "$value" in
+    \'*\')
+      value="${value:1:${#value}-2}"
+      case "$value" in
+        *\'*) readable=0 ;;
+      esac
+      ;;
+    \"*\")
+      value="${value:1:${#value}-2}"
+      case "$value" in
+        *[\"\\\$\`]*) readable=0 ;;
+      esac
+      ;;
+    *[[:space:]\'\"\\\$\`\;\&\|\<\>\(\)~]*) readable=0 ;;
+  esac
+  if [[ "$readable" -eq 0 ]]; then
+    printf 'cannot read %s from %s without executing it; use NAME=value, NAME="value" or NAME='"'"'value'"'"' with no $, backquote or backslash\n' \
+      "$name" "$path" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
 }
 
 # Prints the Alloy fragments an Alloy reload/restart re-evaluates.
