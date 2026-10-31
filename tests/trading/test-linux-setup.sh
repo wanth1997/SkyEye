@@ -271,6 +271,9 @@ count=0
 [[ ! -f "$ALLOY_CALL_COUNT" ]] || count="$(cat "$ALLOY_CALL_COUNT")"
 count=$((count + 1))
 printf '%s\n' "$count" >"$ALLOY_CALL_COUNT"
+if [[ -n "${ALLOY_HOOK:-}" && "${ALLOY_HOOK_ON_CALL:-0}" == "$count" ]]; then
+  "$ALLOY_HOOK"
+fi
 if [[ "${ALLOY_FAIL_ON_CALL:-0}" == "$count" ]]; then
   exit 1
 fi
@@ -861,6 +864,51 @@ reload_failed_record="$(comm -13 <(printf '%s\n' "$records_before") <(list_retir
 assert_contains "$reload_failed_record/retire.meta" '^status=rolled_back$'
 assert_contains "$reload_failed_record/retire.meta" '^alloy_recovery=reload_pending$'
 assert_not_contains "$reload_failed_record/retire.meta" '^status=committed$'
+
+printf 'case: retire archives the metrics files present after the probe stops\n'
+inflight_metrics="$TEXTFILE_DIR/.tnauqquant-$MAINNET.prom.inflight"
+printf 'tnauqquant_fixture{strategy="%s"} 1\n' "$MAINNET" >"$inflight_metrics"
+rm -f "$mainnet_metrics"
+RACE_HOOK="$TEST_ROOT/probe-race-hook"
+cat >"$RACE_HOOK" <<EOF
+#!/usr/bin/env bash
+# During preflight the in-progress probe run renames its temp output into
+# place, and the next run starts a new temp file.
+mv "$inflight_metrics" "$mainnet_metrics"
+printf 'partial\n' >"$TEXTFILE_DIR/.tnauqquant-$MAINNET.prom.next"
+EOF
+chmod 755 "$RACE_HOOK"
+robinhood_metrics_sha="$(sha_of "$TEXTFILE_DIR/tnauqquant-$ROBINHOOD.prom")"
+records_before="$(list_retire_records)"
+printf '0\n' >"$ALLOY_CALL_COUNT"
+: >"$SYSTEMCTL_LOG"
+if ! retire_output="$(ALLOY_HOOK="$RACE_HOOK" ALLOY_HOOK_ON_CALL=1 \
+  SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" retire --strategy "$MAINNET" 2>&1)"; then
+  printf 'FAIL: retire failed when a probe run finished during preflight: %s\n' "$retire_output" >&2
+  exit 1
+fi
+leftover_metrics="$(find "$TEXTFILE_DIR" -maxdepth 1 \( -name "tnauqquant-$MAINNET.prom" -o \
+  -name ".tnauqquant-$MAINNET.prom.*" \) -print)"
+[[ -z "$leftover_metrics" ]] || {
+  printf 'FAIL: retire left Mainnet metrics behind: %s\n' "$leftover_metrics" >&2
+  exit 1
+}
+race_record="$(comm -13 <(printf '%s\n' "$records_before") <(list_retire_records))"
+assert_contains "$race_record/retire.meta" '^status=committed$'
+[[ -n "$(find "$race_record/previous" -type f -name "tnauqquant-$MAINNET.prom" -print)" &&
+   -n "$(find "$race_record/previous" -type f -name ".tnauqquant-$MAINNET.prom.next" -print)" ]] || {
+  printf 'FAIL: retire record does not hold the post-stop metrics files\n' >&2
+  exit 1
+}
+[[ "$(wc -l <"$race_record/paths.list" | tr -d ' ')" == "4" ]] || {
+  printf 'FAIL: retire record must list env, fragment, metrics and the remaining temp file\n' >&2
+  cat "$race_record/paths.list" >&2
+  exit 1
+}
+[[ "$robinhood_metrics_sha" == "$(sha_of "$TEXTFILE_DIR/tnauqquant-$ROBINHOOD.prom")" ]] || {
+  printf 'FAIL: retire changed the Robinhood metrics output\n' >&2
+  exit 1
+}
 
 if rg -q 'tnauqquant' "$SYSTEMCTL_LOG_ALL"; then
   printf 'FAIL: monitoring installer attempted to control a trading service\n' >&2

@@ -102,14 +102,23 @@ archive_paths=()
 for candidate in "$INSTALL_ENV" "$ALLOY_FRAGMENT"; do
   path_exists "$candidate" && archive_paths+=("$candidate")
 done
-if [[ -n "$TEXTFILE_DIR" ]]; then
-  path_exists "$TEXTFILE_DIR/$TEXTFILE_NAME" && archive_paths+=("$TEXTFILE_DIR/$TEXTFILE_NAME")
-  while IFS= read -r -d '' textfile_temp; do
-    archive_paths+=("$textfile_temp")
-  done < <(find "$TEXTFILE_DIR" -maxdepth 1 -name ".$TEXTFILE_NAME.*" -print0 2>/dev/null)
-fi
 
-if [[ "${#archive_paths[@]}" -eq 0 && "$TIMER_WAS_ENABLED" -eq 0 &&
+# NUL-separated metrics output and probe temp files for this strategy. A
+# running probe creates and renames these, so the set to archive is taken
+# only after the probe is stopped; this early look only decides the no-op.
+list_metrics_paths() {
+  [[ -n "$TEXTFILE_DIR" ]] || return 0
+  if path_exists "$TEXTFILE_DIR/$TEXTFILE_NAME"; then
+    printf '%s\0' "$TEXTFILE_DIR/$TEXTFILE_NAME"
+  fi
+  find "$TEXTFILE_DIR" -maxdepth 1 -name ".$TEXTFILE_NAME.*" -print0 2>/dev/null || true
+}
+METRICS_PRESENT=0
+while IFS= read -r -d '' _metrics_path; do
+  METRICS_PRESENT=1
+done < <(list_metrics_paths)
+
+if [[ "${#archive_paths[@]}" -eq 0 && "$METRICS_PRESENT" -eq 0 && "$TIMER_WAS_ENABLED" -eq 0 &&
       "$TIMER_WAS_ACTIVE" -eq 0 && "$SERVICE_WAS_ACTIVE" -eq 0 ]]; then
   latest_record=""
   if [[ -d "$RETIRED_ROOT" ]]; then
@@ -242,6 +251,13 @@ MUTATION_STARTED=1
 ! unit_state is-enabled "$INSTANCE_TIMER" || die "$INSTANCE_TIMER remained enabled"
 ! unit_state is-active "$INSTANCE_TIMER" || die "$INSTANCE_TIMER remained active"
 ! unit_state is-active "$INSTANCE_SERVICE" || die "$INSTANCE_SERVICE remained active"
+
+# The probe is stopped now, so its metrics output and any temp file it left
+# are final; record and archive exactly that set.
+while IFS= read -r -d '' metrics_path; do
+  archive_paths+=("$metrics_path")
+  printf '%s\n' "$metrics_path" >>"$RECORD/paths.list"
+done < <(list_metrics_paths)
 
 for archive_path in "${archive_paths[@]}"; do
   relative_path="$(record_relative "$archive_path")"

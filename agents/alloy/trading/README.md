@@ -123,8 +123,9 @@ full shadow → canary process.
    then PR and merge.
 2. Central: `scripts/central-deploy`.
 3. Host: `sudo agents/alloy/trading/setup-linux.sh retire --strategy STRATEGY`.
-   It validates `/etc/alloy` without the fragment, disables only that probe,
-   moves its env, fragment and metrics file into
+   It validates `/etc/alloy` without the fragment, disables and stops only
+   that probe, then moves its env, fragment, metrics file and any probe temp
+   file still present (the set is taken after the probe stops) into
    `/etc/skyeye-trading/retired/STRATEGY-<UTC>/` (with `paths.list` and
    `retire.meta`) and reloads Alloy. Shared artifacts, sibling strategies,
    history and Loki data stay. It prints the `add --env-file` command that
