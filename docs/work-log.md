@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-10-31 14:40 — 恢復 Trading01 Lighter Mainnet 監控名單
+
+**改動摘要：** 在中央 Trading inventory 加回 `trading01` / `lighter-mainnet-btc-canary`（shadow），讓使用者以新帳號 765446 重啟 Mainnet lane 前先在 Grafana 看到該策略。
+
+**修改的檔案：**
+- `prometheus/rules/trading-targets.yml` — 新增 Mainnet `trading_target_info` stanza（內容與 PR #45 退役前相同）
+- `prometheus/rules/tests/trading.test.yml` — healthy 與 telemetry-missing 測試納入 Mainnet；新增「lane 停止且 run_expected=0 時 11 條 Trading 告警皆不觸發」測試
+- `tests/trading/test-central-config.sh` — inventory 數量 2→3，加入 Mainnet identity 與 stanza 檢查
+- `docs/project-brief.md` — 現況改為 Mainnet 已恢復監控
+
+**原因/備註：** 所有 Trading 告警仍為 `notification_mode: shadow`（路由到 `shadow-null`），不會發出通知。部署順序：先在 Trading01 安裝 Mainnet probe，再於 monitoring-prod pull 並 reload Prometheus。本 PR 未改 dashboards、alertmanager 或 agents。依使用者指示，此例行 inventory 變更未另做 code review。
+
+---
+
 ## 2026-10-29 03:20 — 專案文件與主分支程式狀態對帳
 
 **改動摘要：** 修正過期的未完成／未發布標籤，將程式實作、歷史驗證、合併／tag 與 production 部署證據分開。
