@@ -79,11 +79,20 @@ reset_logs() {
   : >"$CURL_LOG"
 }
 
-printf 'case: nothing to deploy is a no-op\n'
+printf 'case: first pickup of an already-merged checkout validates and reloads\n'
 reset_logs
 output="$(deploy)"
-[[ "$output" == Already\ up\ to\ date* ]] || fail "up-to-date run did not report a no-op: $output"
-[[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "up-to-date run validated or reloaded"
+[[ "$output" != Already\ up\ to\ date* ]] || fail "first pickup skipped validation and reload: $output"
+rg -q 'check config /etc/prometheus/prometheus.yml' "$DOCKER_LOG" || \
+  fail "first pickup did not validate the checkout"
+rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || \
+  fail "first pickup did not reload Prometheus"
+
+printf 'case: an applied checkout is a no-op\n'
+reset_logs
+output="$(deploy)"
+[[ "$output" == Already\ up\ to\ date* ]] || fail "applied checkout did not report a no-op: $output"
+[[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "applied checkout validated or reloaded"
 
 "$SEED/scripts/trading-target" --file "$SEED/prometheus/rules/trading-targets.yml" \
   add --server trading02 --strategy deploy-lane-btc >/dev/null
@@ -128,6 +137,25 @@ if deploy >/dev/null 2>&1; then
 fi
 git -C "$LIVE" checkout --quiet -- prometheus/prometheus.yml
 
+printf 'case: untracked files in loaded config paths are refused before anything moves\n'
+for untracked in prometheus/rules/review-untracked.yml alertmanager/secrets/extra-secret; do
+  reset_logs
+  mkdir -p "$(dirname "$LIVE/$untracked")"
+  printf 'groups: []\n' >"$LIVE/$untracked"
+  if output="$(deploy 2>&1)"; then
+    fail "deploy accepted the untracked loaded file $untracked"
+  fi
+  [[ "$output" == *"$untracked"* ]] || fail "refusal did not name $untracked: $output"
+  [[ "$(live_head)" == "$before" ]] || fail "refused deploy moved the checkout"
+  [[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "refused deploy validated or reloaded"
+  rm -f "$LIVE/$untracked"
+done
+
+printf 'case: the supported local secret file is allowed\n'
+mkdir -p "$LIVE/alertmanager/secrets"
+printf 'fixture-token' >"$LIVE/alertmanager/secrets/tg_token"
+deploy --dry-run >/dev/null || fail "dry run refused the supported alertmanager/secrets/tg_token"
+
 printf 'case: deploy fast-forwards, reloads Prometheus and shows the live inventory\n'
 reset_logs
 output="$(deploy)"
@@ -139,16 +167,33 @@ fi
 [[ "$output" == *"server_id=trading02 strategy=deploy-lane-btc"* ]] || \
   fail "deploy did not print the live inventory: $output"
 
-printf 'case: a rejected reload is reported with the undo command\n'
+printf 'case: a failed reload is retried by the next run without a manual reset\n'
 "$SEED/scripts/trading-target" --file "$SEED/prometheus/rules/trading-targets.yml" \
   remove --server trading02 --strategy deploy-lane-btc >/dev/null
 publish 'remove deploy-lane-btc'
 before="$(live_head)"
+target="$(git -C "$SEED" rev-parse HEAD)"
 if output="$(FAKE_RELOAD_OK=0 deploy 2>&1)"; then
   fail "deploy accepted an unsuccessful Prometheus reload"
 fi
 [[ "$output" == *"git reset --hard $before"* ]] || fail "reload failure did not print the undo command"
-git -C "$LIVE" reset --quiet --hard "$before"
+[[ "$(live_head)" == "$target" ]] || fail "fixture expected the checkout to advance before the reload"
+reset_logs
+if FAKE_RELOAD_STATUS=22 deploy >/dev/null 2>&1; then
+  fail "a rerun with a rejected Prometheus reload reported success"
+fi
+rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || \
+  fail "a rerun at the already-merged target did not retry the reload"
+reset_logs
+output="$(deploy)"
+[[ "$output" != Already\ up\ to\ date* ]] || fail "retry treated the pending reload as done: $output"
+rg -q 'test rules /tmp/trading-derived.test.yml' "$DOCKER_LOG" || \
+  fail "retry did not revalidate the checkout before reloading"
+rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || fail "retry did not reload Prometheus"
+[[ "$(live_head)" == "$target" ]] || fail "retry moved the checkout"
+reset_logs
+output="$(deploy)"
+[[ "$output" == Already\ up\ to\ date* ]] || fail "successful retry was not recorded as applied: $output"
 
 printf 'case: Alertmanager changes are checked with amtool and reloaded\n'
 reset_logs

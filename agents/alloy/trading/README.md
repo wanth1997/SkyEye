@@ -108,7 +108,14 @@ full shadow → canary process.
 3. Central, on monitoring-prod in `/home/ubuntu/SkyEye`: `scripts/central-deploy`
    (optionally `--dry-run` first). It validates the merged commit in a
    temporary worktree, fast-forwards, reloads Prometheus and prints the live
-   `trading_target_info` rows. Glance at the fleet dashboard once.
+   `trading_target_info` rows. Glance at the fleet dashboard once. It records
+   the last successfully applied commit in `.git/skyeye-central-deploy.applied`,
+   so if a reload fails, re-running the same command validates and reloads the
+   checkout again (also the first run on a checkout updated by `git pull`). It
+   refuses untracked files under `prometheus/`, `alertmanager/`,
+   `grafana/dashboards/`, `grafana/provisioning/` and `loki/rules/`, because
+   those directories go live unvalidated; the only allowed local file there is
+   `alertmanager/secrets/tg_token`.
 
 **Remove** (central first, so `TradingTelemetryMissing` cannot fire):
 
