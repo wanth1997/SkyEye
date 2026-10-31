@@ -8,7 +8,7 @@
 
 - **Step 2 必須在 production Mac mini 上、以 Trading 使用者執行**（repo root `/Users/wan/projects/tnauqquant` 的那臺 host）。開發機連不到這臺 host，所以 Step 2 要由使用者本人執行，或由使用者提供可用的 SSH 目標後代為執行。
 - **Cutover 時窗之前，monitoring-prod 不得 `git pull`，也不得執行 `scripts/central-deploy`。** 提前部署（或 Prometheus 重啟）會在 host agent 改名前就把中央 inventory 改成 `macmini-m2`，導致舊名資料不再被 recording rules 收錄，新名也同時觸發 `TradingTelemetryMissing`。
-- `scripts/central-deploy` 一律部署 `origin/master` 的最新 commit，無法指定 SHA。所以這個 PR 一旦 merge，**任何中央部署（即使是為了其他無關變更）都會把改名一起上線**。這個 PR 應在 cutover 時窗開始時才 merge；merge 後到 Step 4 完成前，不得部署其他變更。
+- `scripts/central-deploy` 一律部署 `origin/master` 的最新 commit，無法指定 SHA。所以這個 PR 一旦 merge，**任何中央部署（即使是為了其他無關變更）都會把改名一起上線**。這個 PR 應在 cutover 時窗開始時才 merge；merge 後到 Step 4 完成前，不得部署其他變更，也不得 merge 其他 PR 到 master：central-deploy 會自己 fetch 並部署當下 master 的最新 commit，Step 4 的 SHA 閘門擋不住閘門通過後幾秒內才進來的 commit。
 - 所有 Trading 告警目前都是 `notification_mode="shadow"`（送往 `shadow-null`），cutover 不會發出 Telegram／email。Step 1 的 silence 是安全網，避免 cutover 前已有告警被 promote 成正式通知。
 - 順序固定為**先 host agent、後中央 rules**，兩步間隔目標 ≤ 5 分鐘。這段時間舊名會短暫出現 shadow `TradingTelemetryMissing`，新名在 inventory 更新前不會被評估。
 - Cutover 時窗（UTC 起訖）必須記錄，並從 Trading shadow/canary 證據中排除。此更名不改任何告警 expression、threshold、`for`、severity 或 routing，所以不需要新一輪 shadow/canary；Step 5 的前後比對就是新 identity 的 smoke check。
@@ -17,7 +17,7 @@
 
 | 名稱 | 說明 |
 |---|---|
-| `MERGE` | 此更名 PR 在 master 的 merge commit SHA；Step 4 部署時 `origin/master` 必須仍等於它 |
+| `MERGE` | 此更名 PR 在 master 的 merge commit 完整 SHA，Step 0 前先設定；Step 4 只在 `origin/master` 仍等於它時才呼叫 central-deploy |
 | `OLD` | Step 0 時 monitoring-prod 已部署的 HEAD（Rollback B 由它還原 inventory 檔案） |
 | `CUT` | monitoring-prod 上保存 cutover 證據的目錄，例如 `$HOME/serverid-cutover-20261031` |
 
@@ -37,7 +37,8 @@ CUT="$HOME/serverid-cutover-20261031"; mkdir -p "$CUT"
 cd /home/ubuntu/SkyEye
 OLD=$(git rev-parse HEAD); echo "$OLD" | tee "$CUT/old-head"
 git fetch origin
-[ "$(git rev-parse origin/master)" = "$MERGE" ] && echo OK-master-is-merge   # 否則先確認 merge 後多出的 commit
+if [ "$(git rev-parse origin/master)" = "$MERGE" ]; then echo OK-master-is-merge
+else echo "STOP: origin/master is $(git rev-parse --short=12 origin/master), MERGE is ${MERGE:-unset}; do not start Step 1"; fi
 # 只驗證、不移動 checkout、不 reload：在暫時 worktree 跑 promtool check config、全部 rule tests
 # 與衍生的 Trading inventory test，並列出將被部署的 commits（只應是此更名 PR）
 scripts/central-deploy --dry-run 2>&1 | tee "$CUT/central-deploy-dry-run.log"
@@ -56,6 +57,8 @@ q 'count by (__name__) ({__name__=~"trading_strategy_.+",server_id="tnauqquant-p
 ```
 
 `expected-targets.json` 必須只把 `tnauqquant-prod-1` 換成 `macmini-m2`，其他 target 原樣保留。
+
+印出 `STOP:` 時不要進入 Step 1。這個區塊其餘命令都是唯讀，照樣執行，用 `--dry-run` 列出的 commits 確認 merge 後多出什麼。核准人同意它們一起上線，才把 `MERGE` 設為新的 `origin/master` 完整 SHA 並重跑 Step 0；否則延後 cutover。
 
 `--dry-run` 必須以 `Dry run: validation passed` 結束。若它拒絕部署（dirty tree、checkout 不在 master、loaded config paths 內有 untracked 檔案、需要 container recreate 的路徑），先在 cutover 時窗外排除原因，不要改用手動 `git pull`。
 
@@ -124,14 +127,32 @@ Step 3 失敗時，中央尚未變更，執行 **Rollback A**。
 
 ## Step 4 — 部署中央 rules（monitoring-prod）
 
+SHA 比對與 `scripts/central-deploy` 在同一個 `if` 裡：`origin/master` 不等於 `MERGE`（或 `MERGE` 未設定）時只印出 `STOP:`，**不會呼叫 central-deploy**。
+
 ```bash
 cd /home/ubuntu/SkyEye
 git fetch origin
-[ "$(git rev-parse origin/master)" = "$MERGE" ] || echo 'STOP: origin/master moved since Step 0; rerun scripts/central-deploy --dry-run and review'
-# central-deploy 先在暫時 worktree 用 --entrypoint /bin/promtool 跑 check config、rule tests
-# 與衍生的 inventory test；全部通過才 fast-forward 並 reload，任一失敗就不移動 checkout、不 reload
-scripts/central-deploy 2>&1 | tee "$CUT/central-deploy.log"; echo "rc=${PIPESTATUS[0]}"
-git rev-parse HEAD                                       # 必須等於 $MERGE
+if [ "$(git rev-parse origin/master)" = "$MERGE" ]; then
+  # central-deploy 先在暫時 worktree 用 --entrypoint /bin/promtool 跑 check config、rule tests
+  # 與衍生的 inventory test；全部通過才 fast-forward 並 reload，任一失敗就不移動 checkout、不 reload
+  scripts/central-deploy 2>&1 | tee "$CUT/central-deploy.log"; echo "rc=${PIPESTATUS[0]}"
+else
+  echo "STOP: origin/master is $(git rev-parse --short=12 origin/master), MERGE is ${MERGE:-unset}; central-deploy NOT run" \
+    | tee "$CUT/central-deploy.log"
+fi
+```
+
+依 `central-deploy.log` 判斷結果：
+
+- **`STOP:`**：central-deploy 沒有執行，中央沒有任何變更。用 `git log --oneline "$MERGE..origin/master"` 與 `scripts/central-deploy --dry-run` 重新審閱多出的 commit。核准人同意它們一起上線，才把 `MERGE` 設為新的 `origin/master` 完整 SHA 並重跑這個區塊；不同意，或無法在 Step 1 的 silence 到期前完成審閱，執行 **Rollback A**。
+- **`rc=0` 且最後一行是 `central-deploy: done; applied <12 碼 SHA>`**：成功，接著跑下面的部署後檢查。
+- **在 `Checkout fast-forwarded` 之前失敗**（promtool check、rule test、inventory test 或前置檢查失敗）：中央沒有任何變更，Prometheus 仍是舊 inventory。不要重試或手動 reload，執行 **Rollback A**。
+- **在 `Checkout fast-forwarded` 之後失敗**（`Prometheus rejected the reload` 或 `unsuccessful config reload`）：磁碟已是新版，Prometheus 未套用。不要重啟 Prometheus，也不要照 central-deploy 提示的 `git reset --hard`；執行 **Rollback B**，再執行 **Rollback A**。
+
+部署後檢查（只在成功時執行）：
+
+```bash
+[ "$(git rev-parse HEAD)" = "$MERGE" ] && echo HEAD-IS-MERGE
 scripts/central-deploy --status | tee "$CUT/central-status-post.log"   # Prometheus last reload successful: 1
 sleep 70
 targets | tee "$CUT/post-targets.json"
@@ -141,11 +162,7 @@ jq -S 'map(if .server_id == "tnauqquant-prod-1" then .server_id = "macmini-m2" e
   "$CUT/pre-legacy-targets.json" | diff - "$CUT/post-legacy-targets.json" && echo LEGACY-OK
 ```
 
-依 `central-deploy.log` 判斷結果：
-
-- **`rc=0` 且最後一行是 `central-deploy: done; applied <MERGE>`**：成功，繼續比對 inventory。
-- **在 `Checkout fast-forwarded` 之前失敗**（promtool check、rule test、inventory test 或前置檢查失敗）：中央沒有任何變更，Prometheus 仍是舊 inventory。不要重試或手動 reload，執行 **Rollback A**。
-- **在 `Checkout fast-forwarded` 之後失敗**（`Prometheus rejected the reload` 或 `unsuccessful config reload`）：磁碟已是新版，Prometheus 未套用。不要重啟 Prometheus，也不要照 central-deploy 提示的 `git reset --hard`；執行 **Rollback B**，再執行 **Rollback A**。
+沒有印出 `HEAD-IS-MERGE`，表示閘門通過後、central-deploy 自己 fetch 之前，master 又前進了（「執行前必讀」的 merge 凍結就是為了避免這種情況）。多出的 commit 已通過同一套 validation 並上線，改名本身也已生效：用 `git log --oneline "$MERGE..HEAD" | tee "$CUT/extra-commits.log"` 記錄並交核准人審閱，再繼續比對 inventory。
 
 預期的 inventory 等於 **cutover 前的集合，只把 `tnauqquant-prod-1` 換成 `macmini-m2`**，其他 target（包括可能已存在的 `trading01/lighter-mainnet-btc-canary`）都要原樣保留。不要拿固定筆數比對。
 
