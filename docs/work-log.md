@@ -15,6 +15,21 @@
 ---
 -->
 
+## 2026-11-01 20:10 — Mac mini Trading `server_id` 更名為 `macmini-m2` 與 cutover runbook
+
+**改動摘要：** 依 D14 將 Mac mini 的 Trading `server_id` 由 `tnauqquant-prod-1` 更名為 `macmini-m2`，同步更新中央 inventory、測試與文件，並新增 operator 用的 cutover runbook（先改 host agent、後以 `scripts/central-deploy` 部署中央 rules，Step 0／4 以 `origin/master == $MERGE` 閘門擋住未審閱的 commit）。
+
+**修改的檔案：**
+- `prometheus/rules/trading-targets.yml`、`prometheus/rules/tests/fixtures/trading-targets.yml` — Mac mini target 改為 `macmini-m2`（fixture 以 `scripts/trading-target` 重算）
+- `prometheus/rules/tests/trading.test.yml`、`tests/trading/test-central-config.sh`、`tests/trading/test-pnl-history.sh` — 測試改用 `macmini-m2`
+- `docs/trading-serverid-cutover-macmini-m2.md` — 新增 cutover 程序：2h silence、Step 4 經 `scripts/central-deploy`、`if/else` SHA 閘門、merge 凍結、Rollback A／B、舊名歷史查詢
+- `runbooks/trading-critical-safety-state.md`、`runbooks/trading-process-down.md`、`runbooks/trading-telemetry-missing.md` — 查詢範例改為 `macmini-m2`
+- `agents/alloy/trading/deployment.env.example`、`agents/alloy/trading/README.md`、`docs/trading-new-server-handoff.md`、`docs/project-brief.md`、`docs/trading-monitoring-development-plan.md` — 範例、現況與 D14 決策
+
+**原因/備註：** 使用者 D14 決定真正改 label（不用 Grafana display mapping），D1 核准 cutover，Mac mini 的 Step 2 由使用者本人執行。Code review R1 C1（promtool／amtool 的 `docker run` 補 `--entrypoint`）與 R2 C3（SHA 閘門改為 `if/else`，不符時不呼叫 `central-deploy`）已修正。舊名只保留在 cutover runbook 與歷史紀錄中。這個 PR merge 後不會自動生效，中央部署照 runbook 在 cutover 時窗內執行；cutover 起訖時間記錄在 operator 報告，隨下一次 SkyEye 修改補進 work-log。
+
+---
+
 ## 2026-11-01 02:20 — Trading 監控目標一鍵新增／移除與中央部署指令
 
 **改動摘要：** 新增 `scripts/trading-target`（inventory add/remove/check/render-test）、`setup-linux.sh add` 與 `retire`（主機端一步安裝／退役，預設只 reload Alloy）、`scripts/central-deploy`（monitoring-prod 拉取已 merge 的設定，驗證後 reload，記錄最後成功套用的 commit）。

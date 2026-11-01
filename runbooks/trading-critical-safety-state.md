@@ -58,16 +58,16 @@ This separation prevents an older config drift from masking a newly missing runt
 ## Central verification
 
 ```promql
-tnauqquant_done_marker{product="tnauqquant",server_id="tnauqquant-prod-1"}
-min({__name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok)",product="tnauqquant",server_id="tnauqquant-prod-1"})
+tnauqquant_done_marker{product="tnauqquant",server_id="macmini-m2"}
+min({__name__=~"tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok)",product="tnauqquant",server_id="macmini-m2"})
 ```
 
 ```logql
-{product="tnauqquant",server_id="tnauqquant-prod-1"}
+{product="tnauqquant",server_id="macmini-m2"}
 | logfmt
 | msg=~"coordinator_fence_stalled|mexcui_recovery_required|mexcui_recovery_required_refusing_normal_startup|shutdown_with_unconsumed_continuation|coordinated_shutdown_preserved_unresolved_fence"
 
-{product="tnauqquant",server_id="tnauqquant-prod-1",level=~"ERROR([+][0-9]+)?|FATAL([+][0-9]+)?"}
+{product="tnauqquant",server_id="macmini-m2",level=~"ERROR([+][0-9]+)?|FATAL([+][0-9]+)?"}
 | logfmt
 | msg!~"coordinator_fence_stalled|mexcui_recovery_required|mexcui_recovery_required_refusing_normal_startup|shutdown_with_unconsumed_continuation|coordinated_shutdown_preserved_unresolved_fence"
 ```

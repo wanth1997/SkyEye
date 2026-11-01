@@ -33,9 +33,9 @@ For a safe marker (`max_cycles_complete` or `reduce_only_complete`), verify the 
 ## Central verification
 
 ```promql
-tnauqquant_process_count{product="tnauqquant",server_id="tnauqquant-prod-1"}
-tnauqquant_run_expected{product="tnauqquant",server_id="tnauqquant-prod-1"}
-tnauqquant_done_marker{product="tnauqquant",server_id="tnauqquant-prod-1"}
+tnauqquant_process_count{product="tnauqquant",server_id="macmini-m2"}
+tnauqquant_run_expected{product="tnauqquant",server_id="macmini-m2"}
+tnauqquant_done_marker{product="tnauqquant",server_id="macmini-m2"}
 ```
 
 Recovery is proven only when the process count and current runtime contract agree. Process count `0` is correct after a verified safe completion; process count `1` is correct while running.

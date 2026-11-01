@@ -10,7 +10,7 @@ groups:
         labels:
           product: tnauqquant
           environment: production
-          server_id: tnauqquant-prod-1
+          server_id: macmini-m2
           strategy: toobit-mexc-btc
           notification_mode: shadow
           quote_currency: USDT
@@ -20,7 +20,7 @@ groups:
         labels:
           product: tnauqquant
           environment: production
-          server_id: tnauqquant-prod-1
+          server_id: macmini-m2
           strategy: toobit-mexc-btc
           notification_mode: shadow
           quote_currency: USDT
