@@ -206,7 +206,7 @@ None of these values may become Loki labels. The complete Trading label budget r
 Another server agent changes environment values only:
 
 - `TQ_ENVIRONMENT=production`
-- `TQ_SERVER_ID=tnauqquant-prod-1`
+- `TQ_SERVER_ID=macmini-m2`
 - canonical `TQ_REPO_ROOT`, executable, config, log glob and run-state paths
 - `TQ_INSTANCE_ID` matching the Trading config
 - one capture-group `TQ_REPO_ROOT_REGEX` matching the canonical root

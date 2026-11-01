@@ -23,7 +23,7 @@ mkdir -p "$RAW_DIR" "$TEXTFILE_DIR"
 
 export TQ_PRODUCT=tnauqquant
 export TQ_ENVIRONMENT=production
-export TQ_SERVER_ID=tnauqquant-prod-1
+export TQ_SERVER_ID=macmini-m2
 export TQ_STRATEGY=toobit-mexc-btc
 export TQ_RAW_LOG_GLOB="$RAW_DIR/*.raw.log"
 export TQ_TIMEZONE=Asia/Taipei
