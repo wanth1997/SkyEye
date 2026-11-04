@@ -341,7 +341,7 @@
         "type": "mixed",
         "uid": "-- Mixed --"
       },
-      "description": "程序顯示精確數量；Runtime Contract 顯示 manifest contract 是否可用；執行綁定只看 process、strategy、log 與 marker；Config 快照獨立揭露 drift。risk_stopped=0 只表示未回報停機，不代表已確認安全。 事故欄位統計最近 15 分鐘的高信心事件；任一值大於 0 都需核對實際持倉與未完成委託，正常 accepted unresolved submission 不列入。",
+      "description": "程序顯示精確數量；Runtime Contract 顯示 manifest contract 是否可用；執行綁定只看 process、strategy、log 與 marker；Config 快照獨立揭露 drift。risk_stopped=0 只表示未回報停機，不代表已確認安全。 事故欄位統計最近 15 分鐘的高信心事件；任一值大於 0 都需核對實際持倉與未完成委託，正常 accepted unresolved submission 不列入。 探針更新只代表 probe 有執行；財務資料年齡與持倉資料年齡才是畫面上金額與部位的快照年齡。持倉由事件更新，閒置時年齡增加不一定代表異常。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -562,7 +562,7 @@
             "properties": [
               {
                 "id": "displayName",
-                "value": "資料更新"
+                "value": "探針更新"
               },
               {
                 "id": "noValue",
@@ -701,6 +701,86 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "K"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 120
+                    },
+                    {
+                      "color": "red",
+                      "value": 300
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "財務資料年齡"
+              },
+              {
+                "id": "noValue",
+                "value": "無資料"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "L"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#5794F2",
+                      "value": null
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "持倉資料年齡"
+              },
+              {
+                "id": "noValue",
+                "value": "無資料"
+              }
+            ]
           }
         ]
       },
@@ -798,11 +878,35 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "time() - trading_strategy_probe_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"} < bool 180",
+          "expr": "abs(time() - trading_strategy_probe_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"}) < bool 180",
           "instant": true,
-          "legendFormat": "資料更新",
+          "legendFormat": "探針更新",
           "range": false,
           "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "abs(time() - trading_strategy_pnl_sample_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"})",
+          "instant": true,
+          "legendFormat": "財務資料年齡",
+          "range": false,
+          "refId": "K"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "time() - min(trading_strategy_position_sample_timestamp_seconds{server_id=\"$server_id\",strategy=\"$strategy\"})",
+          "instant": true,
+          "legendFormat": "持倉資料年齡",
+          "range": false,
+          "refId": "L"
         },
         {
           "datasource": {
