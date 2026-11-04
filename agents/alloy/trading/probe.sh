@@ -247,6 +247,7 @@ latest_position_snapshot() {
     }
     {
       projection = ""
+      sample_time = ""
       initiator_venue = ""
       initiator_side = ""
       initiator_qty = ""
@@ -260,6 +261,7 @@ latest_position_snapshot() {
         key = substr($i, 1, equals - 1)
         value = substr($i, equals + 1)
         gsub(/^"|"$/, "", value)
+        if (key == "time") sample_time = value
         if (key == "portfolio_projection") projection = value
         if (key == "initiator_venue") initiator_venue = value
         if (key == "initiator_side") initiator_side = normalize_side(value)
@@ -277,7 +279,10 @@ latest_position_snapshot() {
         next
       }
 
-      latest = initiator_venue "\t" initiator_side "\t" initiator_qty "\t" \
+      # The "-" placeholder keeps the columns stable: tab is IFS whitespace, so
+      # read would otherwise shift every field when an event has no time.
+      latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t" \
+        initiator_venue "\t" initiator_side "\t" initiator_qty "\t" \
         carrier_venue "\t" carrier_side "\t" carrier_qty
     }
     END { if (latest != "") print latest }
@@ -298,6 +303,7 @@ latest_net_position_snapshot() {
     }
     {
       projection = ""
+      sample_time = ""
       net_side = ""
       net_qty = ""
       for (i = 1; i <= NF; i++) {
@@ -306,13 +312,14 @@ latest_net_position_snapshot() {
         key = substr($i, 1, equals - 1)
         value = substr($i, equals + 1)
         gsub(/^"|"$/, "", value)
+        if (key == "time") sample_time = value
         if (key == "portfolio_projection") projection = value
         if (key == "net_side") net_side = normalize_side(value)
         if (key == "net_qty_btc") net_qty = value
       }
       if (projection == "coordinator_book" && net_side != "" &&
           valid_number(net_qty) && net_qty + 0 >= 0) {
-        latest = net_side "\t" net_qty
+        latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t" net_side "\t" net_qty
       }
     }
     END { if (latest != "") print latest }
@@ -419,6 +426,99 @@ normalize_reason() {
       printf 'unknown\n'
       ;;
   esac
+}
+
+is_future_epoch() {
+  [[ "$1" -gt "$((PROBE_NOW + MAX_FUTURE_SKEW_SECONDS))" ]]
+}
+
+# Prints the event time as epoch seconds, or nothing when it is absent or
+# unparsable. A future time fails: the caller must not publish that sample.
+position_sample_epoch() {
+  local epoch
+  [[ "$1" != "-" ]] || return 0
+  epoch="$(timestamp_to_epoch "$1" || true)"
+  [[ "$epoch" =~ ^[0-9]+$ ]] || return 0
+  ! is_future_epoch "$epoch" || return 1
+  printf '%s\n' "$epoch"
+}
+
+# An older net must never mask newer venues. The producer writes net and venues on
+# one line, so a shared line is the normal case and net stands there, exactly as
+# printed. Venues decide only if that line contradicts itself. Each quantity is
+# printed to 8 decimals, so a consistent line can still differ by rounding.
+net_position_applies() {
+  local net_line="$1"
+  local net_btc="$2"
+  [[ "$net_line" -ge "$VENUE_POSITION_LINE" ]] || return 1
+  [[ "$net_line" -eq "$VENUE_POSITION_LINE" ]] || return 0
+  awk -v net="$net_btc" -v venues="$CURRENT_NET_POSITION_BTC" 'BEGIN {
+    difference = net - venues
+    if (difference < 0) difference = -difference
+    exit !(difference < 0.00000002)
+  }'
+}
+
+# ps -o comm= reports argv[0] on macOS, so the running image comes from /proc
+# or lsof. An empty result means the image could not be read.
+process_executable() {
+  local pid="$1"
+  local path=""
+  if [[ -e /proc/self/exe ]]; then
+    path="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+    path="${path% (deleted)}"
+  elif command -v lsof >/dev/null 2>&1; then
+    path="$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null | awk '/^n/ { print substr($0, 2); exit }' || true)"
+  fi
+  printf '%s\n' "$path"
+}
+
+process_start_epoch() {
+  local pid="$1"
+  local started result
+  started="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null | sed -E 's/[[:space:]]+$//' || true)"
+  [[ -n "$started" ]] || return 1
+  if result="$(LC_ALL=C TZ=UTC date -j -f '%a %b %e %T %Y' "$started" '+%s' 2>/dev/null)"; then
+    printf '%s\n' "$result"
+    return 0
+  fi
+  LC_ALL=C TZ=UTC date -d "$started" '+%s' 2>/dev/null
+}
+
+# A manifest PID alone cannot tell the recorded process from a later one that
+# reused the number, so the OS start time must agree with process_started_at.
+manifest_process_start_matches() {
+  local recorded actual drift
+  recorded="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
+  actual="$(process_start_epoch "$MANIFEST_PID" || true)"
+  [[ "$recorded" =~ ^[0-9]+$ && "$actual" =~ ^[0-9]+$ ]] || return 1
+  drift=$((actual - recorded))
+  [[ "$drift" -ge 0 ]] || drift=$((-drift))
+  [[ "$drift" -le "$MAX_PROCESS_START_DRIFT_SECONDS" ]]
+}
+
+# A safe reason is a claim, not proof. long_btc and short_btc are non-negative
+# amounts and net_btc is signed, so each is compared by magnitude. phase names the
+# engine stage: reduce_only_complete can end in several, and only
+# max_cycles_complete has a fixed one. A zero tolerance is valid when all are zero.
+safe_marker_consistent() {
+  local completed started
+  jq -e '
+    def magnitude: if . < 0 then -. else . end;
+    ((.error // "") == "") and
+    (.phase | length) > 0 and
+    (.reason != "max_cycles_complete" or .phase == "max_cycles_complete") and
+    .dust_tolerance_btc >= 0 and
+    (.long_btc | magnitude) <= .dust_tolerance_btc and
+    (.short_btc | magnitude) <= .dust_tolerance_btc and
+    (.net_btc | magnitude) <= .dust_tolerance_btc
+  ' "$TQ_DONE_MARKER" >/dev/null 2>&1 || return 1
+  completed="$(timestamp_to_epoch "$(jq -r '.completed_at' "$TQ_DONE_MARKER")" || true)"
+  [[ "$completed" =~ ^[0-9]+$ ]] || return 1
+  ! is_future_epoch "$completed" || return 1
+  started="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
+  [[ "$started" =~ ^[0-9]+$ ]] || return 1
+  [[ "$completed" -ge "$started" ]]
 }
 
 emit_gauge() {
@@ -550,32 +650,49 @@ CONFIG_STEM="${CONFIG_STEM%.*}"
 CONFIG_SHA256="$(shasum -a 256 "$TQ_CONFIG_PATH" | awk '{print $1}')"
 ACTUAL_INSTANCE_ID="$(config_instance_id)"
 
+# Sample timestamps ahead of this clock by more than the allowance are rejected.
+MAX_FUTURE_SKEW_SECONDS=120
+MAX_PROCESS_START_DRIFT_SECONDS=10
+PROBE_NOW="$(date +%s)"
+
+# A failed or implausible listing is unknown, never zero processes. Exiting here
+# leaves the old textfile in place, so the frozen probe timestamp raises
+# TradingTelemetryMissing instead of a false ProcessDown or a hidden duplicate.
+PROCESS_LISTING="$(ps -axo pid=,command=)" || die "process listing failed"
+awk -v self="$$" '
+  $1 == 1 { saw_init = 1 }
+  $1 == self { saw_self = 1 }
+  END { exit !(saw_init && saw_self) }
+' <<<"$PROCESS_LISTING" || die "process listing is incomplete"
+
+CONFIG_MATCHED_PIDS="$(awk -v config_abs="$TQ_CONFIG_PATH" -v config_rel="$CONFIG_REL" '
+  {
+    for (i = 2; i <= NF; i++) {
+      value = ""
+      if (($i == "-config" || $i == "--config") && i < NF) value = $(i + 1)
+      else if (index($i, "-config=") == 1) value = substr($i, 9)
+      else if (index($i, "--config=") == 1) value = substr($i, 10)
+      if (substr(value, 1, 2) == "./") value = substr(value, 3)
+      if (value != "" && (value == config_abs || value == config_rel)) {
+        print $1
+        next
+      }
+    }
+  }
+' <<<"$PROCESS_LISTING")"
+
+EXECUTABLE_REAL="$(readlink -f "$TQ_EXECUTABLE" 2>/dev/null || printf '%s' "$TQ_EXECUTABLE")"
 PROCESS_PIDS=()
 while IFS= read -r process_pid; do
-  [[ -n "$process_pid" ]] && PROCESS_PIDS+=("$process_pid")
-done <<EOF
-$(ps -axo pid=,command= | awk \
-  -v executable="$TQ_EXECUTABLE" \
-  -v config_abs="$TQ_CONFIG_PATH" \
-  -v config_rel="$CONFIG_REL" '
-  {
-    pid = $1
-    executable_match = 0
-    config_match = 0
-    for (i = 2; i <= NF; i++) {
-      if ($i == executable) {
-        executable_match = 1
-      }
-      if ($i == "-config" && i < NF &&
-          ($(i + 1) == config_abs || $(i + 1) == config_rel)) {
-        config_match = 1
-      }
-    }
-    if (executable_match && config_match) {
-      print pid
-    }
-  }')
-EOF
+  [[ -n "$process_pid" ]] || continue
+  process_path="$(process_executable "$process_pid")"
+  # An unreadable image stays counted: hiding a live process is the unsafe side.
+  if [[ -z "$process_path" || "$process_path" == "$TQ_EXECUTABLE" ||
+        "$process_path" == "$EXECUTABLE_REAL" ]]
+  then
+    PROCESS_PIDS+=("$process_pid")
+  fi
+done <<<"$CONFIG_MATCHED_PIDS"
 PROCESS_COUNT="${#PROCESS_PIDS[@]}"
 
 LATEST_LOG=""
@@ -616,6 +733,9 @@ COMPLETED_CYCLE_PNL_SERIES=""
 CURRENT_POSITION_VALID=0
 CURRENT_POSITION_SERIES=""
 CURRENT_NET_POSITION_BTC=""
+VENUE_POSITION_LINE=0
+VENUE_POSITION_TIMESTAMP=""
+NET_POSITION_TIMESTAMP=""
 CURRENT_EXCHANGE_VOLUMES=""
 RISK_STOPPED=0
 
@@ -685,7 +805,9 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
   fi
 
   if [[ "$MANIFEST_VALID" -eq 1 ]]; then
-    if [[ "$PROCESS_COUNT" -eq 0 ]] || process_has_pid "$MANIFEST_PID"; then
+    if [[ "$PROCESS_COUNT" -eq 0 ]]; then
+      PROCESS_IDENTITY_OK=1
+    elif process_has_pid "$MANIFEST_PID" && manifest_process_start_matches; then
       PROCESS_IDENTITY_OK=1
     fi
 
@@ -704,7 +826,12 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
         current_pnl_time="$(logfmt_value "$CURRENT_PNL_LINE" time)"
         current_real_pnl="$(logfmt_value "$CURRENT_PNL_LINE" real_pnl_usdt)"
         current_pnl_timestamp="$(timestamp_to_epoch "$current_pnl_time" || true)"
-        if is_number "$current_real_pnl" && [[ "$current_pnl_timestamp" =~ ^[0-9]+$ ]]; then
+        # Read before validity: a rejected sample must not hide a reported risk stop.
+        current_risk_stopped="$(logfmt_value "$CURRENT_PNL_LINE" risk_stopped)"
+        [[ "$current_risk_stopped" == "true" ]] && RISK_STOPPED=1
+        if is_number "$current_real_pnl" && [[ "$current_pnl_timestamp" =~ ^[0-9]+$ ]] &&
+           ! is_future_epoch "$current_pnl_timestamp"
+        then
           CURRENT_PNL_VALID=1
           CURRENT_REAL_PNL="$current_real_pnl"
           PNL_SAMPLE_TIMESTAMP="$current_pnl_timestamp"
@@ -714,13 +841,11 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
           current_rebate="$(logfmt_value "$CURRENT_PNL_LINE" rebate_usdt)"
           current_risk_pnl="$(logfmt_value "$CURRENT_PNL_LINE" risk_pnl_usdt)"
           current_cycles_completed="$(logfmt_value "$CURRENT_PNL_LINE" cycles_completed)"
-          current_risk_stopped="$(logfmt_value "$CURRENT_PNL_LINE" risk_stopped)"
           is_number "$current_equity" && CURRENT_EQUITY="$current_equity"
           is_number "$current_cash_pnl" && CURRENT_CASH_PNL="$current_cash_pnl"
           is_number "$current_rebate" && CURRENT_REBATE="$current_rebate"
           is_number "$current_risk_pnl" && CURRENT_RISK_PNL="$current_risk_pnl"
           is_number "$current_cycles_completed" && CURRENT_CYCLES_COMPLETED="$current_cycles_completed"
-          [[ "$current_risk_stopped" == "true" ]] && RISK_STOPPED=1
         fi
       fi
 
@@ -736,6 +861,8 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       POSITION_SNAPSHOT="$(latest_position_snapshot "$MANIFEST_LOG_PATH")"
       if [[ -n "$POSITION_SNAPSHOT" ]]; then
         IFS=$'\t' read -r \
+          current_venue_line \
+          current_venue_time \
           current_initiator_venue \
           current_initiator_side \
           current_initiator_qty \
@@ -749,9 +876,11 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
            is_number "$current_initiator_qty" &&
            is_number "$current_carrier_qty" &&
            [[ "$current_initiator_side" =~ ^(long|short|flat)$ ]] &&
-           [[ "$current_carrier_side" =~ ^(long|short|flat)$ ]]
+           [[ "$current_carrier_side" =~ ^(long|short|flat)$ ]] &&
+           VENUE_POSITION_TIMESTAMP="$(position_sample_epoch "$current_venue_time")"
         then
           CURRENT_POSITION_VALID=1
+          VENUE_POSITION_LINE="$current_venue_line"
           CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n%s\t%s\t%s\n' \
             "$current_initiator_exchange" "$current_initiator_side" "$current_initiator_qty" \
             "$current_carrier_exchange" "$current_carrier_side" "$current_carrier_qty")"
@@ -761,8 +890,13 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
 
       NET_POSITION_SNAPSHOT="$(latest_net_position_snapshot "$MANIFEST_LOG_PATH")"
       if [[ -n "$NET_POSITION_SNAPSHOT" ]]; then
-        IFS=$'\t' read -r current_net_side current_net_qty <<<"$NET_POSITION_SNAPSHOT"
-        if [[ "$current_net_side" =~ ^(long|short|flat)$ ]] && is_number "$current_net_qty"; then
+        IFS=$'\t' read -r current_net_line current_net_time current_net_side current_net_qty \
+          <<<"$NET_POSITION_SNAPSHOT"
+        if [[ "$current_net_side" =~ ^(long|short|flat)$ ]] && is_number "$current_net_qty" &&
+           net_position_applies "$current_net_line" \
+             "$(signed_position "$current_net_side" "$current_net_qty")" &&
+           NET_POSITION_TIMESTAMP="$(position_sample_epoch "$current_net_time")"
+        then
           CURRENT_POSITION_VALID=1
           CURRENT_NET_POSITION_BTC="$(signed_position "$current_net_side" "$current_net_qty")"
           if [[ "$(executor_map_size)" -eq 1 ]]; then
@@ -806,6 +940,11 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       then
         MARKER_BINDING_OK=1
         DONE_REASON="$(normalize_reason "$(jq -r '.reason' "$TQ_DONE_MARKER")")"
+        case "$DONE_REASON" in
+          max_cycles_complete|reduce_only_complete)
+            safe_marker_consistent || DONE_REASON=unknown
+            ;;
+        esac
         RUN_EXPECTED=0
         PROCESS_IDENTITY_OK=1
       fi
@@ -945,6 +1084,18 @@ trap cleanup_temp EXIT HUP INT TERM
     done <<<"$CURRENT_POSITION_SERIES"
   fi
   [[ -n "$CURRENT_NET_POSITION_BTC" ]] && emit_gauge tnauqquant_current_net_position_btc "Signed net BTC position from the latest coordinator book." "$CURRENT_NET_POSITION_BTC"
+  if [[ -n "$VENUE_POSITION_TIMESTAMP$NET_POSITION_TIMESTAMP" ]]; then
+    printf '# HELP tnauqquant_position_sample_timestamp_seconds Unix timestamp of the position observation behind the published values, by source.\n'
+    printf '# TYPE tnauqquant_position_sample_timestamp_seconds gauge\n'
+    if [[ -n "$VENUE_POSITION_TIMESTAMP" ]]; then
+      printf 'tnauqquant_position_sample_timestamp_seconds{%s,source="venue"} %s\n' \
+        "$METRIC_LABELS" "$VENUE_POSITION_TIMESTAMP"
+    fi
+    if [[ -n "$NET_POSITION_TIMESTAMP" ]]; then
+      printf 'tnauqquant_position_sample_timestamp_seconds{%s,source="net"} %s\n' \
+        "$METRIC_LABELS" "$NET_POSITION_TIMESTAMP"
+    fi
+  fi
   if [[ -n "$CURRENT_EXCHANGE_VOLUMES" ]]; then
     printf '# HELP tnauqquant_current_run_exchange_volume_usd Latest stable current-run volume by mapped exchange.\n'
     printf '# TYPE tnauqquant_current_run_exchange_volume_usd gauge\n'
