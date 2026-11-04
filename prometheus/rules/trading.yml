@@ -98,6 +98,12 @@ groups:
           and on (product, environment, server_id, strategy)
           trading_target_info
 
+      - record: trading_strategy_position_sample_timestamp_seconds
+        expr: |
+          tnauqquant_position_sample_timestamp_seconds{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
       - record: trading_strategy_current_run_started_timestamp_seconds
         expr: |
           tnauqquant_current_run_started_timestamp_seconds{product="tnauqquant",environment="production"}
@@ -316,7 +322,7 @@ groups:
           (
             trading_strategy_current_pnl_valid == 0
             or
-            time() - trading_strategy_pnl_sample_timestamp_seconds > 300
+            abs(time() - trading_strategy_pnl_sample_timestamp_seconds) > 300
           )
         for: 3m
         labels:
@@ -336,10 +342,10 @@ groups:
           )
           unless on (product, environment, server_id, strategy)
           (
-            time() - tnauqquant_probe_timestamp_seconds{
+            abs(time() - tnauqquant_probe_timestamp_seconds{
               product="tnauqquant",
               environment="production"
-            } < 180
+            }) < 180
           )
         for: 0m
         labels:
@@ -348,6 +354,28 @@ groups:
         annotations:
           summary: "{{ $labels.server_id }} {{ $labels.strategy }} telemetry is missing or stale"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md"
+
+      # The probe and Alloy read one host clock, so a host running ahead has both
+      # its values and its sample times ahead, and every age still looks normal.
+      # Only samples stamped later than now show it. Prometheus rejects anything
+      # over 10 minutes ahead, which TradingTelemetryMissing then reports.
+      - alert: TradingSourceClockAhead
+        expr: |
+          sum by (product, environment, server_id, strategy) (
+            count_over_time(tnauqquant_probe_timestamp_seconds{
+              product="tnauqquant",
+              environment="production"
+            }[4m] offset -5m)
+          )
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+        for: 2m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} clock is at least one minute ahead; {{ $labels.strategy }} freshness cannot be trusted"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#source-clock-ahead"
 
       - alert: TradingPnlHistoryUnavailable
         expr: |
@@ -359,10 +387,10 @@ groups:
           unless on (product, environment, server_id, strategy)
           (
             (
-              time() - tnauqquant_pnl_history_build_timestamp_seconds{
+              abs(time() - tnauqquant_pnl_history_build_timestamp_seconds{
                 product="tnauqquant",
                 environment="production"
-              } < 180
+              }) < 180
             )
             and on (product, environment, server_id, strategy)
             (

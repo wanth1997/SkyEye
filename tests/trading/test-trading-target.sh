@@ -169,6 +169,18 @@ render_and_run() {
   fi
 }
 
+printf 'case: one strategy on two servers is refused\n'
+cp "$ORIGINAL" "$WORK/collision.yml"
+"$TOOL" --file "$WORK/collision.yml" add --server collision-a --strategy collision-btc >/dev/null
+cp "$WORK/collision.yml" "$WORK/collision.before.yml"
+if "$TOOL" --file "$WORK/collision.yml" add --server collision-b --strategy collision-btc >/dev/null 2>&1; then
+  fail "the same strategy was accepted on a second server"
+fi
+cmp -s "$WORK/collision.before.yml" "$WORK/collision.yml" || fail "a refused add changed the inventory"
+"$TOOL" --file "$WORK/collision.yml" remove --server collision-a --strategy collision-btc >/dev/null
+"$TOOL" --file "$WORK/collision.yml" add --server collision-b --strategy collision-btc >/dev/null || \
+  fail "remove then add must still move a strategy between servers"
+
 printf 'case: derived promtool test follows a dry-run add and remove\n'
 cp "$ORIGINAL" "$WORK/dry-add.yml"
 "$TOOL" --file "$WORK/dry-add.yml" add --server trading02 --strategy dry-lane-btc >/dev/null

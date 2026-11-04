@@ -51,18 +51,22 @@ jq -e '
     "最新策略日誌 · 已去識別"
   ])) and
   ([.panels[] | select(.title == "監控摘要") | .targets[] | select(.datasource.uid == "prometheus") | .legendFormat] ==
-    ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新"]) and
+    ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "探針更新", "財務資料年齡", "持倉資料年齡"]) and
   ([.panels[] | select(.title == "監控摘要") |
     [.fieldConfig.overrides[] |
       select(any(.properties[]; .id == "noValue")) |
       .matcher.options]
-  ] == [["A", "B", "C", "D", "E", "F"]]) and
+  ] == [["A", "B", "C", "D", "E", "F", "K", "L"]]) and
   ([.panels[] | select(.title == "監控摘要") |
     .fieldConfig.overrides[] |
     select(.matcher.id == "byFrameRefID" and .matcher.options == "A") |
     .properties[] | select(.id == "mappings") | .value[] |
     select(.type == "range") | (.options.from == 2 and .options.to > 1000)
-  ] == [true])
+  ] == [true]) and
+  ([.panels[] | select(.title == "監控摘要") |
+    .fieldConfig.overrides[] |
+    select(.matcher.id == "byFrameRefID" and .matcher.options == "L") |
+    .properties[] | select(.id == "thresholds") | .value.steps[].color] == ["#5794F2"])
 ' "$DETAIL_DASHBOARD" >/dev/null
 
 jq -e '
@@ -72,7 +76,7 @@ jq -e '
   (.panels | length == 3) and
   ([.panels[].title] == ["執行事故 · 15 分鐘", "監控摘要", "策略損益與運行狀態 · 點選策略查看詳情"]) and
   ([.panels[] | select(.title == "監控摘要") | .targets[].legendFormat] ==
-    ["監控策略", "資料過期", "程序異常", "Runtime 缺失", "Prometheus SHADOW"]) and
+    ["監控策略", "資料過期", "程序異常", "Runtime 缺失", "Prometheus 告警"]) and
   ([.panels[] | select(.title == "監控摘要") | .targets[].expr] |
     any(contains("trading_target_info") and contains("unless on") and contains("< 180"))) and
   ([.panels[] | select(.type == "table") | .targets[].expr] |
@@ -80,7 +84,10 @@ jq -e '
   ([.panels[] | select(.type == "table") |
     [.fieldConfig.overrides[].properties[]? |
       select(.id == "displayName") | .value]] |
-    any(contains(["告警", "本輪實現損益", "資料更新"])))
+    any(contains(["告警", "本輪實現損益", "探針更新", "財務資料年齡", "持倉資料年齡"]))) and
+  ([.panels[] | select(.type == "table") | .fieldConfig.overrides[] |
+    select(any(.properties[]; .id == "thresholds")) |
+    any(.properties[]; .id == "custom.cellOptions" and .value.type == "color-text")] | all)
 ' "$FLEET_DASHBOARD" >/dev/null
 
 if [[ -e "$REMOVED_DASHBOARD" ]]; then
@@ -140,14 +147,15 @@ jq -e '
       [$panel.fieldConfig.overrides[] |
         select(.matcher.id == "byFrameRefID" and .matcher.options == $target.refId) |
         .properties[] | select(.id == "displayName") | .value] == [$target.legendFormat])) and
-    ([.targets[].refId] | length == 10 and length == (unique | length)) and
+    ([.targets[].refId] | length == 12 and length == (unique | length)) and
     ([.targets[] | select(.datasource.uid == "loki") | .legendFormat] ==
       ["成交確認卡住 · 15m", "需人工復原 · 15m", "單邊曝險 · 15m", "未解 fence · 15m"]) and
     ([.targets[] | select(.datasource.uid == "loki") |
       .queryType == "instant" and
       (.expr | contains("[15m]") and contains("server_id=\"$server_id\"") and
         contains("strategy=\"$strategy\"") and endswith("or vector(0)"))] | all) and
-    ([.fieldConfig.overrides[] | select(.matcher.id == "byFrameRefID") |
+    ([.fieldConfig.overrides[] |
+      select(.matcher.id == "byFrameRefID" and (.matcher.options | IN("G", "H", "I", "J"))) |
       .properties[] | select(.id == "thresholds") | .value.steps] ==
       [range(4) | [{color: "green", value: null}, {color: "red", value: 1}]])
   ] == [true]) and
@@ -182,7 +190,7 @@ jq -e '
     (.targets[0].expr | contains("trading_strategy_current_run_exchange_volume_usd"))
   ] == [true]) and
   ([.panels[] | select(.title == "監控摘要") |
-    ([.targets[] | select(.datasource.uid == "prometheus") | .legendFormat] == ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新"]) and
+    ([.targets[] | select(.datasource.uid == "prometheus") | .legendFormat] == ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "探針更新", "財務資料年齡", "持倉資料年齡"]) and
     (.targets[0].expr | contains("trading_strategy_process_count") and
       (contains("> bool 0") | not)) and
     (.targets[1].expr | contains("trading_strategy_runtime_contract_available")) and
@@ -190,7 +198,7 @@ jq -e '
     (.targets[3].expr | contains("trading_strategy_config_snapshot_match")) and
     ([.fieldConfig.overrides[] |
       select(any(.properties[]; .id == "noValue")) | .matcher.options] ==
-      ["A", "B", "C", "D", "E", "F"])
+      ["A", "B", "C", "D", "E", "F", "K", "L"])
   ] == [true]) and
   ([.panels[] | select(.title == "本輪實現損益" or .title == "損益組成") |
     .fieldConfig.defaults.unit] | all(. == "suffix: USDT")) and
@@ -217,7 +225,7 @@ jq -e '
   (.panels | length == 3) and
   ([.panels[] | select(.title == "監控摘要") |
     .gridPos == {h: 4, w: 18, x: 0, y: 0} and
-    ([.targets[].legendFormat] == ["監控策略", "資料過期", "程序異常", "Runtime 缺失", "Prometheus SHADOW"]) and
+    ([.targets[].legendFormat] == ["監控策略", "資料過期", "程序異常", "Runtime 缺失", "Prometheus 告警"]) and
     (.targets[1].expr | contains("trading_target_info") and contains("unless on") and contains("< 180")) and
     (.targets[2].expr | contains("trading_strategy_run_expected") and contains("!= bool")) and
     (.targets[3].expr | contains("trading_strategy_runtime_contract_available") and contains("== 0")) and
@@ -254,10 +262,10 @@ jq -e '
     ([.targets[] | select(.refId == "N") | .expr] |
       (length == 1 and (.[0] | contains("trading_strategy_config_snapshot_match")))) and
     ([.targets[] | select(.refId == "I") | .expr] |
-      (length == 1 and (.[0] | contains("trading_strategy_probe_timestamp_seconds < bool 180")))) and
+      (length == 1 and (.[0] | contains("abs(time() - trading_strategy_probe_timestamp_seconds) < bool 180")))) and
     .transformations[1].options.renameByName["Value #I"] == "Telemetry" and
     ([.fieldConfig.overrides[] | select(.matcher.options == "Telemetry") |
-      .properties[] | select(.id == "displayName") | .value] == ["資料更新"]) and
+      .properties[] | select(.id == "displayName") | .value] == ["探針更新"]) and
     (.targets[11].expr |
       contains("count by (strategy)") and
       contains("pending|firing") and
@@ -267,7 +275,7 @@ jq -e '
       select(.type == "range") | (.options.from == 2 and .options.to > 1000)] == [true]) and
     ([.fieldConfig.overrides[].properties[]? |
       select(.id == "displayName") | .value] |
-      contains(["策略", "伺服器", "本輪實現損益", "最近週期損益", "程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "資料更新", "告警"])) and
+      contains(["策略", "伺服器", "本輪實現損益", "最近週期損益", "程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "探針更新", "告警"])) and
     ([.fieldConfig.overrides[].properties[]? |
       select(.id == "links") | .value[].url |
       contains("/d/trading-strategy-detail/") and
@@ -325,7 +333,7 @@ rg -q 'alert:[[:space:]]+TradingPnlHistoryUnavailable' "$PROM_RULES" || {
   printf 'FAIL: P&L history health alert is missing\n' >&2
   exit 1
 }
-rg -U -q 'tnauqquant_probe_timestamp_seconds\{[^}]*\}[[:space:]]*< 180' "$PROM_RULES" || {
+rg -U -q 'tnauqquant_probe_timestamp_seconds\{[^}]*\}\)[[:space:]]*< 180' "$PROM_RULES" || {
   printf 'FAIL: Trading telemetry freshness threshold must be 180 seconds\n' >&2
   exit 1
 }

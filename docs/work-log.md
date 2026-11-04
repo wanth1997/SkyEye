@@ -15,6 +15,23 @@
 ---
 -->
 
+## 2026-11-05 03:17 — Trading probe 與告警的假安全修正
+
+**改動摘要：** 修正 Codex review v2 的八項 Trading finding（P2-07～P2-12、P2-22、P2-24）：probe 不再把矛盾的 safe marker、`ps` 失敗、wrapper 與未來時間當成正常，dashboard 顯示財務與持倉資料年齡，shadow 告警不再抑制已升級的告警。所有 Trading 告警維持 shadow，這次只 merge，未部署。
+
+**修改的檔案：**
+- `agents/alloy/trading/probe.sh` — safe marker 一致性檢查；`ps` 失敗或 listing 不完整時結束 probe；依實際執行檔與啟動時間判斷程序身分；解析多種 `-config` 寫法；舊 net 不再蓋過新 venue；拒收超前 120 秒以上的時間；新增 `tnauqquant_position_sample_timestamp_seconds`
+- `prometheus/rules/trading.yml` — 新增持倉時間 recording rule 與 shadow alert `TradingSourceClockAhead`；三條 freshness rule 加 `abs()`
+- `alertmanager/alertmanager.yml` — inhibit source 排除 `notification_mode="shadow"`
+- `grafana/dashboards/Trading/trading-strategy-detail.json`、`trading-strategy-fleet.json` — 新增財務與持倉年齡，「資料更新」改「探針更新」，fleet 告警計數不再過濾 shadow
+- `scripts/trading-target` — 拒絕同一 strategy 出現在兩台 server
+- `runbooks/trading-telemetry-missing.md` — 新增 Source clock ahead 段落
+- `tests/trading/`、`prometheus/rules/tests/trading-clock-skew.test.yml` — 新增 `test-probe-safety`、`test-alert-routing`、`test-dashboard-semantics`、`test-source-clock`，更新既有測試
+
+**原因/備註：** tnauqquant 的 `reduce_only_complete` 的 phase 是 `startup`、`signal_loop`、`cycle`，不等於 reason，所以 marker 檢查只對 `max_cycles_complete` 要求相等。搬移 strategy 要先 remove 再 add。部署要另外核准：central 走 `scripts/central-deploy`，probe 要到 Trading01 與 Mac mini rollout 才生效。Grafana 前端與完整 probe 的 Linux 端到端尚未驗證。
+
+---
+
 ## 2026-11-01 20:10 — Mac mini Trading `server_id` 更名為 `macmini-m2` 與 cutover runbook
 
 **改動摘要：** 依 D14 將 Mac mini 的 Trading `server_id` 由 `tnauqquant-prod-1` 更名為 `macmini-m2`，同步更新中央 inventory、測試與文件，並新增 operator 用的 cutover runbook（先改 host agent、後以 `scripts/central-deploy` 部署中央 rules，Step 0／4 以 `origin/master == $MERGE` 閘門擋住未審閱的 commit）。

@@ -204,6 +204,17 @@ def validate_inventory(inventory: Inventory, path: str) -> None:
                 f"{path}: duplicate {row.record} row for server_id={row.identity[0]} strategy={row.identity[1]}"
             )
         seen.add(key)
+    # Fleet views key rows by strategy alone, so a slug on two servers would merge
+    # them and let a healthy server hide a stale or stopped one.
+    servers_by_strategy: dict[str, str] = {}
+    for row in inventory.primary_rows():
+        server, strategy = row.identity
+        first_server = servers_by_strategy.setdefault(strategy, server)
+        if first_server != server:
+            raise InventoryError(
+                f"{path}: strategy={strategy} is on server_id={first_server} and "
+                f"server_id={server}; strategy slugs must be unique across servers"
+            )
     primary = {row.identity for row in inventory.primary_rows()}
     for row in inventory.rows:
         if row.record == LEGACY_RECORD and row.identity not in primary:

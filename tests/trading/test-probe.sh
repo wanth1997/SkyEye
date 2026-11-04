@@ -40,15 +40,14 @@ instance_id: "mexc-toobit-btc-initiator-hedge"
 max_cycles: 50
 EOF
 
-cat >"$FAKE_REPO/quant" <<'EOF'
-#!/bin/sh
-trap 'exit 0' TERM INT
-while :; do
-  sleep 1
-done
-EOF
-chmod 755 "$FAKE_REPO/quant"
-today_local="$(TZ=Asia/Taipei date +%F)"
+# Compiled so ps, lsof and /proc report quant itself, as for the real binary.
+printf '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n' >"$TEST_ROOT/fake-quant.c"
+cc -o "$FAKE_REPO/quant" "$TEST_ROOT/fake-quant.c"
+# These events sit at fixed hours of today in +08:00, and the probe rejects future
+# samples. UTC-12 is the last zone to reach each date, so those hours have passed
+# at any time of day and this suite does not depend on when it runs.
+FIXTURE_TIMEZONE=Etc/GMT+12
+today_local="$(TZ="$FIXTURE_TIMEZONE" date +%F)"
 cat >"$LOG_PATH" <<EOF
 time=${today_local}T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=current.1 session_cycle=1 real_pnl_usdt=10 cash_pnl_usdt=8 rebate_usdt=2 risk_pnl_usdt=9 cycles_completed=1 cycle_real_pnl_usdt=10
 time=${today_local}T09:30:00+08:00 level=INFO msg=pnl_status stable=false cycle_completed=false cycle_id=current.pending real_pnl_usdt=999 cash_pnl_usdt=999 rebate_usdt=0 risk_pnl_usdt=999 cycles_completed=1
@@ -81,7 +80,7 @@ export TQ_RUN_MANIFEST="$MANIFEST_PATH"
 export TQ_DONE_MARKER="$MARKER_PATH"
 export TQ_POC_RUN_EXPECTED=1
 export TQ_REQUIRE_RUNTIME_CONTRACT=1
-export TQ_TIMEZONE=Asia/Taipei
+export TQ_TIMEZONE="$FIXTURE_TIMEZONE"
 export TQ_TEXTFILE_DIR="$TEXTFILE_DIR"
 export TQ_EXECUTOR_MAP=toobit-main=toobit,mexc-ui=mexc
 export TQ_SIDECAR_REQUIRED=1
@@ -146,10 +145,19 @@ stop_quant() {
   sleep 0.2
 }
 
+process_started_iso() {
+  local started
+  started="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$1" | sed -E 's/[[:space:]]+$//')"
+  LC_ALL=C TZ=UTC date -j -f '%a %b %e %T %Y' "$started" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
+    LC_ALL=C TZ=UTC date -d "$started" +%Y-%m-%dT%H:%M:%SZ
+}
+
 write_manifest() {
   local pid="$1"
   local config_sha="$2"
+  MANIFEST_STARTED_AT="$(process_started_iso "$pid")"
   jq -n \
+    --arg process_started_at "$MANIFEST_STARTED_AT" \
     --arg run_id "20260717_024506_mexc_toobit_btc_config" \
     --arg strategy "$TQ_STRATEGY" \
     --arg instance_id "$TQ_INSTANCE_ID" \
@@ -166,7 +174,7 @@ write_manifest() {
       instance_id: $instance_id,
       pid: $pid,
       config_sha256: $config_sha256,
-      process_started_at: "2026-07-17T02:45:06Z",
+      process_started_at: $process_started_at,
       executable: $executable,
       config_path: $config_path,
       log_path: $log_path,
@@ -186,6 +194,7 @@ write_marker() {
     --argjson pid "$pid" \
     --arg config_sha256 "$config_sha" \
     --arg reason "$reason" \
+    --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{
       schema_version: 1,
       run_id: $run_id,
@@ -195,7 +204,7 @@ write_marker() {
       config_sha256: $config_sha256,
       reason: $reason,
       phase: $reason,
-      completed_at: "2026-07-17T16:20:00Z",
+      completed_at: $completed_at,
       long_btc: 0,
       short_btc: 0,
       net_btc: 0,
@@ -333,8 +342,10 @@ mv "$config_before_drift" "$CONFIG_PATH"
 sample_timestamp="$(metric_value tnauqquant_pnl_sample_timestamp_seconds)"
 last_completed_timestamp="$(metric_value tnauqquant_last_completed_cycle_timestamp_seconds)"
 run_started_timestamp="$(metric_value tnauqquant_current_run_started_timestamp_seconds)"
-if [[ "$run_started_timestamp" != "1784256306" ]]; then
-  printf 'FAIL: UTC run start expected=1784256306 actual=%s\n' \
+expected_run_started="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$MANIFEST_STARTED_AT" +%s 2>/dev/null ||
+  date -d "$MANIFEST_STARTED_AT" +%s)"
+if [[ "$run_started_timestamp" != "$expected_run_started" ]]; then
+  printf 'FAIL: UTC run start expected=%s actual=%s\n' "$expected_run_started" \
     "${run_started_timestamp:-<missing>}" >&2
   exit 1
 fi
