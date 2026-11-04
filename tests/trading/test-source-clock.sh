@@ -50,19 +50,27 @@ while [ "$real" -le "$now" ]; do
   real=$((real + 15))
 done
 # The inventory group runs once a minute, so the first evaluation that can match
-# arrives after about 80 seconds. Both hosts keep pushing, as live hosts would.
-attempt=0
-alerts=''
-while [ "$attempt" -lt 15 ]; do
+# arrives after about 90 seconds, and firing needs the rule's for: 2m on top: about
+# 255 seconds at worst. Both hosts keep pushing, as live hosts would. The normal
+# host is read in every state on every pass, so a pending alert cannot slip by.
+deadline=$(($(date +%s) + 360))
+firing=''
+normal=''
+while [ "$(date +%s)" -lt "$deadline" ]; do
   sleep 10
   moment=$(date +%s)
   push fixture-ahead fixture-a $((moment + 240)) $((moment + 240))
   push fixture-normal fixture-b "$moment" "$moment"
-  alerts="$(promtool query instant $URL 'ALERTS{alertname="TradingSourceClockAhead"}' 2>&1)"
-  case "$alerts" in *fixture-ahead*) break ;; esac
-  attempt=$((attempt + 1))
+  normal="$(promtool query instant $URL \
+    'ALERTS{alertname="TradingSourceClockAhead",server_id="fixture-normal"}' 2>&1)"
+  case "$normal" in *'=>'*) break ;; esac
+  firing="$(promtool query instant $URL \
+    'ALERTS{alertname="TradingSourceClockAhead",server_id="fixture-ahead",alertstate="firing"}' 2>&1)"
+  case "$firing" in *'=>'*) break ;; esac
 done
-printf '%s\n' "$alerts"
+printf '%s\n' "$firing"
+echo '---normal'
+printf '%s\n' "$normal"
 echo '---ages'
 promtool query instant $URL 'abs(time() - tnauqquant_probe_timestamp_seconds) < 180' 2>&1
 RUN
@@ -70,10 +78,13 @@ RUN
 # Files travel over stdin: a bind mount of $TMPDIR is empty on a Docker VM.
 output="$(tar -C "$WORK" -cf - . | docker run -i --rm --network none --entrypoint /bin/sh "$IMAGE" \
   -c 'mkdir -p /tmp/w && tar -xf - -C /tmp/w && sh /tmp/w/run.sh')"
-alerts="${output%%---ages*}"
-ages="${output#*---ages}"
+firing="${output%%---normal*}"
+rest="${output#*---normal}"
+normal="${rest%%---ages*}"
+ages="${rest#*---ages}"
 [[ "$ages" == *'server_id="fixture-ahead"'* ]] || \
   fail "fixture no longer shows the blind spot: the ahead host must look fresh by age"
-[[ "$alerts" == *'server_id="fixture-ahead"'* ]] || fail "a host running ahead raised no TradingSourceClockAhead"
-[[ "$alerts" != *'server_id="fixture-normal"'* ]] || fail "a normal host raised TradingSourceClockAhead"
+[[ "$normal" != *'=>'* ]] || fail "a normal host raised TradingSourceClockAhead"
+[[ "$firing" == *'alertstate="firing"'*'server_id="fixture-ahead"'*'=>'* ]] || \
+  fail "a host running ahead never fired TradingSourceClockAhead"
 printf 'PASS: source clock ahead detection\n'
