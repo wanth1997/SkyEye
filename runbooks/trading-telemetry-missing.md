@@ -54,6 +54,16 @@ time() - tnauqquant_pnl_history_build_timestamp_seconds{product="tnauqquant",ser
 
 The age must fall below 180 seconds and `tnauqquant_pnl_history_valid` must equal `1`. Diagnose malformed or conflicting source events before restarting only the history LaunchAgent. Do not delete the private history cache or raw logs: retained per-run summaries may be the only source for rotated runs.
 
+## Source clock ahead
+
+`TradingSourceClockAhead` means samples from this host carry times later than the central clock. Probe and Alloy share that clock, so ages look normal while the data is delayed by the skew: a frozen probe stays green for as long as the host is ahead.
+
+1. Treat every freshness indicator for this host as unknown until the clock is fixed.
+2. Check time sync on the host and correct it.
+3. Expect `TradingTelemetryMissing` after the correction. Prometheus rejects the corrected samples as out of order until central time passes the newest future sample, at most 10 minutes later.
+
+A host more than 10 minutes ahead does not raise this alert: Prometheus rejects all of its samples and `TradingTelemetryMissing` fires instead.
+
 ## Post-incident
 
 - Record whether the failure was probe, Alloy, host, network, Access policy or token.

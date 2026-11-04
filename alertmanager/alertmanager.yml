@@ -29,7 +29,8 @@ route:
       continue: false
 
 inhibit_rules:
-  - source_matchers: [alertname="TradingCriticalSafetyState"]
+  # A shadow source never notifies, so it must not silence a promoted target.
+  - source_matchers: [alertname="TradingCriticalSafetyState", notification_mode!="shadow"]
     target_matchers: [alertname=~"TradingCritical(Log|Warn)Event"]
     equal: [product, environment, server_id, strategy]
 

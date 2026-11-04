@@ -235,7 +235,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Prometheus SHADOW"
+              "options": "Prometheus 告警"
             },
             "properties": [
               {
@@ -313,7 +313,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "count(trading_target_info{product=\"tnauqquant\",environment=\"production\"} unless on (product, environment, server_id, strategy) (time() - trading_strategy_probe_timestamp_seconds < 180)) or vector(0)",
+          "expr": "count(trading_target_info{product=\"tnauqquant\",environment=\"production\"} unless on (product, environment, server_id, strategy) (abs(time() - trading_strategy_probe_timestamp_seconds) < 180)) or vector(0)",
           "instant": true,
           "legendFormat": "資料過期",
           "range": false,
@@ -349,9 +349,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "count(ALERTS{alertname=~\"Trading.*\",alertstate=~\"pending|firing\",notification_mode=\"shadow\"}) or vector(0)",
+          "expr": "count(ALERTS{alertname=~\"Trading.*\",alertstate=~\"pending|firing\"}) or vector(0)",
           "instant": true,
-          "legendFormat": "Prometheus SHADOW",
+          "legendFormat": "Prometheus 告警",
           "range": false,
           "refId": "E"
         }
@@ -677,7 +677,7 @@
               },
               {
                 "id": "displayName",
-                "value": "資料更新"
+                "value": "探針更新"
               },
               {
                 "id": "noValue",
@@ -917,6 +917,81 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Financial age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 120
+                    },
+                    {
+                      "color": "red",
+                      "value": 300
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "displayName",
+                "value": "財務資料年齡"
+              },
+              {
+                "id": "noValue",
+                "value": "無資料"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Position age"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "displayName",
+                "value": "持倉資料年齡"
+              },
+              {
+                "id": "noValue",
+                "value": "無資料"
+              }
+            ]
           }
         ]
       },
@@ -1038,7 +1113,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (strategy) (time() - trading_strategy_probe_timestamp_seconds < bool 180)",
+          "expr": "max by (strategy) (abs(time() - trading_strategy_probe_timestamp_seconds) < bool 180)",
           "format": "table",
           "instant": true,
           "range": false,
@@ -1050,7 +1125,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (strategy) (time() - trading_strategy_probe_timestamp_seconds)",
+          "expr": "max by (strategy) (abs(time() - trading_strategy_probe_timestamp_seconds))",
           "format": "table",
           "instant": true,
           "range": false,
@@ -1074,7 +1149,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "count by (strategy) (ALERTS{alertname=~\"Trading.*\",alertstate=~\"pending|firing\",notification_mode=\"shadow\"}) or on (strategy) (0 * max by (strategy) (trading_target_info{product=\"tnauqquant\",environment=\"production\"}))",
+          "expr": "count by (strategy) (ALERTS{alertname=~\"Trading.*\",alertstate=~\"pending|firing\"}) or on (strategy) (0 * max by (strategy) (trading_target_info{product=\"tnauqquant\",environment=\"production\"}))",
           "format": "table",
           "instant": true,
           "range": false,
@@ -1103,6 +1178,30 @@
           "instant": true,
           "range": false,
           "refId": "N"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (strategy) (abs(time() - trading_strategy_pnl_sample_timestamp_seconds))",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "O"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (strategy) (time() - trading_strategy_position_sample_timestamp_seconds)",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "P"
         }
       ],
       "title": "策略損益與運行狀態 · 點選策略查看詳情",
@@ -1135,7 +1234,10 @@
               "__name__": true,
               "environment": true,
               "product": true,
-              "Time 11": true
+              "Time 11": true,
+              "Time 14": true,
+              "Time 15": true,
+              "Time 16": true
             },
             "indexByName": {
               "strategy": 0,
@@ -1152,7 +1254,9 @@
               "Value #H": 11,
               "Value #I": 12,
               "Value #J": 13,
-              "Value #L": 14
+              "Value #L": 16,
+              "Value #O": 14,
+              "Value #P": 15
             },
             "renameByName": {
               "strategy": "Strategy",
@@ -1169,7 +1273,9 @@
               "Value #H": "Risk",
               "Value #I": "Telemetry",
               "Value #J": "Telemetry age",
-              "Value #L": "Alerts"
+              "Value #L": "Alerts",
+              "Value #O": "Financial age",
+              "Value #P": "Position age"
             }
           }
         }
