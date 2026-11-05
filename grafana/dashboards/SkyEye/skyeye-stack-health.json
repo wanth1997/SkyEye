@@ -188,7 +188,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(up == 0) OR on() vector(0)",
+          "expr": "count(up == 0) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
@@ -404,7 +404,7 @@
     {
       "id": 22,
       "type": "timeseries",
-      "title": "規則評估時間 p95 (慢=問題)",
+      "title": "規則評估時間 p99 (慢=問題)",
       "gridPos": {
         "x": 0,
         "y": 17,
@@ -421,8 +421,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(prometheus_rule_evaluation_duration_seconds_bucket[5m])))",
-          "legendFormat": "p95",
+          "expr": "max(prometheus_rule_evaluation_duration_seconds{quantile=\"0.99\"})",
+          "legendFormat": "p99",
           "refId": "A"
         }
       ],
@@ -1407,7 +1407,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(probe_success == 0) OR on() vector(0)",
+          "expr": "count(probe_success == 0) OR on() vector(0)",
           "refId": "A",
           "instant": true
         }
