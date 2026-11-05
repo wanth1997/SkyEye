@@ -7,6 +7,7 @@
 #   FAKE_AWS_CP        ok | fail | fail_times:N | truncate
 #   FAKE_AWS_LS        ok | fail | fail_times:N
 # FAKE_AWS_SYNC_HOOK runs with the source directory before an upload.
+# FAKE_AWS_DOWNLOAD_HOOK runs before a download.
 set -u
 : "${FAKE_S3:?FAKE_S3 unset: refusing to run}"
 : "${FAKE_LOG:?FAKE_LOG unset: refusing to run}"
@@ -66,6 +67,7 @@ sync_download() {
   from="$(s3path "$1")"
   to="$2"
   mode="${FAKE_AWS_DOWNLOAD:-ok}"
+  [ -z "${FAKE_AWS_DOWNLOAD_HOOK:-}" ] || "$FAKE_AWS_DOWNLOAD_HOOK"
   if [ "$mode" = fail_all ]; then
     echo "fatal error: An error occurred (AccessDenied) when calling the ListObjectsV2 operation: fake" >&2
     exit 1

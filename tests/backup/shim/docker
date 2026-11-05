@@ -4,6 +4,8 @@
 #   FAKE_DOCKER_STOP     ok | fail
 #   FAKE_DOCKER_UP       ok | fail
 #   FAKE_DOCKER_CREATE   ok | fail
+#   FAKE_DOCKER_STOP_HOOK  runs before a stop takes effect
+#   FAKE_DOCKER_RUN_HOOK   runs before docker run does anything
 #   FAKE_PROMTOOL        ok | fail
 #   FAKE_DUMP_SHORT      ULID whose dump stops early, exit 0, as real promtool does
 # A file volume-unknown in FAKE_LOG means a host where Docker has not created the
@@ -43,6 +45,7 @@ case "${1:-}" in
   compose)
     case " $* " in
       *" stop "*)
+        [ -z "${FAKE_DOCKER_STOP_HOOK:-}" ] || "$FAKE_DOCKER_STOP_HOOK"
         [ "${FAKE_DOCKER_STOP:-ok}" = ok ] || exit 1
         echo stopped >"$state"
         ;;
@@ -62,6 +65,7 @@ case "${1:-}" in
     exit 0
     ;;
   run)
+    [ -z "${FAKE_DOCKER_RUN_HOOK:-}" ] || "$FAKE_DOCKER_RUN_HOOK"
     case " $* " in
       *" tsdb dump "*)
         # promtool tsdb dump | wc -l over the one-block view. Real promtool refuses

@@ -6,8 +6,9 @@
 # Exit codes:
 #   0 done                      6 download failed
 #   2 refused, nothing touched  7 verification failed
-#   3 generation not found or   8 could not stop or swap, Prometheus left as it was
-#     it has no MANIFEST.json   9 health check failed, rolled back to the previous data
+#   3 generation not found or   8 switch ended before any data moved, Prometheus is
+#     it has no MANIFEST.json     on the data it had
+#                               9 switch failed after the swap, rolled back to the previous data
 #   4 MANIFEST.json invalid    10 rollback failed, a human has to look now
 #   5 not enough disk space
 #
@@ -53,6 +54,7 @@ PARKED_NAME_REGEX='^_data\.pre-restore-[0-9]{8}T[0-9]{6}Z$'
 
 LIVE_DIR="$VOLUME_DIR/_data"
 SWITCH_STATE="$RESTORE_ROOT/switch.state"
+RESTORE_LOCK="$RESTORE_ROOT/lock"
 
 TARGET=""  # generation id, or legacy-<date> for the staging directory of an old prefix
 LEGACY=0
@@ -84,8 +86,9 @@ Usage: restore-prometheus.sh <command>
                               running; the read uses one CPU and no extra disk. A gap of over
                               an hour stops it after all blocks were read. --accept-gaps is for
                               a gap known to be a real outage. It never skips the read.
-  switch <id> --yes [--fresh] Stop Prometheus, rename _data to _data.pre-restore-<time>, move
-                              the verified data in, start, and check /-/ready and
+  switch <id> --yes [--fresh] Hash the staged data again and refuse if it changed after verify.
+                              Then stop Prometheus, rename _data to _data.pre-restore-<time>,
+                              move the verified data in, start, and check /-/ready and
                               prometheus_tsdb_blocks_loaded. A failed check rolls back by itself.
   rollback                    Undo the last switch.
   finalize --yes              Delete _data.pre-restore-<time>, at least 24 hours after the switch.
@@ -96,6 +99,10 @@ nothing recorded what a full upload contained, so a partial block that passes th
 per-block checks cannot be told from a good one.
 
 --fresh is for a rebuilt host where _data is missing or empty, so there is nothing to keep.
+
+Only one of fetch, verify, switch, rollback and finalize runs at a time, whatever generation
+it is for: the others refuse. A rollback that cannot wait for a long verify has to stop it.
+switch, rollback and finalize also refuse while a backup runs.
 
 verify counts dumped samples against stats.numSamples of each block, because promtool exits 0
 with no error on a block it could not read to the end. Native histograms print fewer lines
@@ -144,10 +151,30 @@ state_get() {
   awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$SWITCH_STATE"
 }
 
+# phase: stopping (no data moved yet), moving, switched.
 state_write() { # id parked fresh phase switched_at
   local tmp="$SWITCH_STATE.tmp"
-  printf 'id=%s\nparked=%s\nfresh=%s\nphase=%s\nswitched_at=%s\n' "$1" "$2" "$3" "$4" "$5" >"$tmp"
-  mv "$tmp" "$SWITCH_STATE"
+  printf 'id=%s\nparked=%s\nfresh=%s\nphase=%s\nswitched_at=%s\n' "$1" "$2" "$3" "$4" "$5" >"$tmp" &&
+    mv "$tmp" "$SWITCH_STATE"
+}
+
+# Everything that writes staging or switch.state runs under this one, and checks what it
+# depends on only after taking it. fetch and verify stay outside the backup lock: they
+# never touch _data, and they run for hours. Their children keep fd 7 on purpose: an aws
+# that outlives a killed fetch is still writing to the staging directory.
+lock_restore() {
+  mkdir -p "$RESTORE_ROOT"
+  exec 7>"$RESTORE_LOCK"
+  flock -n 7 || die "$EXIT_REFUSED" "another restore command is running; wait for it or stop it"
+}
+
+# For the commands that move or delete anything next to _data: a backup uploads from
+# _data/snapshots for as long as it runs.
+lock_live_data() {
+  lock_restore
+  mkdir -p "$(dirname "$BACKUP_LOCK")"
+  exec 8>"$BACKUP_LOCK"
+  flock -n 8 || die "$EXIT_REFUSED" "a backup is running; wait for it"
 }
 
 parse_target() {
@@ -269,7 +296,7 @@ check_free_space() { # bytes of the generation
 
 cmd_fetch() {
   parse_target "$@"
-  mkdir -p "$RESTORE_ROOT"
+  lock_restore
   check_same_filesystem
   legacy_warning
 
@@ -288,7 +315,7 @@ cmd_fetch() {
   fi
   check_free_space "$total"
 
-  rm -rf -- "${STAGE:?}/data" "$STAGE/VERIFIED" "$STAGE/MANIFEST.json" "$STAGE/blocks.json"
+  rm -rf -- "${STAGE:?}/data" "$STAGE/VERIFIED" "$STAGE/MANIFEST.json" "$STAGE/blocks.json" "$STAGE/inventory.tsv"
   mkdir -p "$STAGE/data"
   chmod 0700 "$STAGE"
   [ "$LEGACY" -eq 1 ] || cp "$manifest" "$STAGE/MANIFEST.json"
@@ -301,6 +328,34 @@ cmd_fetch() {
 }
 
 # --- verify -------------------------------------------------------------------
+
+# What is staged now and what verify approved, in one format: path, size, sha256.
+staged_inventory() {
+  local path
+  (cd "$STAGE/data" && find . ! -type d | sed 's|^\./||') | while IFS= read -r path; do
+    if [ -f "$STAGE/data/$path" ] && [ ! -L "$STAGE/data/$path" ]; then
+      printf '%s\t%s\t%s\n' "$path" "$(wc -c <"$STAGE/data/$path" | tr -d ' ')" \
+        "$(sha256sum "$STAGE/data/$path" | awk '{print $1}')"
+    else
+      printf '%s\tnot a file\n' "$path"
+    fi
+  done | LC_ALL=C sort
+}
+
+# A legacy prefix has no manifest, so verify keeps its own list of what it checked.
+approved_inventory() {
+  if [ "$LEGACY" -eq 1 ]; then
+    cat "$STAGE/inventory.tsv"
+  else
+    jq -r '.files[] | [.path, (.size | tostring), .sha256] | @tsv' "$STAGE/MANIFEST.json" | LC_ALL=C sort
+  fi
+}
+
+verified_stamp() { # what VERIFIED holds
+  local approved="$STAGE/MANIFEST.json"
+  [ "$LEGACY" -eq 0 ] || approved="$STAGE/inventory.tsv"
+  sha256sum "$approved" | awk '{print $1}'
+}
 
 verify_files() { # manifest; prints one line per problem
   local manifest="$1" data="$STAGE/data" path size sum got_size got_sum have want
@@ -413,9 +468,10 @@ read_every_sample() { # ulids file
 
 cmd_verify() {
   parse_target "$@"
+  lock_restore
   [ -d "$STAGE/data" ] || die "$EXIT_REFUSED" "nothing fetched at $STAGE/data"
   legacy_warning
-  rm -f "$STAGE/VERIFIED" "$STAGE/blocks.json" "$STAGE/timeline"
+  rm -f "$STAGE/VERIFIED" "$STAGE/blocks.json" "$STAGE/timeline" "$STAGE/inventory.tsv"
 
   local manifest="$STAGE/MANIFEST.json" problems ulids stamp
   tmp_file problems
@@ -424,17 +480,17 @@ cmd_verify() {
   if [ "$LEGACY" -eq 1 ]; then
     (cd "$STAGE/data" && find . -mindepth 1 -maxdepth 1 -type d | sed 's|^\./||') | LC_ALL=C sort >"$ulids"
     [ -s "$ulids" ] || die "$EXIT_VERIFY" "no block directories in $STAGE/data"
-    stamp=legacy
+    staged_inventory >"$STAGE/inventory.tsv"
   else
     [ -f "$manifest" ] || die "$EXIT_REFUSED" "no MANIFEST.json at $STAGE; fetch again"
     manifest_is_valid "$manifest" "$TARGET" || die "$EXIT_BAD_MANIFEST" "MANIFEST.json of $TARGET is invalid"
     jq -r '.blocks[].ulid' "$manifest" | LC_ALL=C sort >"$ulids"
-    stamp="$(sha256sum "$manifest" | awk '{print $1}')"
     verify_files "$manifest" >>"$problems"
     if [ "$(jq -r '.prometheus_image // ""' "$manifest")" != "$PROM_IMAGE" ]; then
       log "WARN: generation was taken with $(jq -r '.prometheus_image // "an unknown image"' "$manifest"); checking with $PROM_IMAGE"
     fi
   fi
+  stamp="$(verified_stamp)"
   verify_blocks "$ulids" >>"$problems"
   if [ -s "$problems" ]; then
     cat "$problems" >&2
@@ -466,7 +522,7 @@ cmd_verify() {
 # --- switch, rollback, finalize -----------------------------------------------
 
 compose() {
-  docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" "$@" 8>&-
+  docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT" "$@" 7>&- 8>&-
 }
 
 prometheus_stop() {
@@ -515,6 +571,17 @@ blocks_loaded_ok() { # blocks.json
   [ "$loaded" -gt 0 ] && [ "$loaded" -ge "$keep" ]
 }
 
+restart_previous_data() {
+  prometheus_start || {
+    printf 'ERR: previous data is back in place, but Prometheus did not start\n' >&2
+    return 1
+  }
+  wait_ready || {
+    printf 'ERR: previous data is back in place, but Prometheus is not ready after %ss\n' "$READY_TIMEOUT" >&2
+    return 1
+  }
+}
+
 do_rollback() {
   local id parked fresh phase stage failed_to stamp
   id="$(state_get id)"
@@ -524,6 +591,16 @@ do_rollback() {
   stage="$RESTORE_ROOT/$id"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   failed_to="$stage/data.failed-$stamp"
+
+  if [ "$phase" = stopping ]; then
+    # The stop may or may not have finished. The staged data never moved, so it stays
+    # approved and a new switch needs no new verify.
+    log "==> no data was moved; bringing Prometheus back"
+    rm -f "$SWITCH_STATE"
+    restart_previous_data || return 1
+    log "==> Prometheus is back on the data it had"
+    return 0
+  fi
 
   log "==> rolling back the switch to $id"
   prometheus_stop || {
@@ -547,14 +624,7 @@ do_rollback() {
     return 1
   fi
   rm -f "$SWITCH_STATE" "$stage/VERIFIED"
-  prometheus_start || {
-    printf 'ERR: previous data is back in place, but Prometheus did not start\n' >&2
-    return 1
-  }
-  wait_ready || {
-    printf 'ERR: previous data is back in place, but Prometheus is not ready after %ss\n' "$READY_TIMEOUT" >&2
-    return 1
-  }
+  restart_previous_data || return 1
   [ ! -e "$failed_to" ] || log "==> restored data kept at $failed_to"
   log "==> previous data is live again"
 }
@@ -562,21 +632,35 @@ do_rollback() {
 recover_failed_switch() { # reason
   printf 'ERR: %s\n' "$1" >&2
   MID_SWITCH=0
+  trap '' TERM INT HUP
+  local phase
+  phase="$(state_get phase)"
   do_rollback || die "$EXIT_ROLLBACK_FAILED" "rollback failed; see above. State is in $SWITCH_STATE"
+  [ "$phase" != stopping ] || die "$EXIT_SWITCH" "no data was moved; Prometheus is back on the data it had"
   die "$EXIT_ROLLED_BACK" "restored data was not healthy; rolled back to the previous data"
+}
+
+# Before anything stops: approval of what is staged now, not of what was staged then.
+check_staged_unchanged() {
+  local want have changed
+  tmp_file want
+  tmp_file have
+  approved_inventory >"$want"
+  staged_inventory >"$have"
+  changed="$(LC_ALL=C comm -3 "$want" "$have" | awk -F'\t' '{ print ($1 == "" ? $2 : $1) }' | LC_ALL=C sort -u)"
+  [ -n "$changed" ] || return 0
+  printf '%s\n' "$changed" | awk 'NR <= 20 { print "CHANGED " $0 }' >&2
+  die "$EXIT_REFUSED" "$STAGE/data changed after verify; nothing was stopped. fetch and verify again"
 }
 
 cmd_switch() {
   parse_target "$@"
   [ "$ASSUME_YES" -eq 1 ] || die "$EXIT_REFUSED" "switch stops Prometheus and replaces its data; add --yes"
+  lock_live_data
   [ ! -e "$SWITCH_STATE" ] || die "$EXIT_REFUSED" "a switch to $(state_get id) is still open; rollback or finalize it first"
   [ -d "$STAGE/data" ] || die "$EXIT_REFUSED" "nothing staged at $STAGE/data; fetch and verify first"
   [ -f "$STAGE/VERIFIED" ] && [ -f "$STAGE/blocks.json" ] || die "$EXIT_REFUSED" "$TARGET has not passed verify"
-  local stamp_now=legacy
-  if [ "$LEGACY" -eq 0 ]; then
-    stamp_now="$(sha256sum "$STAGE/MANIFEST.json" | awk '{print $1}')"
-  fi
-  [ "$(cat "$STAGE/VERIFIED")" = "$stamp_now" ] || die "$EXIT_REFUSED" "$STAGE changed after verify; verify again"
+  [ "$(cat "$STAGE/VERIFIED")" = "$(verified_stamp)" ] || die "$EXIT_REFUSED" "$STAGE changed after verify; verify again"
   check_same_filesystem
   legacy_warning
 
@@ -588,9 +672,8 @@ cmd_switch() {
     [ -d "$LIVE_DIR" ] || die "$EXIT_REFUSED" "no live data at $LIVE_DIR; on a rebuilt host use --fresh"
   fi
 
-  mkdir -p "$(dirname "$BACKUP_LOCK")"
-  exec 8>"$BACKUP_LOCK"
-  flock -n 8 || die "$EXIT_REFUSED" "a backup is running; wait for it"
+  log "==> checking the staged data against what verify approved"
+  check_staged_unchanged
 
   if [ "$FRESH" -eq 1 ]; then
     # Docker chowns _data to root when it creates a volume over an existing _data, and
@@ -605,18 +688,24 @@ cmd_switch() {
   [ "$FRESH" -eq 1 ] || parked="$VOLUME_DIR/_data.pre-restore-$stamp"
 
   SECONDS=0
-  log "==> stopping Prometheus"
-  prometheus_stop || die "$EXIT_SWITCH" "could not stop Prometheus; data not touched, check it with docker compose ps"
-
-  state_write "$TARGET" "$parked" "$FRESH" moving "$switched_at"
+  # From here on a failure or a dropped session must leave Prometheus running, so the
+  # state that says how to get there is on disk before it stops.
   MID_SWITCH=1
+  state_write "$TARGET" "$parked" "$FRESH" stopping "$switched_at" || {
+    MID_SWITCH=0
+    die "$EXIT_SWITCH" "cannot write $SWITCH_STATE; Prometheus was not stopped"
+  }
+  log "==> stopping Prometheus"
+  prometheus_stop || recover_failed_switch "could not stop Prometheus"
+
+  state_write "$TARGET" "$parked" "$FRESH" moving "$switched_at" || recover_failed_switch "cannot write $SWITCH_STATE"
   if [ "$FRESH" -eq 1 ]; then
     [ ! -d "$LIVE_DIR" ] || rmdir "$LIVE_DIR" || recover_failed_switch "cannot remove the empty $LIVE_DIR"
   else
     mv "$LIVE_DIR" "$parked" || recover_failed_switch "cannot rename $LIVE_DIR"
   fi
   mv "$STAGE/data" "$LIVE_DIR" || recover_failed_switch "cannot move $STAGE/data into place"
-  state_write "$TARGET" "$parked" "$FRESH" switched "$switched_at"
+  state_write "$TARGET" "$parked" "$FRESH" switched "$switched_at" || recover_failed_switch "cannot write $SWITCH_STATE"
   log "==> data swapped after ${SECONDS}s; starting Prometheus"
 
   prometheus_start || recover_failed_switch "Prometheus did not start"
@@ -633,6 +722,7 @@ cmd_switch() {
 
 cmd_rollback() {
   [ $# -eq 0 ] || die "$EXIT_REFUSED" "rollback takes no arguments"
+  lock_live_data
   [ -f "$SWITCH_STATE" ] || die "$EXIT_REFUSED" "no open switch to roll back"
   do_rollback || die "$EXIT_ROLLBACK_FAILED" "rollback failed; see above. State is in $SWITCH_STATE"
 }
@@ -640,6 +730,7 @@ cmd_rollback() {
 cmd_finalize() {
   [ "${1:-}" != --yes ] || ASSUME_YES=1
   [ "$ASSUME_YES" -eq 1 ] || die "$EXIT_REFUSED" "finalize deletes the previous data for good; add --yes"
+  lock_live_data
   [ -f "$SWITCH_STATE" ] || die "$EXIT_REFUSED" "no open switch to finalize"
   local parked switched_at phase name now age
   parked="$(state_get parked)"
@@ -667,10 +758,18 @@ on_exit() {
   trap '' TERM INT HUP
   set +e
   # An operator's dropped session must not leave Prometheus down on half a swap.
-  if [ "$MID_SWITCH" -eq 1 ]; then
+  if [ "$MID_SWITCH" -eq 1 ] && [ -f "$SWITCH_STATE" ]; then
     MID_SWITCH=0
     printf 'ERR: interrupted during switch\n' >&2
-    if do_rollback; then rc=$EXIT_ROLLED_BACK; else rc=$EXIT_ROLLBACK_FAILED; fi
+    local phase
+    phase="$(state_get phase)"
+    if ! do_rollback; then
+      rc=$EXIT_ROLLBACK_FAILED
+    elif [ "$phase" = stopping ]; then
+      rc=$EXIT_SWITCH
+    else
+      rc=$EXIT_ROLLED_BACK
+    fi
   fi
   [ "${#TMP_FILES[@]}" -eq 0 ] || rm -f "${TMP_FILES[@]}"
   exit "$rc"

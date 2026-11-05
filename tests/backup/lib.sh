@@ -107,6 +107,45 @@ run_restore() {
   sed 's/^/    | /' "$OUT"
 }
 
+# start_restore VAR=val ... -- args...   runs in the background, sets HELD_PID
+start_restore() {
+  local envs=()
+  while [ "$1" != "--" ]; do
+    envs+=("$1")
+    shift
+  done
+  shift
+  SBX_EXEC="exec" sbx FAKE_NOW="${NOW:-$T0}" ${envs[@]+"${envs[@]}"} -- /bin/bash "$RESTORE" "$@" >"$LOGDIR/held.out" 2>&1 &
+  HELD_PID=$!
+}
+
+finish_held() { # sets HELD_RC
+  HELD_RC=0
+  wait "$HELD_PID" || HELD_RC=$?
+  sed 's/^/    held| /' "$LOGDIR/held.out"
+}
+
+# Prints a hook for the fakes that holds a command at a known point: it reports
+# $LOGDIR/<name>.reached and goes on after release_pause, or after 20 s.
+pause_hook() { # name
+  local hook="$SB/pause-$1"
+  cat >"$hook" <<HOOK
+#!/bin/bash
+: >"$LOGDIR/$1.reached"
+tries=0
+until [ -e "$LOGDIR/$1.release" ] || [ "\$tries" -ge 200 ]; do
+  tries=\$((tries + 1))
+  /bin/sleep 0.1
+done
+HOOK
+  chmod +x "$hook"
+  printf '%s\n' "$hook"
+}
+
+release_pause() { # name
+  : >"$LOGDIR/$1.release"
+}
+
 # --- TSDB fixture -------------------------------------------------------------
 
 mk_block() { # ulid sizeKB [maxTime]
@@ -224,6 +263,16 @@ wait_for_log() { # file, regex
   local tries=0
   while [ "$tries" -lt 100 ]; do
     logged "$1" "$2" && return 0
+    tries=$((tries + 1))
+    /bin/sleep 0.1
+  done
+  return 1
+}
+
+wait_for_file() { # path
+  local tries=0
+  while [ "$tries" -lt 100 ]; do
+    [ -e "$1" ] && return 0
     tries=$((tries + 1))
     /bin/sleep 0.1
   done

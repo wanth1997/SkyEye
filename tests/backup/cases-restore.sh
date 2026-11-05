@@ -373,18 +373,175 @@ r_switch_preconditions() {
   check_eq "Prometheus is not touched" 0 "$(wc -l <"$LOGDIR/docker-calls.log" | tr -d ' ')"
 }
 
-r_switch_waits_for_a_running_backup() {
-  verified_generation
+running_backup() { # an upload that hangs, until stop_backup
   : >"$LOGDIR/aws-calls.log"
   SBX_EXEC="exec" sbx FAKE_NOW="$T0" FAKE_AWS_SYNC=hang -- /bin/bash "$NEW_BACKUP" >>"$RUNLOG" 2>&1 &
-  local pid=$! before
+  BACKUP_PID=$!
   check "a backup is uploading" wait_for_log "$LOGDIR/aws-calls.log" 's3 sync'
+}
+
+stop_backup() {
+  kill -TERM "$BACKUP_PID"
+  wait "$BACKUP_PID"
+}
+
+r_switch_waits_for_a_running_backup() {
+  verified_generation
+  running_backup
+  local before
   before="$(live_hash)"
   run_restore -- switch "$GEN" --yes
   check_eq "switch does not race the backup" 2 "$RC"
   check_eq "live data is unchanged" "$before" "$(live_hash)"
-  kill -TERM "$pid"
-  wait "$pid"
+  stop_backup
+}
+
+r_rollback_waits_for_a_running_backup() {
+  verified_generation
+  run_restore -- switch "$GEN" --yes
+  local parked before
+  parked="$(parked_dirs)"
+  running_backup
+  before="$(live_hash)"
+  : >"$LOGDIR/docker-calls.log"
+  run_restore -- rollback
+  check_eq "rollback does not pull _data away from the upload" 2 "$RC"
+  check "the reason is given" logged "$OUT" 'a backup is running'
+  check_eq "live data stays" "$before" "$(live_hash)"
+  check "the previous data stays parked" [ -d "$parked" ]
+  check_not "Prometheus is not stopped" logged "$LOGDIR/docker-calls.log" ' stop '
+  stop_backup
+  run_restore -- rollback
+  check_eq "once the backup is over it goes through" 0 "$RC"
+}
+
+r_finalize_waits_for_a_running_backup() {
+  verified_generation
+  run_restore -- switch "$GEN" --yes
+  local parked
+  parked="$(parked_dirs)"
+  running_backup
+  NOW=$((T0 + DAY)) run_restore -- finalize --yes
+  check_eq "finalize does not run beside a backup" 2 "$RC"
+  check "the reason is given" logged "$OUT" 'a backup is running'
+  check "the previous data stays" [ -d "$parked" ]
+  stop_backup
+}
+
+r_finalize_waits_for_a_running_rollback() {
+  verified_generation
+  local before parked
+  before="$(live_hash)"
+  run_restore -- switch "$GEN" --yes
+  parked="$(parked_dirs)"
+  start_restore FAKE_DOCKER_STOP_HOOK="$(pause_hook stop)" -- rollback
+  check "the rollback is under way" wait_for_file "$LOGDIR/stop.reached"
+  NOW=$((T0 + DAY)) run_restore -- finalize --yes
+  check_eq "finalize cannot delete what rollback is moving back" 2 "$RC"
+  check "the reason is given" logged "$OUT" 'another restore command'
+  check "the previous data is still there" [ -d "$parked" ]
+  release_pause stop
+  finish_held
+  check_eq "the rollback finishes" 0 "$HELD_RC"
+  check_eq "live data is the old data" "$before" "$(live_hash)"
+}
+
+r_fetch_and_verify_wait_for_a_running_switch() {
+  verified_generation
+  start_restore FAKE_DOCKER_STOP_HOOK="$(pause_hook stop)" -- switch "$GEN" --yes
+  check "the switch is under way" wait_for_file "$LOGDIR/stop.reached"
+  run_restore -- fetch "$GEN"
+  check_eq "fetch cannot replace the staging directory under a switch" 2 "$RC"
+  check "the reason is given" logged "$OUT" 'another restore command'
+  check "the approval stays" [ -f "$STAGE/VERIFIED" ]
+  run_restore -- verify "$GEN"
+  check_eq "neither can verify" 2 "$RC"
+  check "the approval still stays" [ -f "$STAGE/VERIFIED" ]
+  release_pause stop
+  finish_held
+  check_eq "the switch finishes" 0 "$HELD_RC"
+  check "with the data it checked" [ -f "$VOL/$BLOCK_A/meta.json" ]
+}
+
+r_switch_waits_for_a_running_fetch() {
+  verified_generation
+  start_restore FAKE_AWS_DOWNLOAD_HOOK="$(pause_hook download)" -- fetch "$GEN"
+  check "the download is under way" wait_for_file "$LOGDIR/download.reached"
+  run_restore -- switch "$GEN" --yes
+  check_eq "switch does not read a staging directory being replaced" 2 "$RC"
+  check "the reason is given" logged "$OUT" 'another restore command'
+  check_not "Prometheus is not stopped" logged "$LOGDIR/docker-calls.log" ' stop '
+  run_restore -- fetch "$GEN"
+  check_eq "nor do two downloads share it" 2 "$RC"
+  release_pause download
+  finish_held
+  check_eq "the download finishes" 0 "$HELD_RC"
+}
+
+r_switch_waits_for_a_running_verify() {
+  fetched_generation
+  : >"$LOGDIR/docker-calls.log"
+  start_restore FAKE_DOCKER_RUN_HOOK="$(pause_hook read)" -- verify "$GEN"
+  check "the read is under way" wait_for_file "$LOGDIR/read.reached"
+  run_restore -- switch "$GEN" --yes
+  check_eq "switch does not run beside a verify" 2 "$RC"
+  check "the reason is given" logged "$OUT" 'another restore command'
+  check_not "Prometheus is not stopped" logged "$LOGDIR/docker-calls.log" ' stop '
+  release_pause read
+  finish_held
+  check_eq "the verify finishes" 0 "$HELD_RC"
+}
+
+# After verify, and before any docker call: nothing may be stopped or moved.
+check_refused_without_touching_anything() { # live hash before, changed path
+  check_eq "refused" 2 "$RC"
+  check "the change is named" logged "$OUT" "CHANGED $2"
+  check_eq "live data is unchanged" "$1" "$(live_hash)"
+  check_eq "Prometheus is not touched" 0 "$(wc -l <"$LOGDIR/docker-calls.log" | tr -d ' ')"
+  check_not "no switch is open" [ -e "$SB/restore/switch.state" ]
+}
+
+r_switch_refuses_a_file_deleted_after_verify() {
+  verified_generation
+  local before
+  before="$(live_hash)"
+  rm -f "${STAGE:?}/data/$BLOCK_B/chunks/000001"
+  run_restore -- switch "$GEN" --yes
+  check_refused_without_touching_anything "$before" "$BLOCK_B/chunks/000001"
+}
+
+r_switch_refuses_a_file_added_after_verify() {
+  verified_generation
+  local before
+  before="$(live_hash)"
+  echo added >"$STAGE/data/$BLOCK_B/added"
+  run_restore -- switch "$GEN" --yes
+  check_refused_without_touching_anything "$before" "$BLOCK_B/added"
+}
+
+r_switch_refuses_a_same_size_change_after_verify() {
+  verified_generation
+  local before index="$STAGE/data/$BLOCK_A/index" size
+  before="$(live_hash)"
+  size="$(wc -c <"$index" | tr -d ' ')"
+  dd if=/dev/urandom of="$index" bs=1 count="$size" 2>/dev/null
+  check_eq "the size is the same" "$size" "$(wc -c <"$index" | tr -d ' ')"
+  run_restore -- switch "$GEN" --yes
+  check_refused_without_touching_anything "$before" "$BLOCK_A/index"
+}
+
+r_switch_refuses_a_legacy_change_after_verify() {
+  make_legacy_prefix 2026-11-03
+  run_restore -- fetch --legacy-prefix 2026-11-03
+  run_restore -- verify --legacy-prefix 2026-11-03
+  check_eq "the legacy prefix verifies" 0 "$RC"
+  : >"$LOGDIR/docker-calls.log"
+  local before chunk="$SB/restore/legacy-2026-11-03/data/$BLOCK_A/chunks/000001" size
+  before="$(live_hash)"
+  size="$(wc -c <"$chunk" | tr -d ' ')"
+  dd if=/dev/urandom of="$chunk" bs=1024 count=$((size / 1024)) 2>/dev/null
+  run_restore -- switch --legacy-prefix 2026-11-03 --yes
+  check_refused_without_touching_anything "$before" "$BLOCK_A/chunks/000001"
 }
 
 r_switch_swaps_by_rename() {
@@ -465,6 +622,7 @@ r_switch_stop_failure_touches_nothing() {
   check_eq "live data is unchanged" "$before" "$(live_hash)"
   check "the staged data stays" [ -d "$STAGE/data" ]
   check_not "no switch is open" [ -e "$SB/restore/switch.state" ]
+  check_eq "Prometheus is up" running "$(cat "$LOGDIR/prom.state")"
 }
 
 r_switch_tolerates_blocks_dropped_by_retention() {
@@ -498,6 +656,66 @@ r_interrupted_switch_rolls_back() {
   check_eq "a dropped session rolls back" 9 "$RC"
   check_eq "live data is the old data" "$before" "$(live_hash)"
   check_not "the switch is closed" [ -e "$SB/restore/switch.state" ]
+}
+
+# The stop takes up to 60 s, and a session can drop in it.
+r_interrupted_stop_brings_prometheus_back() {
+  verified_generation
+  local before
+  before="$(live_hash)"
+  start_restore FAKE_DOCKER_STOP_HOOK="$(pause_hook stop)" -- switch "$GEN" --yes
+  check "the stop is under way" wait_for_file "$LOGDIR/stop.reached"
+  kill -TERM "$HELD_PID"
+  release_pause stop
+  finish_held
+  check_eq "reported as nothing moved" 8 "$HELD_RC"
+  check_eq "Prometheus is up" running "$(cat "$LOGDIR/prom.state")"
+  check_eq "on the data it had" "$before" "$(live_hash)"
+  check_not "the switch is closed" [ -e "$SB/restore/switch.state" ]
+  check "the staged data stays approved" [ -f "$STAGE/VERIFIED" ]
+  run_restore -- switch "$GEN" --yes
+  check_eq "so the switch can simply run again" 0 "$RC"
+}
+
+r_state_write_failure_after_stop_brings_prometheus_back() {
+  verified_generation
+  local before hook="$SB/block-state"
+  before="$(live_hash)"
+  printf '#!/bin/bash\nmkdir "%s/restore/switch.state.tmp"\n' "$SB" >"$hook"
+  chmod +x "$hook"
+  run_restore FAKE_DOCKER_STOP_HOOK="$hook" -- switch "$GEN" --yes
+  check_eq "reported as nothing moved" 8 "$RC"
+  check_eq "Prometheus is up" running "$(cat "$LOGDIR/prom.state")"
+  check_eq "on the data it had" "$before" "$(live_hash)"
+  check_not "the switch is closed" [ -e "$SB/restore/switch.state" ]
+  check "the staged data stays" [ -f "$STAGE/data/$BLOCK_A/meta.json" ]
+}
+
+r_state_write_failure_before_stop_leaves_prometheus_alone() {
+  verified_generation
+  local before
+  before="$(live_hash)"
+  mkdir "$SB/restore/switch.state.tmp"
+  run_restore -- switch "$GEN" --yes
+  check_eq "reported" 8 "$RC"
+  check_not "Prometheus is never stopped" logged "$LOGDIR/docker-calls.log" ' stop '
+  check_eq "live data is unchanged" "$before" "$(live_hash)"
+}
+
+r_rollback_recovers_a_switch_killed_during_stop() {
+  verified_generation
+  local before
+  before="$(live_hash)"
+  # What kill -9 leaves in the stop: nothing moved, Prometheus down.
+  printf 'id=%s\nparked=%s\nfresh=0\nphase=stopping\nswitched_at=%s\n' "$GEN" \
+    "$SB/volume/_data.pre-restore-20261101T190000Z" "$T0" >"$SB/restore/switch.state"
+  echo stopped >"$LOGDIR/prom.state"
+  run_restore -- rollback
+  check_eq "rollback brings it back" 0 "$RC"
+  check_eq "Prometheus is up" running "$(cat "$LOGDIR/prom.state")"
+  check_eq "on the data it had" "$before" "$(live_hash)"
+  check_not "the switch is closed" [ -e "$SB/restore/switch.state" ]
+  check "the staged data stays approved" [ -f "$STAGE/VERIFIED" ]
 }
 
 r_rollback_undoes_a_good_switch() {
