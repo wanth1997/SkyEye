@@ -56,7 +56,7 @@ If all three are fine, you're done. Total: under 2 minutes.
 ### A Telegram 🚨 High fires
 
 1. Click the runbook link in the message → runbooks/*.md on GitHub. Follow the steps.
-2. If unrecoverable within 15 min, acknowledge in Telegram (reply to the bot message with context so team sees it), silence the alert for 1 h while you work.
+2. If unrecoverable within 15 min, acknowledge in Telegram (reply to the bot message with context so team sees it), silence the alert for 1 h while you work. Never silence `TradingCriticalSafetyState` alone: see [the Trading silence rule](../runbooks/trading-alert-promotion.md#silence-規則).
 3. After resolution, note cause in `runbooks/` or an incident doc. If a new class of problem, add a new rule.
 
 ### SkyEye itself stops paging (no alerts, no heartbeat)

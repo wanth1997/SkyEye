@@ -29,6 +29,10 @@ Compare `run_id`, `strategy`, `instance_id`, PID and config SHA-256 between mani
 
 The marker is first-critical-wins. Never replace it with a safe marker to make the alert disappear.
 
+## Silencing
+
+Never silence `TradingCriticalSafetyState` alone. A silenced source still inhibits `TradingCriticalLogEvent` and `TradingCriticalWarnEvent`, so none of the three is delivered. Silence all three together: see [trading-alert-promotion.md](./trading-alert-promotion.md#silence-規則).
+
 ## Execution-confirmation incident
 
 `TradingExecutionIncident` is intentionally message-based rather than level-based. It covers:
