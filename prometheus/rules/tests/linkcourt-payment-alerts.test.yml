@@ -1,0 +1,173 @@
+rule_files:
+  - ../business.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: guard waits the full 15 minutes and resolves at zero
+    interval: 1m
+    input_series:
+      - series: 'ppc_payment_guard_held{instance="backend-a",product="ppclub"}'
+        values: '1+0x15 0+0x2'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: ppclub
+              instance: backend-a
+            exp_annotations:
+              summary: 'LinkCourt: payment guard has held paid order(s) for 15min (1 now)'
+      - eval_time: 16m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts: []
+
+  - name: guard interruption resets the 15 minute pending period
+    interval: 1m
+    input_series:
+      - series: 'ppc_payment_guard_held'
+        values: '1+0x8 0 1+0x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts: []
+      - eval_time: 24m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: ppclub
+            exp_annotations:
+              summary: 'LinkCourt: payment guard has held paid order(s) for 15min (1 now)'
+
+  - name: guard ignores zero and negative values
+    interval: 1m
+    input_series:
+      - series: 'ppc_payment_guard_held{instance="zero"}'
+        values: '0+0x20'
+      - series: 'ppc_payment_guard_held{instance="negative"}'
+        values: '-1+0x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts: []
+
+  - name: unknown order increase fires immediately then expires from the hour window
+    interval: 1m
+    input_series:
+      - series: 'ppc_payment_guard_notify_unknown_order_total{instance="backend-a",product="ppclub"}'
+        values: '0 1+0x61'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: LinkcourtPaymentNotifyUnknownOrder
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: LinkcourtPaymentNotifyUnknownOrder
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: ppclub
+              instance: backend-a
+            exp_annotations:
+              summary: 'LinkCourt: payment notify for an unknown order in the last 1h'
+      - eval_time: 59m
+        alertname: LinkcourtPaymentNotifyUnknownOrder
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: ppclub
+              instance: backend-a
+            exp_annotations:
+              summary: 'LinkCourt: payment notify for an unknown order in the last 1h'
+      - eval_time: 61m
+        alertname: LinkcourtPaymentNotifyUnknownOrder
+        exp_alerts: []
+
+  - name: unknown order ignores unchanged counters even when nonzero
+    interval: 1m
+    input_series:
+      - series: 'ppc_payment_guard_notify_unknown_order_total{instance="zero"}'
+        values: '0+0x65'
+      - series: 'ppc_payment_guard_notify_unknown_order_total{instance="nonzero"}'
+        values: '5+0x65'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LinkcourtPaymentNotifyUnknownOrder
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: LinkcourtPaymentNotifyUnknownOrder
+        exp_alerts: []
+
+  - name: invoice cutoff fires immediately and remains active while counter is positive
+    interval: 1m
+    input_series:
+      - series: 'ppc_invoice_dispatch_total{result="before_invoicing_cutoff",kind="topup",instance="backend-a",product="ppclub"}'
+        values: '1+0x60 0'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: LinkcourtInvoiceBeforeCutoff
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: ppclub
+              result: before_invoicing_cutoff
+              kind: topup
+              instance: backend-a
+            exp_annotations:
+              summary: 'LinkCourt: invoice dispatch blocked before the invoicing cutoff'
+      - eval_time: 60m
+        alertname: LinkcourtInvoiceBeforeCutoff
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: ppclub
+              result: before_invoicing_cutoff
+              kind: topup
+              instance: backend-a
+            exp_annotations:
+              summary: 'LinkCourt: invoice dispatch blocked before the invoicing cutoff'
+      - eval_time: 61m
+        alertname: LinkcourtInvoiceBeforeCutoff
+        exp_alerts: []
+
+  - name: invoice cutoff ignores zero counter and other result values
+    interval: 1m
+    input_series:
+      - series: 'ppc_invoice_dispatch_total{result="before_invoicing_cutoff"}'
+        values: '0+0x2'
+      - series: 'ppc_invoice_dispatch_total{result="created"}'
+        values: '5+0x2'
+      - series: 'ppc_invoice_dispatch_total{result="existing"}'
+        values: '5+0x2'
+      - series: 'ppc_invoice_dispatch_total{result="not_expected"}'
+        values: '5+0x2'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: LinkcourtInvoiceBeforeCutoff
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: LinkcourtInvoiceBeforeCutoff
+        exp_alerts: []
+
+  - name: absent payment metrics do not fire
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LinkcourtPaymentGuardHeld
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LinkcourtPaymentNotifyUnknownOrder
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LinkcourtInvoiceBeforeCutoff
+        exp_alerts: []
