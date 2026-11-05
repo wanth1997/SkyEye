@@ -1,0 +1,400 @@
+#!/usr/bin/env bash
+# The check_* functions run through run_step, which shellcheck cannot follow.
+# shellcheck disable=SC2329
+set -uo pipefail
+
+# Local merge gate: one command for every repository check and test. It needs no
+# secrets, never reads .env, reaches no production host and sends no notification.
+#
+#   scripts/verify-all          # run everything; rc=0 only if every step passed
+#   scripts/verify-all --list   # print the discovered test suites and rule tests
+#
+# Nothing here may pass by not running. A missing tool stops the gate before the
+# first step, a step that finds nothing to check fails, a suite that prints a SKIP
+# line fails even with rc=0, and one failed step never stops the steps after it.
+#
+# Suites are discovered, not listed: tests/**/test-*.sh and tests/**/run-tests.sh,
+# outside any fixtures directory. Rule tests are every YAML file under
+# prometheus/rules/tests/ outside fixtures. Containers run with no network and no
+# name, and the compose project is per-run, so parallel worktrees do not collide.
+
+if [[ "${SKYEYE_VERIFY_CLEAN_ENV:-}" != "$$" ]]; then
+  # Restart with only what the tools need, so no credential or exported shell
+  # function from the caller reaches a test. exec keeps the PID, which is what
+  # tells the restarted script apart from a caller that set this variable.
+  keep=()
+  for name in HOME PATH TMPDIR USER LOGNAME LANG LC_ALL LC_CTYPE TERM \
+    DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_CERT_PATH DOCKER_TLS_VERIFY; do
+    if [[ -n "${!name+set}" ]]; then
+      keep+=("$name=${!name}")
+    fi
+  done
+  exec /usr/bin/env -i "SKYEYE_VERIFY_CLEAN_ENV=$$" "${keep[@]}" "$BASH" "$0" "$@"
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT" || exit 1
+
+# Every external command the checks and the suites were traced calling, plus what
+# the suites still on other branches require. The suites' own fallbacks can turn a
+# missing tool into a SKIP or a silently weaker assertion, so all of it is required
+# here. rg matters most: `if rg -q ...` reads a missing rg as "no match".
+REQUIRED_TOOLS=(
+  alloy awk basename bash brew cat cc chmod cmp comm cp cut date dd diff dirname
+  docker envsubst find git grep head id install ioreg jq ln lokitool lsof mkdir
+  mktemp mv plutil ps python3 readlink rg rm rmdir sed sha256sum shasum sleep sort
+  stat tail tar timeout tmux touch tr uniq wc
+)
+SKIP_LINE='^[^[:alnum:]]*[Ss][Kk][Ii][Pp]([Pp][Ee][Dd]|[Pp][Ii][Nn][Gg])?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])SKIP(PED)?([^[:alnum:]_]|$)'
+
+STEP_NAMES=()
+STEP_RESULTS=()
+STEP_SECONDS=()
+STEP_NOTES=()
+STEP_NOTE=""
+STEP_LOG=""
+WORK=""
+
+usage() {
+  printf '%s\n' \
+    'Usage: scripts/verify-all [--list]' \
+    '' \
+    'Runs compose, Prometheus, Alertmanager, dashboard, Loki rule, Alloy and plist' \
+    'checks and every test suite under tests/, then prints one line per step.' \
+    'Exits 1 if any tool is missing, any step fails or any suite prints SKIP.' \
+    '--list prints the discovered suites and rule tests and runs nothing.'
+}
+
+# Reads newline-separated paths from stdin into the named array.
+read_paths() {
+  local array_name="$1" path
+  eval "$array_name=()"
+  # shellcheck disable=SC2034
+  while IFS= read -r path; do
+    eval "$array_name+=(\"\$path\")"
+  done
+}
+
+discover() {
+  read_paths TEST_SUITES < <(find tests -type f \( -name 'test-*.sh' -o -name 'run-tests.sh' \) \
+    -not -path '*/fixtures/*' | LC_ALL=C sort)
+  read_paths RULE_TESTS < <(find prometheus/rules/tests -type f \( -name '*.yml' -o -name '*.yaml' \) \
+    -not -path '*/fixtures/*' | LC_ALL=C sort)
+  read_paths DASHBOARDS < <(find grafana/dashboards -type f -name '*.json' | LC_ALL=C sort)
+  read_paths LOKI_RULES < <(find loki/rules -type f \( -name '*.yml' -o -name '*.yaml' \) | LC_ALL=C sort)
+  read_paths PLISTS < <(find . -path ./.git -prune -o -type f \
+    \( -name '*.plist' -o -name '*.plist.tmpl' \) -print | LC_ALL=C sort)
+}
+
+check_tools() {
+  local tool missing=0
+  for tool in "${REQUIRED_TOOLS[@]}"; do
+    # type -P looks at PATH only, so a shell function named rg does not count.
+    if ! type -P "$tool" >/dev/null; then
+      printf 'verify-all: required tool is not an executable on PATH: %s\n' "$tool" >&2
+      missing=1
+    fi
+  done
+  if type -P docker >/dev/null; then
+    if ! docker info >/dev/null 2>&1; then
+      printf 'verify-all: required tool is not usable: docker daemon is unreachable\n' >&2
+      missing=1
+    fi
+    if ! docker compose version >/dev/null 2>&1; then
+      printf 'verify-all: required tool is not usable: docker compose plugin\n' >&2
+      missing=1
+    fi
+  fi
+  if type -P alloy >/dev/null && ! alloy validate --help >/dev/null 2>&1; then
+    printf 'verify-all: required tool is not usable: alloy has no validate command\n' >&2
+    missing=1
+  fi
+  return "$missing"
+}
+
+compose_image() {
+  awk -v want="$1" '$1 == "image:" && index($2, want ":") == 1 { print $2; exit }' docker-compose.yml
+}
+
+load_images() {
+  local lokitool_version
+  PROM_IMAGE="$(compose_image prom/prometheus)"
+  AM_IMAGE="$(compose_image prom/alertmanager)"
+  LOKI_IMAGE="$(compose_image grafana/loki)"
+  if [[ -z "$PROM_IMAGE" || -z "$AM_IMAGE" || -z "$LOKI_IMAGE" ]]; then
+    printf 'verify-all: cannot find the pinned images in docker-compose.yml\n' >&2
+    return 1
+  fi
+  # LogQL changes between Loki releases: lint with the version production runs.
+  lokitool_version="$(lokitool version 2>&1 | awk '$2 == "version" { sub(/,$/, "", $3); print $3; exit }')"
+  if [[ "$lokitool_version" != "${LOKI_IMAGE##*:}" ]]; then
+    printf 'verify-all: required tool is not usable: lokitool is %s, docker-compose.yml pins Loki %s\n' \
+      "${lokitool_version:-unknown}" "${LOKI_IMAGE##*:}" >&2
+    return 1
+  fi
+}
+
+# Runs one step with its output in a log. The command runs in this shell so a
+# checker can set STEP_NOTE and read STEP_LOG.
+run_step() {
+  local name="$1" start rc result
+  shift
+  STEP_LOG="$WORK/$(printf '%02d' "${#STEP_NAMES[@]}")-$(printf '%s' "$name" | tr -c 'A-Za-z0-9.-' '_').log"
+  STEP_NOTE=""
+  start="$SECONDS"
+  printf '==> %s\n' "$name"
+  "$@" >"$STEP_LOG" 2>&1 </dev/null
+  rc=$?
+  result=PASS
+  if [[ "$rc" -ne 0 ]]; then
+    result=FAIL
+    STEP_NOTE="${STEP_NOTE:-rc=$rc}"
+    tail -n 30 "$STEP_LOG" | sed 's/^/    /'
+  fi
+  record_step "$name" "$result" "$((SECONDS - start))" "$STEP_NOTE"
+  printf '    %s (%ss)\n' "$result" "$((SECONDS - start))"
+}
+
+record_step() {
+  STEP_NAMES+=("$1")
+  STEP_RESULTS+=("$2")
+  STEP_SECONDS+=("$3")
+  STEP_NOTES+=("$4")
+}
+
+check_compose() {
+  # --env-file replaces the implicit .env; the placeholder only silences the
+  # warning for the one variable compose interpolates.
+  GF_ADMIN_PW=verify-placeholder docker compose --env-file /dev/null \
+    -p "skyeye-verify-$$" --project-directory "$REPO_ROOT" -f docker-compose.yml config --quiet
+}
+
+promtool_run() {
+  docker run --rm --network none -v "$REPO_ROOT/prometheus:/etc/prometheus:ro" \
+    --entrypoint /bin/promtool "$PROM_IMAGE" "$@"
+}
+
+check_rule_tests() {
+  local rule_test container_paths=()
+  if [[ "${#RULE_TESTS[@]}" -eq 0 ]]; then
+    printf 'no rule tests found under prometheus/rules/tests\n'
+    STEP_NOTE="nothing to check"
+    return 1
+  fi
+  for rule_test in "${RULE_TESTS[@]}"; do
+    container_paths+=("/etc/prometheus/${rule_test#prometheus/}")
+  done
+  promtool_run test rules "${container_paths[@]}"
+}
+
+check_alertmanager() {
+  # The tmpfs hides any real token in a checkout that has one.
+  docker run --rm --network none -v "$REPO_ROOT/alertmanager:/etc/alertmanager:ro" \
+    --tmpfs /etc/alertmanager/secrets --entrypoint /bin/amtool "$AM_IMAGE" \
+    check-config /etc/alertmanager/alertmanager.yml
+}
+
+check_dashboards() {
+  local dashboard rc=0
+  if [[ "${#DASHBOARDS[@]}" -eq 0 ]]; then
+    printf 'no dashboards found under grafana/dashboards\n'
+    STEP_NOTE="nothing to check"
+    return 1
+  fi
+  for dashboard in "${DASHBOARDS[@]}"; do
+    # jq empty accepts a zero-byte file; a dashboard is exactly one object.
+    if ! jq -es 'length == 1 and (.[0] | type == "object")' "$dashboard" >/dev/null; then
+      printf 'invalid dashboard JSON: %s\n' "$dashboard"
+      STEP_NOTE="${STEP_NOTE:-invalid JSON:} $dashboard"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+check_loki_rules() {
+  local rule_file output rc=0
+  if [[ "${#LOKI_RULES[@]}" -eq 0 ]]; then
+    printf 'no Loki rule files found under loki/rules\n'
+    STEP_NOTE="nothing to check"
+    return 1
+  fi
+  for rule_file in "${LOKI_RULES[@]}"; do
+    # Without --dry-run, lint rewrites the file in place.
+    if ! output="$(lokitool rules lint --dry-run "$rule_file" 2>&1)"; then
+      printf '%s\n%s\n' "$rule_file" "$output"
+      STEP_NOTE="${STEP_NOTE:-invalid rules:} $rule_file"
+      rc=1
+    elif [[ "$output" == *"SUCCESS: 0 rules found"* ]]; then
+      printf 'no rules parsed from %s\n' "$rule_file"
+      STEP_NOTE="${STEP_NOTE:-invalid rules:} $rule_file"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+# The templates only parse once rendered, so this renders them the way the
+# installers do, with placeholder values. The rendered trading configs are also
+# validated by tests/trading; the host templates have no other coverage.
+check_alloy() (
+  local dir="$WORK/alloy" template rc=0
+  local host_config="$dir/host/config.alloy" linux_dir="$dir/trading-linux"
+  local substituted
+
+  mkdir -p "$dir/host" "$linux_dir"
+  substituted="$(sed -n "s/^ENVSUBST_VARS='\(.*\)'\$/\1/p" agents/alloy/setup.sh)"
+  if [[ -z "$substituted" ]]; then
+    printf 'cannot read ENVSUBST_VARS from agents/alloy/setup.sh\n'
+    return 1
+  fi
+  export PRODUCT=verify SERVER_ID=verify-host JOURNAL_MATCHES=_SYSTEMD_UNIT=verify.service
+  export LOKI_PUSH_URL=https://loki.invalid/loki/api/v1/push
+  export PROM_PUSH_URL=https://prometheus.invalid/api/v1/write
+  export CF_ACCESS_CLIENT_ID=verify-placeholder CF_ACCESS_CLIENT_SECRET=verify-placeholder
+  export APP_METRICS_TARGET=127.0.0.1:9 APP_METRICS_AUTHORIZATION=''
+  export JOURNAL_SOURCES='loki.source.journal "system" {
+  matches    = "_SYSTEMD_UNIT=verify.service"
+  forward_to = [loki.process.scrub_pii.receiver]
+}'
+  for template in config-logs config-metrics config-app; do
+    envsubst "$substituted" <"agents/alloy/$template.alloy.tmpl" >>"$host_config" || rc=1
+  done
+  alloy validate "$host_config" || rc=1
+
+  alloy validate agents/alloy/trading/config-macos.alloy.tmpl || rc=1
+
+  # A Linux host loads the trading fragments next to the host config.
+  cp "$host_config" "$linux_dir/host.alloy"
+  for template in config-linux config-linux-metrics; do
+    sed -e 's/@@COMPONENT_ID@@/verify_strategy/g' -e 's/@@[A-Z_]*@@/verify/g' \
+      "agents/alloy/trading/$template.alloy.tmpl" >"$linux_dir/$template.alloy" || rc=1
+  done
+  alloy validate "$linux_dir" || rc=1
+
+  while IFS= read -r template; do
+    case "$template" in
+      agents/alloy/config-logs.alloy.tmpl | agents/alloy/config-metrics.alloy.tmpl | \
+        agents/alloy/config-app.alloy.tmpl | agents/alloy/trading/config-macos.alloy.tmpl | \
+        agents/alloy/trading/config-linux.alloy.tmpl | \
+        agents/alloy/trading/config-linux-metrics.alloy.tmpl) ;;
+      *)
+        printf 'template has no alloy validate coverage in verify-all: %s\n' "$template"
+        rc=1
+        ;;
+    esac
+  done < <(find agents -type f -name '*.alloy.tmpl')
+  return "$rc"
+)
+
+check_plists() {
+  local plist rc=0
+  for plist in "${PLISTS[@]}"; do
+    # plutil -lint accepts junk after </plist> and reads plain text as an old-style
+    # plist, so a template launchd cannot load still needs a strict XML parse.
+    if ! plutil -lint "$plist" || ! python3 -I -c '
+import sys, xml.etree.ElementTree as ElementTree
+sys.exit(ElementTree.parse(sys.argv[1]).getroot().tag != "plist")' "$plist"; then
+      printf 'invalid plist: %s\n' "$plist"
+      STEP_NOTE="${STEP_NOTE:-invalid plist:} $plist"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
+# A directory of tests with no entry point would otherwise never run and never fail.
+check_discovery() {
+  local suite_dir rc=0
+  if [[ "${#TEST_SUITES[@]}" -eq 0 ]]; then
+    printf 'no test suites found under tests/\n'
+    STEP_NOTE="nothing to check"
+    return 1
+  fi
+  printf '%s\n' "${TEST_SUITES[@]}"
+  while IFS= read -r suite_dir; do
+    if [[ " ${TEST_SUITES[*]} " != *" $suite_dir/"* ]]; then
+      printf 'no test-*.sh or run-tests.sh in %s\n' "$suite_dir"
+      STEP_NOTE="${STEP_NOTE:-no entry point:} $suite_dir"
+      rc=1
+    fi
+  done < <(find tests -mindepth 1 -maxdepth 1 -type d -not -name fixtures | LC_ALL=C sort)
+  return "$rc"
+}
+
+run_suite() {
+  local rc skipped
+  bash "$1"
+  rc=$?
+  skipped="$(grep -E "$SKIP_LINE" "$STEP_LOG")"
+  if [[ -n "$skipped" ]]; then
+    printf 'verify-all: a suite that skips did not pass (rc=%s):\n%s\n' "$rc" "$skipped"
+    STEP_NOTE="printed SKIP (rc=$rc)"
+    return 1
+  fi
+  return "$rc"
+}
+
+print_summary() {
+  local index failed=0
+  printf '\nverify-all summary\n'
+  for index in "${!STEP_NAMES[@]}"; do
+    printf '%-4s %5ss  %s' "${STEP_RESULTS[index]}" "${STEP_SECONDS[index]}" "${STEP_NAMES[index]}"
+    if [[ -n "${STEP_NOTES[index]}" ]]; then
+      printf '  [%s]' "${STEP_NOTES[index]}"
+    fi
+    printf '\n'
+    if [[ "${STEP_RESULTS[index]}" == FAIL ]]; then
+      failed=$((failed + 1))
+    fi
+  done
+  printf 'total %ss, %s steps, %s failed\n' "$SECONDS" "${#STEP_NAMES[@]}" "$failed"
+  return "$failed"
+}
+
+case "${1:-}" in
+  "") ;;
+  --list)
+    discover
+    printf '%s\n' ${TEST_SUITES[@]+"${TEST_SUITES[@]}"} ${RULE_TESTS[@]+"${RULE_TESTS[@]}"}
+    exit 0
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+check_tools || exit 1
+load_images || exit 1
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-verify-all.XXXXXX")" || exit 1
+discover
+
+run_step "docker compose config" check_compose
+run_step "promtool check config" promtool_run check config /etc/prometheus/prometheus.yml
+run_step "promtool test rules (${#RULE_TESTS[@]} files)" check_rule_tests
+run_step "amtool check-config" check_alertmanager
+run_step "dashboard JSON (${#DASHBOARDS[@]} files)" check_dashboards
+run_step "lokitool rules lint (${#LOKI_RULES[@]} files)" check_loki_rules
+run_step "alloy validate" check_alloy
+if [[ "${#PLISTS[@]}" -gt 0 ]]; then
+  run_step "plutil -lint (${#PLISTS[@]} files)" check_plists
+else
+  record_step "plutil -lint" "N/A" 0 "no plist files in the repository"
+fi
+run_step "test discovery (${#TEST_SUITES[@]} suites)" check_discovery
+for suite in ${TEST_SUITES[@]+"${TEST_SUITES[@]}"}; do
+  run_step "$suite" run_suite "$suite"
+done
+
+if print_summary; then
+  rm -rf "$WORK"
+  exit 0
+fi
+printf 'step logs: %s\n' "$WORK"
+exit 1
