@@ -11,6 +11,7 @@ Subcommands:
   remove       delete one row and its legacy alias (idempotent)
   list         print rows as TSV or JSON
   check        verify the file is canonical and internally consistent
+  check-alert-modes  verify which Trading alert rules may page
   render-test  emit a promtool test derived from the inventory
 
 Standard library only; no third-party packages.
@@ -60,7 +61,31 @@ REQUIRED_LABELS = LABEL_ORDER[:-1]
 IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 QUOTE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
 ENVIRONMENTS = ("production",)
+# An inventory row is metadata: routing reads the alert rule's own label, so a
+# row can never page and always stays shadow.
 NOTIFICATION_MODES = ("shadow",)
+
+DEFAULT_ALERT_RULES = (
+    REPO_ROOT / "prometheus" / "rules" / "trading.yml",
+    REPO_ROOT / "loki" / "rules" / "fake" / "tnauqquant.yml",
+)
+ALERT_MODES = ("shadow", "page")
+# The only alerts that may page (decision D19). Everything else stays shadow.
+PAGE_ALERTS = (
+    "TradingCriticalSafetyState",
+    "TradingProcessDown",
+    "TradingRiskStopped",
+)
+
+# Rule files are read through a small YAML subset: block mappings and sequences,
+# one-line scalars and block scalars. Anything else is refused, because a rule
+# this tool cannot read is a rule it cannot check. Scalars keep their quotes, so
+# a quoted name or mode never matches and fails closed.
+YAML_ENTRY_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*):(?:[ \t]+(.*))?")
+YAML_QUOTED_RE = re.compile(r"""("(?:[^"\\]|\\.)*"|'(?:[^']|'')*')[ \t]*(?:#.*)?""")
+YAML_COMMENT_RE = re.compile(r"(?:^|[ \t]+)#.*$")
+YAML_BLOCK_SCALAR_RE = re.compile(r"[|>][-+0-9]*")
+YAML_INDICATORS = tuple("&*!{[?%@`|>")
 
 YAML_NON_STRING_RE = re.compile(
     r"^(?:(?i:true|false|yes|no|on|off|y|n|null)|~"
@@ -356,6 +381,128 @@ def cmd_check(args: argparse.Namespace) -> int:
     return status
 
 
+def yaml_lines(text: str) -> list[tuple[int, int, str]]:
+    """Return (line number, indent, text) for each line with content."""
+    lines = []
+    for number, line in enumerate(text.splitlines(), 1):
+        content = line.lstrip(" ").rstrip()
+        if content and not content.startswith("#"):
+            lines.append((number, len(line) - len(line.lstrip(" ")), content))
+    return lines
+
+
+def yaml_value(raw: str, where: str) -> str:
+    """Return one value without its comment, refusing what the subset excludes."""
+    if raw.startswith(("\"", "'")):
+        match = YAML_QUOTED_RE.fullmatch(raw)
+        if not match:
+            raise InventoryError(f"{where}: unsupported quoted scalar {raw!r}")
+        return match.group(1)
+    value = YAML_COMMENT_RE.sub("", raw)
+    if value.startswith(YAML_INDICATORS) and not YAML_BLOCK_SCALAR_RE.fullmatch(value):
+        raise InventoryError(f"{where}: unsupported YAML value {raw!r}")
+    return value
+
+
+def parse_yaml_sequence(lines: list[tuple[int, int, str]], pos: int, indent: int,
+                        path: Path) -> tuple[list[object], int]:
+    items: list[object] = []
+    while pos < len(lines) and lines[pos][1] == indent and lines[pos][2].startswith("- "):
+        number, _, text = lines[pos]
+        entry = text[1:].lstrip(" ")
+        column = indent + len(text) - len(entry)
+        lines[pos] = (number, column, entry)
+        item, pos = parse_yaml_mapping(lines, pos, column, path)
+        items.append(item)
+    return items, pos
+
+
+def parse_yaml_mapping(lines: list[tuple[int, int, str]], pos: int, indent: int,
+                       path: Path) -> tuple[dict[str, object], int]:
+    mapping: dict[str, object] = {}
+    while pos < len(lines) and lines[pos][1] == indent:
+        number, _, text = lines[pos]
+        where = f"{path}:{number}"
+        match = YAML_ENTRY_RE.fullmatch(text)
+        if not match:
+            raise InventoryError(f"{where}: unsupported YAML {text!r}")
+        key = match.group(1)
+        if key in mapping:
+            raise InventoryError(f"{where}: duplicate key {key!r}")
+        value = yaml_value(match.group(2) or "", where)
+        mapping[key] = value
+        pos += 1
+        if YAML_BLOCK_SCALAR_RE.fullmatch(value):
+            while pos < len(lines) and lines[pos][1] > indent:
+                pos += 1
+        elif not value and pos < len(lines):
+            child = lines[pos][1]
+            if lines[pos][2].startswith("- ") and child >= indent:
+                mapping[key], pos = parse_yaml_sequence(lines, pos, child, path)
+            elif child > indent:
+                mapping[key], pos = parse_yaml_mapping(lines, pos, child, path)
+    return mapping, pos
+
+
+def alert_rules(path: Path) -> list[tuple[str, dict[str, object]]]:
+    """Return (alert name, labels) for every alert rule in a rule file."""
+    lines = yaml_lines(path.read_text(encoding="utf-8"))
+    root, pos = parse_yaml_mapping(lines, 0, 0, path)
+    if pos < len(lines):
+        raise InventoryError(f"{path}:{lines[pos][0]}: unsupported YAML {lines[pos][2]!r}")
+    groups = root.get("groups")
+    if not isinstance(groups, list):
+        raise InventoryError(f"{path}: expected a top-level groups list")
+    alerts: list[tuple[str, dict[str, object]]] = []
+    for group in groups:
+        rules = group.get("rules")
+        if not isinstance(rules, list):
+            raise InventoryError(f"{path}: group {group.get('name')!r} has no rules list")
+        for rule in rules:
+            if ("alert" in rule) == ("record" in rule):
+                raise InventoryError(f"{path}: rule needs exactly one of alert or record: {rule}")
+            if "record" in rule:
+                continue
+            name, labels = rule["alert"], rule.get("labels")
+            if not name or not isinstance(name, str):
+                raise InventoryError(f"{path}: alert rule has no usable name: {rule}")
+            alerts.append((name, labels if isinstance(labels, dict) else {}))
+    return alerts
+
+
+def cmd_check_alert_modes(args: argparse.Namespace) -> int:
+    problems: list[str] = []
+    seen: set[str] = set()
+    counts = dict.fromkeys(ALERT_MODES, 0)
+    for name in args.files or DEFAULT_ALERT_RULES:
+        path = Path(name)
+        alerts = alert_rules(path)
+        if not alerts:
+            problems.append(f"{path}: no alert rules found")
+        for alert, labels in alerts:
+            seen.add(alert)
+            mode = labels.get("notification_mode")
+            if mode not in ALERT_MODES:
+                problems.append(f"{path}: {alert} has unknown notification_mode {mode!r}")
+                continue
+            counts[mode] += 1
+            if mode != "page":
+                continue
+            if alert not in PAGE_ALERTS:
+                problems.append(f"{path}: {alert} may not page; only {', '.join(PAGE_ALERTS)} may")
+            if labels.get("severity") != "High":
+                problems.append(f"{path}: {alert} pages, so its severity must be High")
+    for alert in PAGE_ALERTS:
+        if alert not in seen:
+            problems.append(f"allow-listed alert {alert} has no rule; update PAGE_ALERTS")
+    if problems:
+        for problem in problems:
+            print(f"FAIL: {problem}", file=sys.stderr)
+        return 1
+    print(f"OK: {counts['shadow']} shadow, {counts['page']} page")
+    return 0
+
+
 def labels_selector(labels: dict[str, str]) -> str:
     inner = ",".join(f'{key}="{value}"' for key, value in labels.items())
     return "{" + inner + "}"
@@ -471,6 +618,11 @@ def build_parser() -> argparse.ArgumentParser:
     check = sub.add_parser("check", help="verify inventory files are canonical")
     check.add_argument("files", nargs="*", metavar="FILE", help="files to check (default: --file)")
     check.set_defaults(handler=cmd_check)
+
+    modes = sub.add_parser("check-alert-modes", help="verify which Trading alert rules may page")
+    modes.add_argument("files", nargs="*", metavar="RULE_FILE",
+                       help="rule files to check (default: Trading Prometheus and Loki rules)")
+    modes.set_defaults(handler=cmd_check_alert_modes)
 
     render = sub.add_parser("render-test", help="emit a promtool test derived from the inventory")
     render.add_argument("--rule-file", action="append",

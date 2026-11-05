@@ -9,6 +9,12 @@ Alertmanager 啟動時讀取這裡的檔案作為 credential。
 | 檔名 | 內容 | 建立時機 |
 |---|---|---|
 | `tg_token` | Telegram bot token（一整串，無換行） | Phase 0-A |
+| `smtp_password` | SMTP 密碼或 API key | 填 SMTP 值時，見下方 |
+| `email-addresses.tmpl` | High 告警 email 的收件者與寄件者 | 填 SMTP 值時，見下方 |
+
+`smtp_password` 和 `email-addresses.tmpl` 要等 email route 那次部署完成後才能放，否則舊版 `scripts/central-deploy` 會拒絕部署。完整順序見 [`runbooks/trading-alert-promotion.md`](../../runbooks/trading-alert-promotion.md)。
+
+`email-addresses.tmpl` 語法壞掉時，Alertmanager reload 會被拒，重啟也起不來，Telegram 會一起停。放好後一定要先在 container 內跑 `amtool check-config`，通過才 reload。
 
 ## 安全守則
 

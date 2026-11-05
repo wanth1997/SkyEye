@@ -151,10 +151,12 @@ for untracked in prometheus/rules/review-untracked.yml alertmanager/secrets/extr
   rm -f "$LIVE/$untracked"
 done
 
-printf 'case: the supported local secret file is allowed\n'
+printf 'case: the supported local secret files are allowed\n'
 mkdir -p "$LIVE/alertmanager/secrets"
-printf 'fixture-token' >"$LIVE/alertmanager/secrets/tg_token"
-deploy --dry-run >/dev/null || fail "dry run refused the supported alertmanager/secrets/tg_token"
+for secret in tg_token smtp_password email-addresses.tmpl; do
+  printf 'fixture' >"$LIVE/alertmanager/secrets/$secret"
+  deploy --dry-run >/dev/null || fail "dry run refused the supported alertmanager/secrets/$secret"
+done
 
 printf 'case: deploy fast-forwards, reloads Prometheus and shows the live inventory\n'
 reset_logs

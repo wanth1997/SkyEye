@@ -129,6 +129,7 @@ reject() {
   fi
 }
 sed 's/notification_mode: shadow/notification_mode: paging/' "$ORIGINAL" | reject "a paging row"
+sed 's/notification_mode: shadow/notification_mode: page/' "$ORIGINAL" | reject "a page row"
 sed 's/quote_currency: USDT$/quote_currency: USDT /' "$ORIGINAL" | reject "trailing whitespace"
 awk '/server_id:/ && !done { hold = $0; getline; print; print hold; done = 1; next } { print }' \
   "$ORIGINAL" | reject "reordered labels"

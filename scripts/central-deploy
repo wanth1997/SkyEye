@@ -81,7 +81,11 @@ cd "$REPO_ROOT"
 # Directories the running services load straight from this checkout, and the
 # only untracked files allowed inside them (local secrets, never in Git).
 LOADED_CONFIG_PATHS=(prometheus alertmanager grafana/dashboards grafana/provisioning loki/rules)
-ALLOWED_LOCAL_FILES=(alertmanager/secrets/tg_token)
+ALLOWED_LOCAL_FILES=(
+  alertmanager/secrets/tg_token
+  alertmanager/secrets/smtp_password
+  alertmanager/secrets/email-addresses.tmpl
+)
 
 applied_file() {
   printf '%s/skyeye-central-deploy.applied\n' "$(git rev-parse --absolute-git-dir)"
