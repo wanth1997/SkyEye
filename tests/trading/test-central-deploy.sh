@@ -75,10 +75,9 @@ case "$*" in
     reads="$(($(cat "$LOKI_READS" 2>/dev/null || printf 0) + 1))"
     printf '%s' "$reads" >"$LOKI_READS"
     if [[ -n "${FAKE_LOKI_STALE:-}" && "$reads" -le "${FAKE_LOKI_STALE_READS:-999}" ]]; then
-      cat "$FAKE_LOKI_STALE"
-    else
-      cat "$LOKI_LOADED"
-    fi ;;
+      exec "$FAKE_BIN/ruler" "$FAKE_LOKI_STALE"
+    fi
+    exec "$FAKE_BIN/ruler" "$LOKI_LOADED" ;;
   */loki/api/v1/rules*)
     if [[ -n "${FAKE_LOKI_STORE_ERROR:-}" ]]; then
       [[ "$*" != *-fsS* ]] || exit 22
@@ -89,6 +88,24 @@ case "$*" in
     printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"trading_target_info","server_id":"trading02","strategy":"deploy-lane-btc","quote_currency":"USDT"},"value":[0,"1"]}]}}\n' ;;
   *) exit 22 ;;
 esac
+EOF
+# The rules as a live ruler reports them: what the throwaway ruler loaded, plus
+# the evaluation state it never had.
+cat >"$FAKE_BIN/ruler" <<'EOF'
+#!/usr/bin/env python3
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    loaded = json.load(handle)
+evaluated = {"lastEvaluation": "2026-11-05T10:00:00Z", "evaluationTime": 0.25}
+for group in loaded["data"]["groups"]:
+    group.update(evaluated)
+    for rule in group["rules"]:
+        rule.update(evaluated, health="err", lastError="query timed out")
+        if rule["type"] == "alerting":
+            rule.update(state="firing", alerts=[{"state": "firing"}])
+print(json.dumps(loaded))
 EOF
 # Serves what Grafana would hold: the checkout, or FAKE_GRAFANA_ROOT to stand in
 # for content it never loaded. Grafana adds id and version to the stored model.
@@ -377,36 +394,44 @@ restore() {
   printf '%s\n' "$base" >"$applied_record"
 }
 recorded() {
-  cat "$applied_record"
+  cat "$applied_record" 2>/dev/null || true
 }
 seed_head() {
   git -C "$SEED" rev-parse HEAD
 }
-change_dashboard() {
-  python3 -I - "$SEED/$1" "$2" <<'PY'
+# Sets one field of a dashboard to a JSON value.
+set_dashboard() {
+  python3 -I - "$SEED/$1" "$2" "$3" <<'PY'
 import json
 import sys
 
-path, description = sys.argv[1:3]
+path, field, value = sys.argv[1:4]
 with open(path, encoding="utf-8") as handle:
     dashboard = json.load(handle)
-dashboard["description"] = description
+dashboard[field] = json.loads(value)
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(dashboard, handle, ensure_ascii=False)
 PY
 }
-# Same alert names, different query: only a comparison of the query sees this.
-change_rule() {
-  python3 -I - "$SEED/$RULE_FILE" <<'PY'
+change_dashboard() {
+  set_dashboard "$1" description "\"$2\""
+}
+# Replaces the first match in the rule file.
+edit_rule() {
+  python3 -I - "$SEED/$RULE_FILE" "$1" "$2" <<'PY'
 import sys
 
-path = sys.argv[1]
+path, old, new = sys.argv[1:4]
 with open(path, encoding="utf-8") as handle:
     rules = handle.read()
-assert "[1m]" in rules
+assert old in rules
 with open(path, "w", encoding="utf-8") as handle:
-    handle.write(rules.replace("[1m]", "[2m]", 1))
+    handle.write(rules.replace(old, new, 1))
 PY
+}
+# Same alert names, different query: only a comparison of the query sees this.
+change_rule() {
+  edit_rule '[1m]' '[2m]'
 }
 expect_refused() {
   local label="$1" expected="$2" head record
@@ -475,6 +500,41 @@ for bad in broken-json zero-byte emptied-existing array empty-object no-title no
   expect_refused "$bad dashboard" "$(basename "$path")"
   restore
 done
+
+# The values below are what pinned Grafana 11.2.0 was seen to rewrite or keep.
+printf 'case: a dashboard Grafana would rewrite is refused before the checkout moves\n'
+for refresh in 1s 4s 0s 0m 500ms 1.5s 30 abc; do
+  set_dashboard "$FLEET" refresh "\"$refresh\""
+  publish "refresh $refresh"
+  for way in --dry-run ""; do
+    expect_refused "refresh $refresh ${way:-deploy}" "trading-strategy-fleet.json: refresh \"$refresh\"" ${way:+"$way"}
+    [[ "$output" == *'at least 5s'* ]] || fail "refresh $refresh: did not say how to fix it: $output"
+  done
+  restore
+done
+for field in title uid; do
+  for padded in ' padded' 'padded '; do
+    set_dashboard "$FLEET" "$field" "\"$padded\""
+    publish "padded $field"
+    for way in --dry-run ""; do
+      expect_refused "padded $field ${way:-deploy}" \
+        "trading-strategy-fleet.json: $field has spaces around it" ${way:+"$way"}
+    done
+    restore
+  done
+done
+
+printf 'case: a refresh Grafana keeps as written passes\n'
+mkdir -p "$(dirname "$SEED/$NEW_DASHBOARD")"
+number=0
+for refresh in '"5s"' '"1m"' '"1h"' '"1d"' '"1w"' '"1M"' '"1y"' '""' '"auto"' false true null 30; do
+  number=$((number + 1))
+  printf '{"uid":"refresh-%s","title":"Refresh %s","refresh":%s}\n' "$number" "$number" "$refresh" \
+    >"$SEED/grafana/dashboards/Utilities/refresh-$number.json"
+done
+publish 'refresh values Grafana keeps'
+expect_applied 'refresh values Grafana keeps'
+restore
 
 printf 'case: an invalid Loki rule is refused by the real ruler before the checkout moves\n'
 for bad in broken-yaml broken-logql promql unknown-field zero-byte duplicate-group; do
@@ -584,12 +644,35 @@ FAKE_LOKI_STALE="$LOKI_BASE" FAKE_LOKI_STALE_READS=2 SKYEYE_ACCEPT_TIMEOUT=30 ex
 [[ "$(cat "$LOKI_READS")" == 3 ]] || fail "expected a third read of the ruler, got $(cat "$LOKI_READS")"
 restore
 
+printf 'case: a single rule setting the ruler has not loaded is not recorded\n'
+for setting in limit interval for labels annotations name; do
+  case "$setting" in
+    limit) edit_rule 'interval: 30s' $'interval: 30s\n      limit: 10' ;;
+    interval) edit_rule 'interval: 30s' 'interval: 45s' ;;
+    for) edit_rule '          labels:' $'          for: 5m\n          labels:' ;;
+    labels) edit_rule 'severity: High' 'severity: Low' ;;
+    annotations) edit_rule "summary: '" "summary: 'Now: " ;;
+    name) edit_rule 'alert: TradingExecutionIncident' 'alert: TradingExecutionIncidentRenamed' ;;
+  esac
+  publish "rule $setting change"
+  FAKE_LOKI_STALE="$LOKI_BASE" expect_not_loaded "stale $setting" \
+    'loaded rules differ from the target in tnauqquant.yml/'
+  expect_applied "$setting loaded"
+  restore
+done
+
 printf 'case: dashboards Grafana has not loaded are not recorded, and rerunning retries\n'
 change_dashboard "$FLEET" not-yet
 publish 'dashboard content change'
 FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded 'stale dashboard' \
   'trading-strategy-fleet still serves other content'
 expect_applied 'Grafana caught up'
+restore
+
+set_dashboard "$FLEET" refresh '"1m"'
+publish 'dashboard refresh change'
+FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded 'stale refresh' \
+  'trading-strategy-fleet still serves other content'
 restore
 
 mkdir -p "$(dirname "$SEED/$NEW_DASHBOARD")"
@@ -626,6 +709,28 @@ FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded 'dashboard moved away' \
   'trading-strategy-fleet was removed but is still served'
 restore
 
+printf 'case: every uid a file held since the last apply must stop being served\n'
+set_dashboard "$FLEET" uid '"fleet-renamed"'
+publish 'dashboard uid change'
+rm -rf "$WORK/grafana-both"
+cp -R "$SEED/grafana/dashboards" "$WORK/grafana-both"
+cp "$GRAFANA_BASE/Trading/trading-strategy-fleet.json" "$WORK/grafana-both/Trading/old-uid.json"
+FAKE_GRAFANA_ROOT="$WORK/grafana-both" expect_not_loaded 'old uid still served' \
+  'trading-strategy-fleet was removed but is still served'
+expect_applied 'old uid gone'
+restore
+
+set_dashboard "$FLEET" uid '"fleet-renamed"'
+publish 'dashboard uid change'
+FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded 'new uid never loaded' \
+  'fleet-renamed (Trading/trading-strategy-fleet.json) is not provisioned'
+git_q -C "$SEED" rm --quiet "$FLEET"
+publish 'remove the dashboard whose new uid never loaded'
+FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded 'applied uid still served' \
+  'trading-strategy-fleet was removed but is still served'
+expect_applied 'both uids gone'
+restore
+
 printf 'case: a UI edit to a dashboard that did not change does not block a deploy\n'
 change_dashboard "$FLEET" changed
 publish 'dashboard content change'
@@ -637,29 +742,43 @@ git_q -C "$SEED" checkout --quiet -- "$NODE_DASHBOARD"
 FAKE_GRAFANA_ROOT="$WORK/grafana-drift" expect_applied 'UI edit elsewhere'
 restore
 
-printf 'case: without a record Grafana must hold every dashboard, whatever their content\n'
+printf 'case: without a record every dashboard must match its file\n'
 rm -f "$applied_record"
 rm -rf "$WORK/grafana-drift"
 cp -R "$LIVE/grafana/dashboards" "$WORK/grafana-drift"
 rm "$WORK/grafana-drift/Trading/trading-strategy-fleet.json"
-if output="$(FAKE_GRAFANA_ROOT="$WORK/grafana-drift" deploy 2>&1)"; then
-  fail "no record: a dashboard Grafana never loaded was recorded"
-fi
-[[ "$output" == *'trading-strategy-fleet is not provisioned'* ]] || fail "no record: wrong reason: $output"
-[[ ! -e "$applied_record" ]] || fail "no record: a record was written"
+FAKE_GRAFANA_ROOT="$WORK/grafana-drift" expect_not_loaded 'no record, not provisioned' \
+  'trading-strategy-fleet (Trading/trading-strategy-fleet.json) is not provisioned'
 cp "$GRAFANA_BASE/Trading/trading-strategy-fleet.json" "$WORK/grafana-drift/Trading/"
-python3 -I - "$WORK/grafana-drift/Hosts/hosts-node-exporter.json" <<'PY'
-import json
-import sys
+change_dashboard "$NODE_DASHBOARD" 'edited in the UI before central-deploy ever ran'
+cp "$SEED/$NODE_DASHBOARD" "$WORK/grafana-drift/Hosts/hosts-node-exporter.json"
+git_q -C "$SEED" checkout --quiet -- "$NODE_DASHBOARD"
+FAKE_GRAFANA_ROOT="$WORK/grafana-drift" expect_not_loaded 'no record, UI edit' \
+  'if that is a UI edit, export hosts-node-exporter to Git'
+[[ ! -e "$applied_record" ]] || fail "no record: a record was written"
+expect_applied 'no record, every dashboard matches'
+restore
 
-with open(sys.argv[1], encoding="utf-8") as handle:
-    dashboard = json.load(handle)
-dashboard["description"] = "edited in the UI before central-deploy ever ran"
-with open(sys.argv[1], "w", encoding="utf-8") as handle:
-    json.dump(dashboard, handle, ensure_ascii=False)
-PY
-output="$(FAKE_GRAFANA_ROOT="$WORK/grafana-drift" deploy 2>&1)" || fail "no record: UI drift blocked the record: $output"
-[[ "$(recorded)" == "$base" ]] || fail "no record: nothing was recorded"
+printf 'case: a first deploy Grafana did not load stays unrecorded however often it is rerun\n'
+rm -f "$applied_record"
+change_dashboard "$FLEET" first-deploy
+publish 'dashboard content change'
+for attempt in first second; do
+  FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded "no record, $attempt run" \
+    'trading-strategy-fleet still serves other content'
+done
+[[ ! -e "$applied_record" ]] || fail "no record: a record was written"
+expect_applied 'no record, Grafana caught up'
+restore
+
+printf 'case: a checkout pulled by hand without a record is held to the same check\n'
+rm -f "$applied_record"
+change_dashboard "$FLEET" pulled-by-hand
+publish 'dashboard content change'
+git_q -C "$LIVE" pull --quiet --ff-only origin master
+FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded 'no record, pulled by hand' \
+  'trading-strategy-fleet still serves other content'
+[[ ! -e "$applied_record" ]] || fail "no record: a record was written"
 restore
 
 printf 'case: a dashboard change without a working token fails before the checkout moves\n'

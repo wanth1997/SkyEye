@@ -18,10 +18,11 @@ set -euo pipefail
 # Publishing is not the same as loading: after the checkout moves, Loki and
 # Grafana keep serving their old content when they reject a file, and neither
 # has a reload that reports it. So a changed rule or dashboard must be seen
-# loaded through their APIs before the commit counts as applied. If it is not,
-# the run fails with the checkout left at the target, nothing recorded and no
-# automatic rollback: Prometheus and Alertmanager already run that commit, and
-# undoing them is the operator's call.
+# loaded through their APIs before the commit counts as applied, and with no
+# record every rule and dashboard counts as changed. If it is not, the run fails
+# with the checkout left at the target, nothing recorded and no automatic
+# rollback: Prometheus and Alertmanager already run that commit, and undoing them
+# is the operator's call.
 #
 # Reading dashboards back takes a Grafana service account token with the Viewer
 # role, in GRAFANA_TOKEN_FILE outside the checkout. A dashboard change without a
@@ -309,12 +310,30 @@ import re
 import subprocess
 import sys
 
-LOKI_GROUP_FIELDS = ("file", "name", "interval")
-LOKI_RULE_FIELDS = ("name", "query", "duration", "labels", "annotations")
+# Everything else the ruler reports has to match, so a setting that a later Loki
+# adds is compared rather than skipped.
+LOKI_EVALUATION_FIELDS = ("alerts", "evaluationTime", "health", "lastError", "lastEvaluation", "state")
+# Grafana's default dashboards.min_refresh_interval, which compose leaves alone.
+GRAFANA_MIN_REFRESH_SECONDS = 5
 
 
 def refuse_constant(value):
     raise ValueError("%s is not valid JSON" % value)
+
+
+def check_refresh(refresh):
+    # Grafana serves its minimum instead of a string below it or one it cannot
+    # parse, and leaves anything that is not a string alone. A compound value
+    # such as 1h30m would be kept, but is refused to keep this parser to one unit.
+    if not isinstance(refresh, str) or refresh in ("", "auto"):
+        return
+    match = re.fullmatch(r"([0-9]+)([smhdwMy])", refresh)
+    if not match or int(match[1]) < (GRAFANA_MIN_REFRESH_SECONDS if match[2] == "s" else 1):
+        raise ValueError(
+            'refresh "%s" would be rewritten by Grafana, so the served copy would never match; '
+            'use a whole number and one unit, at least %ds, or "" for none'
+            % (refresh, GRAFANA_MIN_REFRESH_SECONDS)
+        )
 
 
 def load_dashboard(path):
@@ -326,6 +345,9 @@ def load_dashboard(path):
         value = dashboard.get(field)
         if not isinstance(value, str) or not value.strip():
             raise ValueError("needs a non-empty %s" % field)
+        if value != value.strip():
+            raise ValueError("%s has spaces around it, which Grafana would trim; remove them" % field)
+    check_refresh(dashboard.get("refresh"))
     return dashboard
 
 
@@ -333,7 +355,8 @@ def comparable(dashboard):
     return {key: value for key, value in dashboard.items() if key not in ("id", "version")}
 
 
-def old_uid(bases, path):
+def old_uids(bases, path):
+    found = set()
     for base in bases:
         shown = subprocess.run(["git", "show", "%s:%s" % (base, path)], capture_output=True)
         if shown.returncode != 0:
@@ -342,9 +365,9 @@ def old_uid(bases, path):
             old = json.loads(shown.stdout)
         except ValueError:
             continue
-        if isinstance(old, dict) and old.get("uid"):
-            return old["uid"]
-    return None
+        if isinstance(old, dict) and isinstance(old.get("uid"), str):
+            found.add(old["uid"].strip())
+    return found
 
 
 def dashboards_validate(root, output, unrecorded, rest):
@@ -373,23 +396,18 @@ def dashboards_validate(root, output, unrecorded, rest):
     if errors:
         sys.exit("\n".join("invalid dashboard " + error for error in errors))
 
+    changed_files = {os.path.relpath(path, "grafana/dashboards") for path in changed}
     expected, absent = {}, set()
-    for path in changed:
-        relative = os.path.relpath(path, "grafana/dashboards")
-        if relative in dashboards:
-            dashboard = dashboards[relative]
+    for relative, dashboard in dashboards.items():
+        # Without a record nothing tells a UI edit from a load that never
+        # happened, so every dashboard has to match its file.
+        if unrecorded == "1" or relative in changed_files:
             expected[dashboard["uid"]] = {"path": relative, "body": comparable(dashboard)}
-        else:
-            uid = old_uid(bases, path)
-            if uid and uid not in uids:
-                absent.add(uid)
-    manifest = {
-        "changed": expected,
-        "absent": sorted(absent),
-        # Without a record there is no baseline to tell a load that never
-        # happened from a UI edit, so only presence can be required.
-        "present": sorted(uids) if unrecorded == "1" else [],
-    }
+    # A failed run can leave one uid applied and another at HEAD, and Grafana may
+    # serve either, so every uid the target no longer holds has to be gone.
+    for path in changed:
+        absent |= old_uids(bases, path) - set(uids)
+    manifest = {"expected": expected, "absent": sorted(absent)}
     with open(output, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle)
 
@@ -438,29 +456,35 @@ def grafana_confirm(curl, url, token_file, checkout, manifest_path):
         manifest = json.load(handle)
     header = token_header(token_file, checkout)
     served = {item["uid"] for item in grafana_get(curl, url, header, "/api/search?type=dash-db&limit=5000")}
-    problems = ["%s is not provisioned" % uid for uid in manifest["present"] if uid not in served]
-    problems += ["%s was removed but is still served" % uid for uid in manifest["absent"] if uid in served]
-    for uid, want in sorted(manifest["changed"].items()):
+    problems = ["%s was removed but is still served" % uid for uid in manifest["absent"] if uid in served]
+    differing = []
+    for uid, want in sorted(manifest["expected"].items()):
         if uid not in served:
             problems.append("%s (%s) is not provisioned" % (uid, want["path"]))
             continue
         live = grafana_get(curl, url, header, "/api/dashboards/uid/" + uid)
         if comparable(live.get("dashboard", {})) != want["body"]:
             problems.append("%s still serves other content than %s" % (uid, want["path"]))
+            differing.append(uid)
         elif live.get("meta", {}).get("provisionedExternalId") != want["path"]:
             problems.append("%s is not provisioned from %s" % (uid, want["path"]))
+    if differing:
+        problems.append("if that is a UI edit, export %s to Git and deploy that, or undo the edit" % ", ".join(differing))
     if problems:
-        sys.exit(", ".join(problems))
-    print("%d changed, %d removed, %d present" % (len(manifest["changed"]), len(manifest["absent"]), len(manifest["present"])))
+        sys.exit("; ".join(problems))
+    print("%d confirmed, %d removed" % (len(manifest["expected"]), len(manifest["absent"])))
+
+
+def loki_settings(entry):
+    return {key: value for key, value in entry.items() if key not in LOKI_EVALUATION_FIELDS}
 
 
 def loki_groups(path):
     with open(path, encoding="utf-8") as handle:
         groups = json.load(handle)["data"]["groups"]
     return {
-        (group["file"], group["name"]): (
-            [group.get(field) for field in LOKI_GROUP_FIELDS],
-            [[rule.get(field) for field in LOKI_RULE_FIELDS] for rule in group["rules"]],
+        (group["file"], group["name"]): dict(
+            loki_settings(group), rules=[loki_settings(rule) for rule in group["rules"]]
         )
         for group in groups
     }
