@@ -1,0 +1,191 @@
+rule_files:
+  - ../backup.yml
+
+evaluation_interval: 1m
+
+tests:
+  # One pushed sample per day: the instant lookback misses it, the rules must not.
+  - name: healthy nightly push stays quiet between samples
+    interval: 1d
+    input_series:
+      - series: 'skyeye_backup_last_success_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 86400 172800'
+      - series: 'skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 86400 172800'
+      - series: 'skyeye_backup_snapshot_pinned_bytes{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 0 0'
+      - series: 'skyeye_backup_pending_generations{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 0 0'
+    alert_rule_test:
+      - {eval_time: 2d20h, alertname: PrometheusBackupStale, exp_alerts: []}
+      - {eval_time: 2d20h, alertname: PrometheusBackupStaleCritical, exp_alerts: []}
+      - {eval_time: 2d20h, alertname: PrometheusBackupSignalMissing, exp_alerts: []}
+      - {eval_time: 2d20h, alertname: PrometheusBackupSnapshotsAccumulating, exp_alerts: []}
+
+  # Eval times sit on the threshold and just past threshold + for: 10m.
+  - name: attempts continue but nothing completes
+    interval: 1d
+    input_series:
+      - series: 'skyeye_backup_last_success_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 0 0 0 0'
+      - series: 'skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 86400 172800 259200 345600'
+    alert_rule_test:
+      - eval_time: 1d6h
+        alertname: PrometheusBackupStale
+        exp_alerts: []
+      - eval_time: 1d6h15m
+        alertname: PrometheusBackupStale
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, instance: monitoring-prod, severity: Medium, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "No completed Prometheus backup generation for over 30h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+      - eval_time: 2d6h
+        alertname: PrometheusBackupStaleCritical
+        exp_alerts: []
+      - eval_time: 2d6h15m
+        alertname: PrometheusBackupStaleCritical
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, instance: monitoring-prod, severity: High, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "No completed Prometheus backup generation for over 54h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+      - eval_time: 2d7h
+        alertname: PrometheusBackupSignalMissing
+        exp_alerts: []
+
+  - name: a completed backup clears the staleness alerts
+    interval: 1d
+    input_series:
+      - series: 'skyeye_backup_last_success_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 0 0 259200'
+      - series: 'skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 86400 172800 259200'
+    alert_rule_test:
+      - eval_time: 2d23h
+        alertname: PrometheusBackupStaleCritical
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, instance: monitoring-prod, severity: High, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "No completed Prometheus backup generation for over 54h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+      - {eval_time: 3d1h, alertname: PrometheusBackupStale, exp_alerts: []}
+      - {eval_time: 3d1h, alertname: PrometheusBackupStaleCritical, exp_alerts: []}
+
+  # State lost, or the script never wrote the series: attempts alone are not health.
+  - name: attempts with no success series on record
+    interval: 1d
+    input_series:
+      - series: 'skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 86400 172800 259200'
+    alert_rule_test:
+      - eval_time: 2d7h
+        alertname: PrometheusBackupStaleCritical
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, instance: monitoring-prod, severity: High, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "No completed Prometheus backup generation for over 54h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+      - eval_time: 2d7h
+        alertname: PrometheusBackupStale
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, instance: monitoring-prod, severity: Medium, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "No completed Prometheus backup generation for over 30h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+
+  # Cron gone or script dead: no new attempt sample after 1d.
+  - name: reports stop entirely
+    interval: 1d
+    input_series:
+      - series: 'skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 86400'
+    alert_rule_test:
+      - eval_time: 2d6h
+        alertname: PrometheusBackupSignalMissing
+        exp_alerts: []
+      - eval_time: 2d6h15m
+        alertname: PrometheusBackupSignalMissing
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, severity: Medium, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "Prometheus backup has reported nothing for 30h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+
+  # Nothing reported at all, as on the first deploy: only the transport alert fires.
+  - name: series never existed
+    interval: 1d
+    input_series:
+      - series: 'up{job="prometheus"}'
+        values: '1 1'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PrometheusBackupSignalMissing
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, severity: Medium, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "Prometheus backup has reported nothing for 30h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+      - {eval_time: 15m, alertname: PrometheusBackupStale, exp_alerts: []}
+      - {eval_time: 15m, alertname: PrometheusBackupStaleCritical, exp_alerts: []}
+
+  # A long silence must not resolve the High alert into a Medium one.
+  - name: staleness survives days of silence
+    interval: 1d
+    input_series:
+      - series: 'skyeye_backup_last_success_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0'
+      - series: 'skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0'
+    alert_rule_test:
+      - eval_time: 9d
+        alertname: PrometheusBackupStaleCritical
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, instance: monitoring-prod, severity: High, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "No completed Prometheus backup generation for over 54h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+
+  - name: pinned bytes over the bound
+    interval: 1d
+    input_series:
+      - series: 'skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 86400'
+      - series: 'skyeye_backup_snapshot_pinned_bytes{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '3221225472 4294967296'
+      - series: 'skyeye_backup_pending_generations{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '1 2'
+    alert_rule_test:
+      # Exactly on the bound for both inputs: allowed.
+      - eval_time: 23h
+        alertname: PrometheusBackupSnapshotsAccumulating
+        exp_alerts: []
+      - eval_time: 1d1h
+        alertname: PrometheusBackupSnapshotsAccumulating
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, instance: monitoring-prod, severity: Medium, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "Local Prometheus snapshots exceed the retention bound"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+
+  - name: pending generations over the bound
+    interval: 1d
+    input_series:
+      - series: 'skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 86400'
+      - series: 'skyeye_backup_snapshot_pinned_bytes{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '0 0'
+      - series: 'skyeye_backup_pending_generations{job="skyeye-backup",instance="monitoring-prod"}'
+        values: '2 3'
+    alert_rule_test:
+      - eval_time: 23h
+        alertname: PrometheusBackupSnapshotsAccumulating
+        exp_alerts: []
+      - eval_time: 1d1h
+        alertname: PrometheusBackupSnapshotsAccumulating
+        exp_alerts:
+          - exp_labels: {job: skyeye-backup, instance: monitoring-prod, severity: Medium, product: skyeye, notification_mode: shadow}
+            exp_annotations:
+              summary: "Local Prometheus snapshots exceed the retention bound"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
