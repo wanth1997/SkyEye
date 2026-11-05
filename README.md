@@ -122,9 +122,50 @@ See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest
 
 ## Change workflow
 
-- Everything is in git. Config changes → edit file → `docker compose up -d --force-recreate <service>` (or `curl -X POST localhost:<port>/-/reload` for Prom/AM live reload). For merged rule/dashboard/Alertmanager changes, `scripts/central-deploy` on the central host validates, fast-forwards and reloads in one step.
+- Everything is in git. Config changes → edit file → `docker compose up -d --force-recreate <service>` (or `curl -X POST localhost:<port>/-/reload` for Prom/AM live reload). For merged rule/dashboard/Alertmanager changes, `scripts/central-deploy` on the central host validates, fast-forwards, reloads and confirms the load in one step.
 - Dashboards: edit JSON in `grafana/dashboards/<folder>/<uid>.json`; Grafana picks up via provisioning within 60 s.
 - Alloy agents: on the target host, `git pull` + `sudo -E bash agents/alloy/setup.sh`.
+
+### What `scripts/central-deploy` proves
+
+Before the checkout moves, in a dry run too, it checks the target commit:
+
+- **Dashboards:** every `*.json` must be one JSON object with a `title` and a `uid`, with no uid repeated anywhere and no title repeated in a folder. Grafana silently drops a repeated title, and a repeated uid stops it writing any dashboard.
+- **Loki rules:** the ruler from the pinned `grafana/loki` image loads them in a throwaway container with no network (under a second, about 85 MB). This catches YAML errors, unknown fields, empty files, LogQL syntax errors and duplicate groups. Rule files must sit directly in `loki/rules/fake/`.
+
+The rule check does not catch a valid rule that means the wrong thing: a label typo that never matches, a log query used as an alert (it loads and only fails when evaluated), query limits, or Alertmanager routing and shadow/canary policy. Dashboards are not checked past the fields above; panels, queries and datasources are not.
+
+After the checkout moves, a changed rule or dashboard must be seen loaded before the commit is recorded in `.git/skyeye-central-deploy.applied`:
+
+- **Loki:** the rules the ruler reports at `/prometheus/api/v1/rules` must equal the rules from the throwaway ruler. `loki_ruler_config_last_reload_successful` stays 1 when a file is rejected, so it proves nothing.
+- **Grafana:** each changed dashboard must be served with the content of its file, from that file. Only changed files are compared, because a UI edit to an unchanged dashboard stays in the database and is not a failure. If an earlier run failed and someone then edits a listed dashboard in the UI, export the edit to Git or undo it.
+
+If that does not happen within `SKYEYE_ACCEPT_TIMEOUT` seconds (default 150), the run exits 1 with `is published but not loaded`. The checkout stays at the target, nothing is recorded and nothing rolls back, because Prometheus and Alertmanager already run that commit. Loki and Grafana keep serving their previous content. Fix the cause and rerun; the message also prints how to go back.
+
+### One-time setup for `scripts/central-deploy`
+
+A dashboard change needs a Grafana token to read dashboards back, and so does the first run on a checkout with no applied record. Without it the deploy stops before the checkout moves. Create it once:
+
+1. In Grafana, go to Administration → Users and access → Service accounts → Add service account. Name it `central-deploy` and give it the **Viewer** role, which is enough; do not raise it. Then Add service account token and copy the value.
+2. On monitoring-prod, store it outside the checkout, mode 0600. Paste the token and press Enter; it is not echoed and stays out of the shell history:
+
+   ```bash
+   install -d -m 700 /home/ubuntu/.config/skyeye
+   (umask 077 && IFS= read -rs token && printf '%s\n' "$token" >/home/ubuntu/.config/skyeye/grafana-viewer-token)
+   ```
+
+3. Confirm it works. This should print one dashboard:
+
+   ```bash
+   printf 'header = "Authorization: Bearer %s"\n' "$(cat /home/ubuntu/.config/skyeye/grafana-viewer-token)" |
+     curl --config - -fsS 'http://127.0.0.1:3000/api/search?type=dash-db&limit=1'
+   ```
+
+`SKYEYE_GRAFANA_TOKEN_FILE` overrides the path. Never commit the token or pass it on a command line. When a token expires, a dry run with a dashboard change fails with a 401; replace the file the same way.
+
+### Changing the Loki image tag
+
+The rule check runs the tag pinned in the target commit and never pulls it (`--pull=never`), so nothing is downloaded onto the host by a deploy. A commit that changes the tag fails closed until the image is on the host, so run `docker pull grafana/loki:<tag>` first. The check needs `/bin/sh`, `wget` and `-target=ruler` in the image; if a new image lacks them, the dry run fails and the check must be updated with the tag.
 
 ## Phase history
 
