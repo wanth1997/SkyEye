@@ -11,6 +11,7 @@ PROM_TARGET="$REPO_ROOT/prometheus/rules/trading-targets.yml"
 PROM_TARGET_FIXTURE="$REPO_ROOT/prometheus/rules/tests/fixtures/trading-targets.yml"
 TARGET_TOOL="$REPO_ROOT/scripts/trading-target"
 LOKI_RULES="$REPO_ROOT/loki/rules/fake/tnauqquant.yml"
+ALERTMANAGER_CONFIG="$REPO_ROOT/alertmanager/alertmanager.yml"
 INCIDENT_FIXTURE="$REPO_ROOT/tests/fixtures/tnauqquant/trading-incident.raw.log"
 INCIDENT_TEST="$REPO_ROOT/tests/trading/test-incident-taxonomy.sh"
 
@@ -22,6 +23,7 @@ for required_file in \
   "$PROM_TARGET_FIXTURE" \
   "$TARGET_TOOL" \
   "$LOKI_RULES" \
+  "$ALERTMANAGER_CONFIG" \
   "$INCIDENT_FIXTURE" \
   "$INCIDENT_TEST"
 do
@@ -413,19 +415,116 @@ for generic_selector in 'product="tnauqquant"' 'environment="production"'; do
   }
 done
 
-prom_alert_count="$(rg -c '^[[:space:]]+- alert: Trading' "$PROM_RULES")"
-prom_shadow_count="$(rg -c '^[[:space:]]+notification_mode: shadow' "$PROM_RULES")"
-loki_alert_count="$(rg -c '^[[:space:]]+- alert: Trading' "$LOKI_RULES")"
-loki_shadow_count="$(rg -c '^[[:space:]]+notification_mode: shadow' "$LOKI_RULES")"
-if [[ "$prom_alert_count" != "$prom_shadow_count" ||
-      "$loki_alert_count" != "$loki_shadow_count" ]]
-then
-  printf 'FAIL: every Trading alert must remain shadow-only during rollout\n' >&2
+"$TARGET_TOOL" check-alert-modes "$PROM_RULES" "$LOKI_RULES" || {
+  printf 'FAIL: Trading alerts break the page allow-list\n' >&2
+  exit 1
+}
+
+# Decision D19, stated here on purpose instead of read from the tool under test.
+PAGE_ALERTS=(TradingCriticalSafetyState TradingProcessDown TradingRiskStopped)
+modes_dir="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-trading-modes.XXXXXX")"
+derived_test="$modes_dir/trading-derived.test.yml"
+trap 'rm -rf "$modes_dir"' EXIT
+
+reset_modes() {
+  cp "$PROM_RULES" "$modes_dir/prom.yml"
+  cp "$LOKI_RULES" "$modes_dir/loki.yml"
+}
+
+# Replaces one label of one alert in the copies; an empty value drops the label.
+set_label() {
+  local alert="$1" key="$2" value="$3" file
+  for file in "$modes_dir/prom.yml" "$modes_dir/loki.yml"; do
+    awk -v alert="$alert" -v key="$key" -v value="$value" '
+      /- alert: / { current = $3 }
+      current == alert && $1 == key ":" {
+        if (value == "") next
+        sub(key ":.*", key ": " value)
+      }
+      { print }
+    ' "$file" >"$file.new"
+    mv "$file.new" "$file"
+  done
+}
+
+modes_accepted() {
+  "$TARGET_TOOL" check-alert-modes "$modes_dir/prom.yml" "$modes_dir/loki.yml" >/dev/null 2>&1
+}
+
+expect_modes_rejected() {
+  if modes_accepted; then
+    printf 'FAIL: allow-list accepted %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+expect_modes_accepted() {
+  modes_accepted || {
+    printf 'FAIL: allow-list rejected %s\n' "$1" >&2
+    exit 1
+  }
+}
+
+all_alerts=()
+while IFS= read -r alert; do
+  all_alerts+=("$alert")
+done < <(awk '/- alert: / { print $3 }' "$PROM_RULES" "$LOKI_RULES")
+[[ "${#all_alerts[@]}" -gt "${#PAGE_ALERTS[@]}" ]] || {
+  printf 'FAIL: found no Trading alerts outside the allow-list\n' >&2
+  exit 1
+}
+
+for alert in "${all_alerts[@]}"; do
+  allowed=0
+  for page_alert in "${PAGE_ALERTS[@]}"; do
+    [[ "$alert" != "$page_alert" ]] || allowed=1
+  done
+  reset_modes
+  set_label "$alert" notification_mode page
+  if [[ "$allowed" -eq 1 ]]; then
+    expect_modes_accepted "$alert as page"
+  else
+    expect_modes_rejected "$alert as page"
+  fi
+  for unknown in paging Page PAGE '"page"' silent ''; do
+    reset_modes
+    set_label "$alert" notification_mode "$unknown"
+    expect_modes_rejected "$alert with notification_mode '$unknown'"
+  done
+done
+
+reset_modes
+for page_alert in "${PAGE_ALERTS[@]}"; do
+  set_label "$page_alert" notification_mode page
+done
+expect_modes_accepted "all allow-listed alerts as page"
+
+reset_modes
+set_label TradingRiskStopped notification_mode page
+set_label TradingRiskStopped severity Medium
+expect_modes_rejected "a paging alert that is not High"
+
+reset_modes
+sed 's/- alert: TradingRiskStopped$/- alert: TradingRiskRenamed/' "$PROM_RULES" >"$modes_dir/prom.yml"
+expect_modes_rejected "an allow-list entry with no rule"
+
+printf 'groups: []\n' >"$modes_dir/prom.yml"
+expect_modes_rejected "a rule file with no alerts"
+
+# amtool accepts an inline password next to the file, and this repo is public.
+grep -q 'auth_password_file: /etc/alertmanager/secrets/smtp_password$' "$ALERTMANAGER_CONFIG" || {
+  printf 'FAIL: Alertmanager must read the SMTP password from its secrets file\n' >&2
+  exit 1
+}
+if grep -Eq '^[[:space:]]*(smtp_)?auth_(password|secret):' "$ALERTMANAGER_CONFIG"; then
+  printf 'FAIL: an SMTP credential is written inline in alertmanager.yml\n' >&2
+  exit 1
+fi
+if grep -Eo '[[:alnum:]._%+-]+@[[:alnum:].-]+' "$ALERTMANAGER_CONFIG" | grep -Ev '@example\.invalid$'; then
+  printf 'FAIL: alertmanager.yml holds a mail address; this repo is public\n' >&2
   exit 1
 fi
 
-derived_test="$(mktemp "${TMPDIR:-/tmp}/skyeye-trading-derived.XXXXXX")"
-trap 'rm -f "$derived_test"' EXIT
 if command -v docker >/dev/null 2>&1; then
   "$TARGET_TOOL" --file "$PROM_TARGET" render-test \
     --rule-file /etc/prometheus/rules/trading-targets.yml \

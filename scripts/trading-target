@@ -11,6 +11,7 @@ Subcommands:
   remove       delete one row and its legacy alias (idempotent)
   list         print rows as TSV or JSON
   check        verify the file is canonical and internally consistent
+  check-alert-modes  verify which Trading alert rules may page
   render-test  emit a promtool test derived from the inventory
 
 Standard library only; no third-party packages.
@@ -60,7 +61,24 @@ REQUIRED_LABELS = LABEL_ORDER[:-1]
 IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 QUOTE_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
 ENVIRONMENTS = ("production",)
+# An inventory row is metadata: routing reads the alert rule's own label, so a
+# row can never page and always stays shadow.
 NOTIFICATION_MODES = ("shadow",)
+
+DEFAULT_ALERT_RULES = (
+    REPO_ROOT / "prometheus" / "rules" / "trading.yml",
+    REPO_ROOT / "loki" / "rules" / "fake" / "tnauqquant.yml",
+)
+ALERT_MODES = ("shadow", "page")
+# The only alerts that may page (decision D19). Everything else stays shadow.
+PAGE_ALERTS = (
+    "TradingCriticalSafetyState",
+    "TradingProcessDown",
+    "TradingRiskStopped",
+)
+RULE_START_RE = re.compile(r"^\s*- (?:alert|record|name):")
+ALERT_RE = re.compile(r"^\s*- alert:\s*(\S+)\s*$")
+ALERT_LABEL_RE = re.compile(r"^\s+(notification_mode|severity):\s*(.*?)\s*$")
 
 YAML_NON_STRING_RE = re.compile(
     r"^(?:(?i:true|false|yes|no|on|off|y|n|null)|~"
@@ -356,6 +374,61 @@ def cmd_check(args: argparse.Namespace) -> int:
     return status
 
 
+def alert_rules(path: Path) -> list[tuple[str, dict[str, list[str]]]]:
+    """Return (alert name, label values) for each alert rule in a rule file."""
+    alerts: list[tuple[str, dict[str, list[str]]]] = []
+    current: dict[str, list[str]] | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if RULE_START_RE.match(line):
+            current = None
+            match = ALERT_RE.match(line)
+            if match:
+                current = {"notification_mode": [], "severity": []}
+                alerts.append((match.group(1), current))
+            continue
+        label = ALERT_LABEL_RE.match(line)
+        if label and current is not None:
+            current[label.group(1)].append(label.group(2))
+    return alerts
+
+
+def cmd_check_alert_modes(args: argparse.Namespace) -> int:
+    problems: list[str] = []
+    seen: set[str] = set()
+    counts = dict.fromkeys(ALERT_MODES, 0)
+    for name in args.files or DEFAULT_ALERT_RULES:
+        path = Path(name)
+        alerts = alert_rules(path)
+        if not alerts:
+            problems.append(f"{path}: no alert rules found")
+        for alert, labels in alerts:
+            seen.add(alert)
+            modes = labels["notification_mode"]
+            if len(modes) != 1:
+                problems.append(f"{path}: {alert} needs exactly one notification_mode, found {len(modes)}")
+                continue
+            mode = modes[0]
+            if mode not in ALERT_MODES:
+                problems.append(f"{path}: {alert} has unknown notification_mode {mode!r}")
+                continue
+            counts[mode] += 1
+            if mode != "page":
+                continue
+            if alert not in PAGE_ALERTS:
+                problems.append(f"{path}: {alert} may not page; only {', '.join(PAGE_ALERTS)} may")
+            if labels["severity"] != ["High"]:
+                problems.append(f"{path}: {alert} pages, so its severity must be High")
+    for alert in PAGE_ALERTS:
+        if alert not in seen:
+            problems.append(f"allow-listed alert {alert} has no rule; update PAGE_ALERTS")
+    if problems:
+        for problem in problems:
+            print(f"FAIL: {problem}", file=sys.stderr)
+        return 1
+    print(f"OK: {counts['shadow']} shadow, {counts['page']} page")
+    return 0
+
+
 def labels_selector(labels: dict[str, str]) -> str:
     inner = ",".join(f'{key}="{value}"' for key, value in labels.items())
     return "{" + inner + "}"
@@ -471,6 +544,11 @@ def build_parser() -> argparse.ArgumentParser:
     check = sub.add_parser("check", help="verify inventory files are canonical")
     check.add_argument("files", nargs="*", metavar="FILE", help="files to check (default: --file)")
     check.set_defaults(handler=cmd_check)
+
+    modes = sub.add_parser("check-alert-modes", help="verify which Trading alert rules may page")
+    modes.add_argument("files", nargs="*", metavar="RULE_FILE",
+                       help="rule files to check (default: Trading Prometheus and Loki rules)")
+    modes.set_defaults(handler=cmd_check_alert_modes)
 
     render = sub.add_parser("render-test", help="emit a promtool test derived from the inventory")
     render.add_argument("--rule-file", action="append",
