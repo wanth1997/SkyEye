@@ -415,10 +415,11 @@ for generic_selector in 'product="tnauqquant"' 'environment="production"'; do
   }
 done
 
-"$TARGET_TOOL" check-alert-modes "$PROM_RULES" "$LOKI_RULES" || {
+modes_summary="$("$TARGET_TOOL" check-alert-modes "$PROM_RULES" "$LOKI_RULES")" || {
   printf 'FAIL: Trading alerts break the page allow-list\n' >&2
   exit 1
 }
+printf '%s\n' "$modes_summary"
 
 # Decision D19, stated here on purpose instead of read from the tool under test.
 PAGE_ALERTS=(TradingCriticalSafetyState TradingProcessDown TradingRiskStopped)
@@ -431,20 +432,52 @@ reset_modes() {
   cp "$LOKI_RULES" "$modes_dir/loki.yml"
 }
 
-# Replaces one label of one alert in the copies; an empty value drops the label.
-set_label() {
-  local alert="$1" key="$2" value="$3" file
+# Runs a filter command over both copies.
+rewrite_modes() {
+  local file
   for file in "$modes_dir/prom.yml" "$modes_dir/loki.yml"; do
-    awk -v alert="$alert" -v key="$key" -v value="$value" '
-      /- alert: / { current = $3 }
-      current == alert && $1 == key ":" {
-        if (value == "") next
-        sub(key ":.*", key ": " value)
-      }
-      { print }
-    ' "$file" >"$file.new"
+    "$@" "$file" >"$file.new"
     mv "$file.new" "$file"
   done
+}
+
+# Replaces one label of one alert in the copies; an empty value drops the label.
+set_label() {
+  local alert="$1" key="$2" value="$3"
+  rewrite_modes awk -v alert="$alert" -v key="$key" -v value="$value" '
+    /- alert: / { current = $3 }
+    current == alert && $1 == key ":" {
+      if (value == "") next
+      sub(key ":.*", key ": " value)
+    }
+    { print }
+  '
+}
+
+# Valid YAML respellings of one rule. Each must get the canonical rule's verdict.
+alert_key_last() {
+  rewrite_modes awk -v alert="$1" '
+    state == 2 && NF && match($0, /[^ ]/) <= dash + 1 { print key; state = 0 }
+    state == 1 { print lead substr($0, length(lead) + 1); state = 2; next }
+    $1 == "-" && $2 == "alert:" && $3 == alert {
+      dash = index($0, "-") - 1
+      lead = substr($0, 1, dash + 2)
+      key = $0
+      sub(/- /, "  ", key)
+      state = 1
+      next
+    }
+    { print }
+    END { if (state == 2) print key }
+  '
+}
+
+comment_alert_name() {
+  rewrite_modes sed -E "s/(- alert: $1)\$/\1 # reviewed/"
+}
+
+comment_modes() {
+  rewrite_modes sed -E 's/(notification_mode: [^ ]+)$/\1 # reviewed/'
 }
 
 modes_accepted() {
@@ -474,6 +507,22 @@ done < <(awk '/- alert: / { print $3 }' "$PROM_RULES" "$LOKI_RULES")
   exit 1
 }
 
+# Counted by awk, not the tool, so a rule only one of them can see fails here.
+read -r _ shadow_count _ page_count _ <<<"$modes_summary"
+[[ "$((shadow_count + page_count))" == "${#all_alerts[@]}" ]] || {
+  printf 'FAIL: tool checked %s alerts, rule files hold %s\n' \
+    "$((shadow_count + page_count))" "${#all_alerts[@]}" >&2
+  exit 1
+}
+
+expect_page_verdict() {
+  if [[ "$allowed" -eq 1 ]]; then
+    expect_modes_accepted "$1"
+  else
+    expect_modes_rejected "$1"
+  fi
+}
+
 for alert in "${all_alerts[@]}"; do
   allowed=0
   for page_alert in "${PAGE_ALERTS[@]}"; do
@@ -481,15 +530,21 @@ for alert in "${all_alerts[@]}"; do
   done
   reset_modes
   set_label "$alert" notification_mode page
-  if [[ "$allowed" -eq 1 ]]; then
-    expect_modes_accepted "$alert as page"
-  else
-    expect_modes_rejected "$alert as page"
-  fi
+  expect_page_verdict "$alert as page"
   for unknown in paging Page PAGE '"page"' silent ''; do
     reset_modes
     set_label "$alert" notification_mode "$unknown"
     expect_modes_rejected "$alert with notification_mode '$unknown'"
+  done
+  for spelling in alert_key_last comment_alert_name comment_modes; do
+    reset_modes
+    set_label "$alert" notification_mode page
+    "$spelling" "$alert"
+    expect_page_verdict "$alert as page through $spelling"
+    reset_modes
+    set_label "$alert" notification_mode paging
+    "$spelling" "$alert"
+    expect_modes_rejected "$alert as paging through $spelling"
   done
 done
 
@@ -510,6 +565,45 @@ expect_modes_rejected "an allow-list entry with no rule"
 
 printf 'groups: []\n' >"$modes_dir/prom.yml"
 expect_modes_rejected "a rule file with no alerts"
+
+# Text inside a block scalar is not a rule.
+reset_modes
+awk '
+  /- alert: TradingRiskStopped$/ { sub(/TradingRiskStopped/, "TradingRiskRenamed") }
+  { print }
+  /expr: \|$/ && !done {
+    print "          - alert: TradingRiskStopped"
+    print "          notification_mode: shadow"
+    done = 1
+  }
+' "$PROM_RULES" >"$modes_dir/prom.yml"
+expect_modes_rejected "an allow-listed rule that exists only inside an expr"
+
+# A rule the tool cannot read has to stop the check, not drop out of it.
+outside_list_tail=$'        expr: vector(1)\n        labels:\n          severity: High\n          notification_mode: page'
+unreadable_rules=(
+  '      - {alert: TradingOutsideList, expr: vector(1), labels: {severity: High, notification_mode: page}}'
+  $'      - alert: TradingOutsideList\n        expr: vector(1)\n        labels: {severity: High, notification_mode: page}'
+  $'      -\n        alert: TradingOutsideList\n'"$outside_list_tail"
+  $'      - "alert": TradingOutsideList\n'"$outside_list_tail"
+  $'      - alert : TradingOutsideList\n'"$outside_list_tail"
+  $'      - alert:\n          TradingOutsideList\n'"$outside_list_tail"
+  $'      - alert: TradingOutsideList\n        expr: vector(1)\n        labels: &paged\n          severity: High\n          notification_mode: page\n      - alert: TradingOutsideTwo\n        expr: vector(1)\n        labels: *paged'
+  $'      - alert: TradingOutsideList\n        expr: vector(1)\n        labels:\n          <<: {severity: High, notification_mode: page}'
+  $'      - alert: TradingOutsideList\n        expr: vector(1)\n        labels:\n          severity: High\n          notification_mode: !!str page'
+  $'      - expr: vector(1)\n        labels:\n          severity: High\n          notification_mode: page'
+  $'      - alert: &name TradingOutsideList\n'"$outside_list_tail"
+  $'      - alert: TradingOutsideList\n'"$outside_list_tail"$'\n        annotations:\n          "summary": quoted key'
+  $'      - alert: TradingOutsideList\n        expr: vector(1)\n          and vector(1)\n        labels:\n          severity: High\n          notification_mode: page'
+)
+# Run as shadow too, so the refusal cannot come from the allow-list.
+for unreadable_rule in "${unreadable_rules[@]}"; do
+  for mode in page shadow; do
+    reset_modes
+    printf '%s\n' "${unreadable_rule//notification_mode: page/notification_mode: $mode}" >>"$modes_dir/prom.yml"
+    expect_modes_rejected "a $mode rule it cannot read: ${unreadable_rule%%$'\n'*}"
+  done
+done
 
 # amtool accepts an inline password next to the file, and this repo is public.
 grep -q 'auth_password_file: /etc/alertmanager/secrets/smtp_password$' "$ALERTMANAGER_CONFIG" || {
