@@ -524,6 +524,57 @@ FAKE_NOW="$pinned_now" run_probe
 expect 'a cycle at the skew limit is accepted' "$(metric cycle_cumulative_real_pnl_usdt 'cycle="1"')" 10
 expect 'a cycle past the skew limit is rejected' "$(metric cycle_cumulative_real_pnl_usdt 'cycle="2"')" ''
 
+printf '# completed cycles today\n'
+today_case() { # today_case DESCRIPTION ZONE NOW_UTC WANT TIME...
+  local description="$1" zone="$2" now="$3" want="$4" cycle=0 event_time
+  shift 4
+  fixture
+  export TQ_TIMEZONE="$zone"
+  : >"$LOG"
+  for event_time in "$@"; do
+    cycle=$((cycle + 1))
+    cycle_line "$event_time" "$cycle" 1 1 >>"$LOG"
+  done
+  FAKE_NOW="$(epoch_of "$now")" run_probe
+  expect "$description" "$(metric completed_cycles_today)" "$want"
+}
+
+# Taipei's 2025-07-17 starts at 2025-07-16T16:00:00Z.
+today_case 'a UTC log in Taipei counts the Taipei day' Asia/Taipei 2025-07-17T02:00:00Z 2 \
+  2025-07-16T15:59:59Z 2025-07-16T16:00:00Z 2025-07-17T01:00:00Z
+today_case 'a +08:00 log in UTC counts the UTC day' UTC 2025-07-17T23:30:00Z 2 \
+  2025-07-17T07:00:00+08:00 2025-07-17T07:59:59+08:00 2025-07-17T08:00:00+08:00 \
+  2025-07-18T07:00:00+08:00
+today_case 'a negative offset can land on the next UTC day' UTC 2025-07-17T12:00:00Z 1 \
+  2025-07-16T19:00:00-05:00
+today_case 'a half-hour offset with fractions is read to the second' UTC 2025-07-17T12:00:00Z 1 \
+  2025-07-17T05:29:59.123456789+05:30 2025-07-17T05:30:00.000+05:30
+today_case 'a same-offset log starts the day at midnight and skips future events' \
+  Asia/Taipei 2025-07-17T02:00:00Z 1 \
+  2025-07-16T23:59:59+08:00 2025-07-17T00:00:00+08:00 2025-07-17T23:00:00+08:00
+# The last two would land inside today if they were read as rollovers.
+today_case 'a same-offset log does not count unreadable times' Asia/Taipei 2025-07-17T02:00:00Z 1 \
+  2025-07-17T09:00:00+08:00 2025-07-17Tbroken 2025-07-17T00:60:00+08:00 2025-07-16T24:00:00+08:00
+today_case 'a leap day is a real day' UTC 2024-02-29T12:00:00Z 1 \
+  2024-02-28T23:59:59Z 2024-02-29T00:00:00Z
+# Thirty seconds ahead is inside the skew allowance, so only the day end excludes it.
+today_case 'tomorrow does not count even inside the skew allowance' \
+  Asia/Taipei 2025-07-17T15:59:30Z 1 \
+  2025-07-17T23:59:29+08:00 2025-07-18T00:00:00+08:00
+# New York's 2025-03-09 lasts 23 hours and 2025-11-02 lasts 25.
+today_case 'a 23-hour day ends at the next local midnight' \
+  America/New_York 2025-03-10T03:59:30Z 2 \
+  2025-03-09T05:00:00Z 2025-03-10T03:59:00Z 2025-03-10T04:00:30Z
+today_case 'a 25-hour day keeps its last hour' America/New_York 2025-11-03T04:30:00Z 2 \
+  2025-11-02T04:00:00Z 2025-11-03T04:20:00Z
+# Havana skips 00:00 on 2025-03-09, so that day starts at 01:00 local, 05:00Z.
+today_case 'a day that skips midnight starts at its first instant' \
+  America/Havana 2025-03-09T16:00:00Z 1 \
+  2025-03-09T04:59:59Z 2025-03-09T05:00:00Z
+today_case 'the day before a skipped midnight ends at that first instant' \
+  America/Havana 2025-03-09T04:59:30Z 1 \
+  2025-03-08T05:00:00Z 2025-03-09T05:00:30Z
+
 stop_processes
 if [[ "$FAILURES" -gt 0 ]]; then
   printf 'FAIL: %s probe safety cases failed\n' "$FAILURES" >&2

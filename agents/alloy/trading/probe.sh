@@ -56,6 +56,8 @@ timestamp_to_epoch() {
   TZ=UTC date -d "$timestamp" '+%s' 2>/dev/null
 }
 
+# Zones that skip midnight for DST start that day at 01:00. GNU date rejects the
+# skipped time, while BSD date already moves it forward.
 local_day_start_epoch() {
   local day="$1"
   local result
@@ -64,7 +66,19 @@ local_day_start_epoch() {
     printf '%s\n' "$result"
     return 0
   fi
-  TZ="$TQ_TIMEZONE" date -d "$day 00:00:00" '+%s' 2>/dev/null
+  TZ="$TQ_TIMEZONE" date -d "$day 00:00:00" '+%s' 2>/dev/null ||
+    TZ="$TQ_TIMEZONE" date -d "$day 01:00:00" '+%s' 2>/dev/null
+}
+
+# Calendar arithmetic only, so UTC keeps a DST change out of it.
+next_calendar_day() {
+  local day="$1"
+  local result
+  if result="$(TZ=UTC date -j -v+1d -f '%Y-%m-%d' "$day" '+%Y-%m-%d' 2>/dev/null)"; then
+    printf '%s\n' "$result"
+    return 0
+  fi
+  TZ=UTC date -d "$day + 1 day" '+%Y-%m-%d' 2>/dev/null
 }
 
 # Event times are read in awk: forking date per line would dominate every full-log
@@ -1027,6 +1041,8 @@ fi
 
 TODAY_LOCAL="$(TZ="$TQ_TIMEZONE" date +%F)"
 TODAY_START_EPOCH="$(local_day_start_epoch "$TODAY_LOCAL")"
+TOMORROW_LOCAL="$(next_calendar_day "$TODAY_LOCAL")"
+TOMORROW_START_EPOCH="$(local_day_start_epoch "$TOMORROW_LOCAL")"
 TODAY_COMPLETED_CYCLES="$({
   while IFS= read -r history_log; do
     [[ -n "$history_log" && -f "$history_log" ]] || continue
@@ -1034,9 +1050,9 @@ TODAY_COMPLETED_CYCLES="$({
     [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
     history_run_id="$(basename "$history_log")"
     history_run_id="${history_run_id%.raw.log}"
-    awk -v day="$TODAY_LOCAL" -v run_id="$history_run_id" '
+    awk -v day_start="$TODAY_START_EPOCH" -v day_end="$TOMORROW_START_EPOCH" \
+        -v run_id="$history_run_id" -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
       {
-        timestamp = ""
         message = ""
         stable = ""
         completed = ""
@@ -1048,15 +1064,16 @@ TODAY_COMPLETED_CYCLES="$({
           key = substr($i, 1, equals - 1)
           value = substr($i, equals + 1)
           gsub(/^"|"$/, "", value)
-          if (key == "time") timestamp = value
           if (key == "msg") message = value
           if (key == "stable") stable = value
           if (key == "cycle_completed") completed = value
           if (key == "cycle_id") cycle_id = value
           if (key == "cycles_completed") cycles_completed = value
         }
-        if (substr(timestamp, 1, 10) == day && message == "pnl_status" &&
-            stable == "true" && completed == "true") {
+        if (message != "pnl_status" || stable != "true" || completed != "true") next
+        timestamp = event_time()
+        epoch = event_epoch(timestamp)
+        if (epoch >= day_start && epoch < day_end && epoch <= future_limit) {
           if (cycle_id == "") cycle_id = timestamp ":" cycles_completed
           print run_id ":" cycle_id
         }
