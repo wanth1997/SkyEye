@@ -1,6 +1,12 @@
 global:
   resolve_timeout: 5m
 
+# Mail addresses stay in an untracked file because this repo is public. A missing
+# file is fine; one with a syntax error stops Alertmanager from starting, which
+# takes Telegram down too. See runbooks/trading-alert-promotion.md before adding it.
+templates:
+  - /etc/alertmanager/secrets/*.tmpl
+
 route:
   receiver: telegram-medium
   group_by: [alertname, product, environment, server_id, strategy, severity]
@@ -13,6 +19,14 @@ route:
     - matchers: [notification_mode="shadow"]
       receiver: shadow-null
       continue: false
+    # Email keeps its own route so a stalled mail server cannot hold up Telegram:
+    # sharing one receiver would block every later Telegram message of the group.
+    # Only promoted alerts reach it until the real canary passes.
+    - matchers: [severity="High", notification_mode="page"]
+      receiver: email-high
+      group_wait: 0s
+      repeat_interval: 30m
+      continue: true
     - matchers: [severity="High"]
       receiver: telegram-high
       group_wait: 0s
@@ -58,6 +72,28 @@ receivers:
           {{- end }}
           {{ if .CommonAnnotations.runbook_url }}
           📖 <a href="{{ .CommonAnnotations.runbook_url }}">Runbook</a>{{ end }}
+
+  # example.invalid values are placeholders until the mail settings are filled in.
+  # Nothing reaches this receiver before then: no alert is notification_mode=page.
+  - name: email-high
+    email_configs:
+      - to: '{{ template "skyeye.email.to" . }}'
+        from: '{{ template "skyeye.email.from" . }}'
+        smarthost: smtp.example.invalid:587
+        auth_username: smtp-user@example.invalid
+        auth_password_file: /etc/alertmanager/secrets/smtp_password
+        send_resolved: true
+        headers:
+          Subject: '[SkyEye High] {{ if eq .Status "firing" }}FIRING{{ else }}RESOLVED{{ end }} {{ .GroupLabels.alertname }}'
+        html: ''
+        text: |-
+          {{ if eq .Status "firing" }}High FIRING{{ else }}High RESOLVED{{ end }} - {{ .GroupLabels.alertname }}
+          {{ if .GroupLabels.product }}Product: {{ .GroupLabels.product }}{{ end }}
+          {{ range .Alerts }}
+          - {{ .Annotations.summary }}
+          {{- end }}
+          {{ if .CommonAnnotations.runbook_url }}
+          Runbook: {{ .CommonAnnotations.runbook_url }}{{ end }}
 
   - name: telegram-medium
     telegram_configs:
