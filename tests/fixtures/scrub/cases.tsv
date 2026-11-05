@@ -1,0 +1,104 @@
+# Synthetic scrub cases for tests/trading/test-scrub-pipeline.sh.
+#
+# Nothing here comes from a real log. Sensitive values are FAKE-* markers, plus
+# 0900-000-00x numbers because the phone rule only matches digits.
+#
+# Columns are tab separated, the payload is the raw logfmt tail, verbatim:
+#   id     case id, also the prefix of every generated run_id
+#   group  safe means every generated line must come out byte-identical
+#   scope  both     logfmt tail, Trading (rule and msg position matrix) and general
+#          general  general only
+#          raw      Trading only, whole lines: @T@ is the timestamp, <NL> a physical newline
+#   marks  comma-separated values that must not survive the scrub, - for none
+#   keep   text that must survive, - for none
+A01	auth	both	FAKE-CREDENTIAL-0001	-	Authorization: Bearer FAKE-CREDENTIAL-0001
+A02	auth	both	FAKE-CREDENTIAL-0002	-	authorization=Bearer FAKE-CREDENTIAL-0002
+A03	auth	both	FAKE-CREDENTIAL-0003	-	authorization="Bearer FAKE-CREDENTIAL-0003"
+A04	auth	both	FAKE-CREDENTIAL-0004	-	Authorization:Bearer FAKE-CREDENTIAL-0004
+A05	auth	both	FAKE-CREDENTIAL-0005	-	authorization=FAKE-CREDENTIAL-0005
+A06	auth	both	FAKE-CREDENTIAL-0006	-	Authorization: Basic FAKE-CREDENTIAL-0006==
+A07	auth	both	FAKE-CREDENTIAL-0007	-	headers="map[Accept:[*/*] Authorization:[Bearer FAKE-CREDENTIAL-0007]]"
+A08	auth	both	FAKE-CREDENTIAL-0008	-	err="request failed: Authorization: Bearer FAKE-CREDENTIAL-0008 rejected"
+A09	auth	both	FAKE-CREDENTIAL-0009	-	err="401 from venue authorization=Bearer FAKE-CREDENTIAL-0009"
+A10	auth	both	FAKE-CREDENTIAL-0010	-	Proxy-Authorization: Bearer FAKE-CREDENTIAL-0010
+A11	auth	both	FAKE-CREDENTIAL-0011	-	Authorization : Bearer FAKE-CREDENTIAL-0011
+A12	auth	both	FAKE-CREDENTIAL-0012	-	cmd="curl -H \"Authorization: Bearer FAKE-CREDENTIAL-0012\" https://venue.invalid"
+A13	auth	both	FAKE-CREDENTIAL-0013	-	Authorization: Custom FAKE-CREDENTIAL-0013
+A14	auth	both	FAKE-CREDENTIAL-0014	reason="still readable"	authorization=FAKE-CREDENTIAL-0014 reason="still readable"
+A15	auth	both	FAKE-CREDENTIAL-0015	-	Authorization: Digest username="FAKE-CREDENTIAL-0015", realm="venue"
+T01	token	both	FAKE-CREDENTIAL-0101	-	token=FAKE-CREDENTIAL-0101
+T02	token	both	FAKE-CREDENTIAL-0102A,FAKE-CREDENTIAL-0102B	-	token="FAKE-CREDENTIAL-0102A FAKE-CREDENTIAL-0102B"
+T03	token	both	FAKE-CREDENTIAL-0103	-	token="FAKE-CREDENTIAL-0103"
+T04	token	both	FAKE-CREDENTIAL-0104A,FAKE-CREDENTIAL-0104B,FAKE-CREDENTIAL-0104C	-	token="FAKE-CREDENTIAL-0104A \"FAKE-CREDENTIAL-0104B\" FAKE-CREDENTIAL-0104C"
+T05	token	both	FAKE-CREDENTIAL-0105	err="login failed token=[TOKEN]"	err="login failed token=FAKE-CREDENTIAL-0105"
+T06	token	both	FAKE-CREDENTIAL-0106	-	token: FAKE-CREDENTIAL-0106
+T07	token	both	FAKE-CREDENTIAL-0107	-	access_token=FAKE-CREDENTIAL-0107
+T08	token	both	FAKE-CREDENTIAL-0108	-	url="https://venue.invalid/ws?token=FAKE-CREDENTIAL-0108&ts=1"
+T09	token	both	FAKE-CREDENTIAL-0109A,FAKE-CREDENTIAL-0109B	-	refresh_token="FAKE-CREDENTIAL-0109A FAKE-CREDENTIAL-0109B"
+T10	token	both	FAKE-CREDENTIAL-0110	-	X-Auth-Token: FAKE-CREDENTIAL-0110
+T12	token	both	FAKE-CREDENTIAL-0112,FAKE-CREDENTIAL-0113	-	Token=FAKE-CREDENTIAL-0112 TOKEN:FAKE-CREDENTIAL-0113
+O01	order	both	FAKE-ORDER-0201	order_id=[ORDER_REF]	order_id=FAKE-ORDER-0201
+O02	order	both	FAKE-ORDER-0202A,FAKE-ORDER-0202B	-	order_id="FAKE-ORDER-0202A FAKE-ORDER-0202B"
+O03	order	both	FAKE-ORDER-0203A,FAKE-ORDER-0203B	client_action_id=[ORDER_REF]	client_action_id="FAKE-ORDER-0203A FAKE-ORDER-0203B"
+O04	order	both	FAKE-ORDER-0204A,FAKE-ORDER-0204B	-	order_id="FAKE-ORDER-0204A \"FAKE-ORDER-0204B\""
+O05	order	both	FAKE-ORDER-0205	-	err="cancel failed order_id=FAKE-ORDER-0205"
+O06	order	both	FAKE-ORDER-0206	-	order_id: FAKE-ORDER-0206
+O07	order	both	FAKE-ORDER-0207	orderId=[ORDER_REF]	orderId=FAKE-ORDER-0207
+O08	order	both	FAKE-ORDER-0208	-	clientOrderId=FAKE-ORDER-0208
+X01	exec	both	FAKE-TRACE-0301A,FAKE-TRACE-0301B	attempt_id=[TRACE_REF]	attempt_id="FAKE-TRACE-0301A FAKE-TRACE-0301B"
+X02	exec	both	FAKE-TRACE-0302A,FAKE-TRACE-0302B	-	reservation_id="FAKE-TRACE-0302A FAKE-TRACE-0302B"
+X03	exec	both	FAKE-ACCOUNT-0303A,FAKE-ACCOUNT-0303B	-	account="FAKE-ACCOUNT-0303A FAKE-ACCOUNT-0303B"
+X04	exec	both	FAKE-ACCOUNT-0304A,FAKE-ACCOUNT-0304B	mutations=[EXECUTION_REF]	mutations=[FAKE-ACCOUNT-0304A FAKE-ACCOUNT-0304B]
+X05	exec	both	FAKE-ACCOUNT-0305A,FAKE-ACCOUNT-0305B	-	mutations="[FAKE-ACCOUNT-0305A FAKE-ACCOUNT-0305B]"
+X06	exec	both	FAKE-ACCOUNT-0306	grant_id=[EXECUTION_REF]	grant_id=FAKE-ACCOUNT-0306
+X07	exec	both	FAKE-ACCOUNT-0307A,FAKE-ACCOUNT-0307B	-	err="grant rejected grant_id=FAKE-ACCOUNT-0307A account=FAKE-ACCOUNT-0307B"
+J01	json	raw	FAKE-CREDENTIAL-0401,FAKE-CREDENTIAL-0402,FAKE-ORDER-0403	-	{"time":"@T@","level":"ERROR","msg":"coordinator_fence_stalled","authorization":"Bearer FAKE-CREDENTIAL-0401","token":"FAKE-CREDENTIAL-0402","order_id":"FAKE-ORDER-0403"}
+J02	json	both	FAKE-CREDENTIAL-0404,FAKE-CREDENTIAL-0405,FAKE-ORDER-0406	-	body="{\"authorization\":\"Bearer FAKE-CREDENTIAL-0404\",\"token\":\"FAKE-CREDENTIAL-0405\",\"order_id\":\"FAKE-ORDER-0406\"}"
+J03	json	both	FAKE-CREDENTIAL-0407	-	body={"token":"FAKE-CREDENTIAL-0407"}
+E01	error	both	FAKE-CREDENTIAL-0501	-	err="line one\nAuthorization: Bearer FAKE-CREDENTIAL-0501\nline three"
+E02	error	both	FAKE-CREDENTIAL-0502	-	err="status=401 body=\"token=FAKE-CREDENTIAL-0502\""
+E03	error	both	-	err="bad token: "	err="bad token: "
+E04	error	both	-	err="missing authorization="	err="missing authorization="
+E05	error	both	-	reason="x y"	err="bad account: " reason="x y"
+E06	error	both	-	err="bad apikey: "	err="bad apikey: "
+E07	error	both	-	cycle_id=SAFE-1	err="bad order_id: " detail=abc cycle_id=SAFE-1
+M01	multiline	raw	FAKE-CREDENTIAL-0601,FAKE-CREDENTIAL-0602A,FAKE-CREDENTIAL-0602B,FAKE-ORDER-0603	-	time=@T@ level=ERROR msg=coordinator_fence_stalled err="request dump follows<NL>Authorization: Bearer FAKE-CREDENTIAL-0601<NL>token="FAKE-CREDENTIAL-0602A FAKE-CREDENTIAL-0602B"<NL>order_id=FAKE-ORDER-0603<NL>end of dump"
+M02	multiline	raw	FAKE-CREDENTIAL-0604A,FAKE-CREDENTIAL-0604B	-	time=@T@ level=ERROR msg=rv_generic_failure token="FAKE-CREDENTIAL-0604A<NL>FAKE-CREDENTIAL-0604B"
+G01	gap	both	FAKE-CREDENTIAL-0701	-	api_key=FAKE-CREDENTIAL-0701
+G02	gap	both	FAKE-CREDENTIAL-0702	-	secret="FAKE-CREDENTIAL-0702"
+G03	gap	both	FAKE-CREDENTIAL-0703	-	password=FAKE-CREDENTIAL-0703
+G04	gap	both	FAKE-CREDENTIAL-0704	-	signature=FAKE-CREDENTIAL-0704
+G05	gap	both	FAKE-CREDENTIAL-0705	-	X-MEXC-APIKEY: FAKE-CREDENTIAL-0705
+G06	gap	both	FAKE-CREDENTIAL-0706	-	Cookie: session=FAKE-CREDENTIAL-0706
+G07	gap	both	FAKE-CREDENTIAL-0707	-	err="sent Bearer FAKE-CREDENTIAL-0707 upstream"
+G08	gap	both	FAKE-CREDENTIAL-0708A,FAKE-CREDENTIAL-0708B	-	Cookie: a=FAKE-CREDENTIAL-0708A; b=FAKE-CREDENTIAL-0708B
+G09	gap	both	FAKE-CREDENTIAL-0709	-	token=Bearer FAKE-CREDENTIAL-0709
+G10	gap	both	FAKE-CREDENTIAL-0710	-	X-Auth-Token: Bearer FAKE-CREDENTIAL-0710
+G11	gap	both	FAKE-CREDENTIAL-0711A,FAKE-CREDENTIAL-0711B	cookie=[SECRET]	cookie="a=FAKE-CREDENTIAL-0711A; b=FAKE-CREDENTIAL-0711B"
+G12	gap	both	FAKE-CREDENTIAL-0712	-	Set-Cookie: session=FAKE-CREDENTIAL-0712; Path=/; HttpOnly
+G13	gap	both	FAKE-CREDENTIAL-0713	-	body="{\"cookie\":\"a=FAKE-CREDENTIAL-0713\"}"
+G14	gap	both	FAKE-CREDENTIAL-0714	-	body="{\"api_key\":\"FAKE-CREDENTIAL-0714\"}"
+G15	gap	both	FAKE-CREDENTIAL-0715	-	payload {"api_key": "FAKE-CREDENTIAL-0715"}
+G16	gap	both	FAKE-CREDENTIAL-0716,FAKE-CREDENTIAL-0717	-	url="https://venue.invalid/?apikey=FAKE-CREDENTIAL-0716&signature=FAKE-CREDENTIAL-0717"
+K01	dict	both	FAKE-CREDENTIAL-0801	-	payload {'token': 'FAKE-CREDENTIAL-0801', 'x': 1}
+K02	dict	both	FAKE-CREDENTIAL-0802	-	payload {'Authorization': 'Bearer FAKE-CREDENTIAL-0802'}
+K03	dict	both	FAKE-CREDENTIAL-0803	-	payload {'password': 'FAKE-CREDENTIAL-0803'}
+K04	dict	both	FAKE-CREDENTIAL-0804A,FAKE-CREDENTIAL-0804B	-	token='FAKE-CREDENTIAL-0804A FAKE-CREDENTIAL-0804B'
+K05	dict	both	FAKE-CREDENTIAL-0805	-	payload {'api_key': 'FAKE-CREDENTIAL-0805'}
+R01	safe	both	-	-	cycle_id=SAFE-0801 real_pnl_usdt=1.25 cycles_completed=3
+R02	safe	both	-	-	tokens_used=5 token_count=7
+R03	safe	both	-	-	account_count=2 accounts=1
+R04	safe	both	-	-	detail="token bucket refilled"
+R05	safe	both	-	-	venue=fake-venue side=Short reason="fence stalled twice"
+R06	safe	both	-	-	authorization_required=true cookie_count=2 password_age_days=30 signature_version=2 secret_rotation_days=30 tokenizer=x
+R07	safe	both	-	-	token="" order_note="" detail="it's fine"
+P01	pii	general	0900000001	contact [PHONE] updated	contact 0900000001 updated
+P02	pii	general	0900-000-002	contact [PHONE] updated	contact 0900-000-002 updated
+P03	pii	general	FAKE-EMAIL-0903	notify [EMAIL] done	notify FAKE-EMAIL-0903@example.invalid done
+P04	pii	general	FAKE-EMAIL-0904	'Email': '[REDACTED]'	payload {'Email': 'FAKE-EMAIL-0904@example.invalid'}
+P05	pii	general	FAKE-NAME-測試甲	'姓名': '[NAME]'	payload {'姓名': 'FAKE-NAME-測試甲'}
+P06	pii	general	FAKE-NAME-測試乙	姓名=[NAME] ok	payload 姓名=FAKE-NAME-測試乙 ok
+S01	safe	both	-	-	[ERROR] follower.go:88 sync failed
+S02	safe	both	-	-	upstream said digest invalid
+S03	safe	both	-	-	upstream said apikey: invalid
+S04	safe	both	-	-	ts=1709123456789 ref=20260912345678
