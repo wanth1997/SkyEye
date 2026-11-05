@@ -130,15 +130,16 @@ See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest
 
 Before the checkout moves, in a dry run too, it checks the target commit:
 
-- **Dashboards:** every `*.json` must be one JSON object with a `title` and a `uid`, with no uid repeated anywhere and no title repeated in a folder. Grafana silently drops a repeated title, and a repeated uid stops it writing any dashboard.
+- **Dashboards:** every `*.json` must be one JSON object with a `title` and a `uid`, with no uid repeated anywhere and no title repeated in a folder. Grafana silently drops a repeated title, and a repeated uid stops it writing any dashboard. A `title` or `uid` with spaces around it, or a string `refresh` under `5s` or that Grafana cannot parse, is refused too: Grafana rewrites those, so the served copy would never match the file. Write `refresh` as a whole number and one unit (`30s`, `5m`, `1h`), or `""` for none.
 - **Loki rules:** the ruler from the pinned `grafana/loki` image loads them in a throwaway container with no network (under a second, about 85 MB). This catches YAML errors, unknown fields, empty files, LogQL syntax errors and duplicate groups. Rule files must sit directly in `loki/rules/fake/`.
 
 The rule check does not catch a valid rule that means the wrong thing: a label typo that never matches, a log query used as an alert (it loads and only fails when evaluated), query limits, or Alertmanager routing and shadow/canary policy. Dashboards are not checked past the fields above; panels, queries and datasources are not.
 
 After the checkout moves, a changed rule or dashboard must be seen loaded before the commit is recorded in `.git/skyeye-central-deploy.applied`:
 
-- **Loki:** the rules the ruler reports at `/prometheus/api/v1/rules` must equal the rules from the throwaway ruler. `loki_ruler_config_last_reload_successful` stays 1 when a file is rejected, so it proves nothing.
-- **Grafana:** each changed dashboard must be served with the content of its file, from that file. Only changed files are compared, because a UI edit to an unchanged dashboard stays in the database and is not a failure. If an earlier run failed and someone then edits a listed dashboard in the UI, export the edit to Git or undo it.
+- **Loki:** the rules the ruler reports at `/prometheus/api/v1/rules` must equal the rules from the throwaway ruler in everything except evaluation state, a group's `limit` included. `loki_ruler_config_last_reload_successful` stays 1 when a file is rejected, so it proves nothing. Loki 3.1.1 accepts `keep_firing_for` but drops it on load, so that field has no effect and is not confirmed.
+- **Grafana:** each changed dashboard must be served with the content of its file, from that file, and every uid the file had at the last apply or at HEAD must be gone unless another file now has it. Only changed files are compared, because a UI edit to an unchanged dashboard stays in the database and is not a failure. If an earlier run failed and someone then edits a listed dashboard in the UI, export the edit to Git or undo it.
+- **No applied record:** nothing tells a UI edit from a load that never happened, so every rule and every dashboard is compared. A dashboard edited in the UI then blocks the record, and there is no flag to skip it. The message names the uid: export the edit to Git and deploy that, or undo it in Grafana (dashboard settings → Versions), then rerun. This happens once, on the first run that has no record.
 
 If that does not happen within `SKYEYE_ACCEPT_TIMEOUT` seconds (default 150), the run exits 1 with `is published but not loaded`. The checkout stays at the target, nothing is recorded and nothing rolls back, because Prometheus and Alertmanager already run that commit. Loki and Grafana keep serving their previous content. Fix the cause and rerun; the message also prints how to go back.
 

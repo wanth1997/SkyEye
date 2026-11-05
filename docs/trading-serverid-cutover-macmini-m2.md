@@ -149,6 +149,7 @@ fi
 - **在 `Checkout fast-forwarded` 之前失敗**（promtool check、rule test、inventory test、dashboard 或 Loki rule 驗證、Grafana token 或前置檢查失敗）：中央沒有任何變更，Prometheus 仍是舊 inventory。不要重試或手動 reload，執行 **Rollback A**。
 - **在 `Checkout fast-forwarded` 之後失敗**（`Prometheus rejected the reload` 或 `unsuccessful config reload`）：磁碟已是新版，Prometheus 未套用。不要重啟 Prometheus，也不要照 central-deploy 提示的 `git reset --hard`；執行 **Rollback B**，再執行 **Rollback A**。
 - **訊息含 `is published but not loaded`**（只有 monitoring-prod 沒有 applied 紀錄時才會在這次 cutover 出現）：Prometheus 已通過 reload 檢查，改名已生效，但 Loki 或 Grafana 未確認載入，applied 紀錄沒有寫入。不要執行 Rollback，也不要照提示 `git reset --hard`。排除訊息指出的原因後重跑這個區塊，直到 `rc=0`，再跑部署後檢查。
+- **訊息同時含 `if that is a UI edit`**：沒有 applied 紀錄時，central-deploy 會比對每一個 dashboard，所以在 UI 改過、沒有 export 回 Git 的 dashboard 會擋住紀錄，訊息會指名 uid，而且沒有略過的旗標。處理方式同上一項，不要 Rollback。修改不用保留，就在 Grafana 的 dashboard settings → Versions 還原成 Git 的版本，再重跑這個區塊。要保留，就 export 回 Git 並 merge，核准後依 `STOP:` 那一項把 `MERGE` 改成新的 SHA，再重跑這個區塊。
 
 部署後檢查（只在成功時執行）：
 
