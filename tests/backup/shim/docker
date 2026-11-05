@@ -1,0 +1,109 @@
+#!/bin/bash
+# FAKE docker. Logs every call and keeps the Prometheus container state in a file.
+#   FAKE_DOCKER_PUSH     ok | fail | hang
+#   FAKE_DOCKER_STOP     ok | fail
+#   FAKE_DOCKER_UP       ok | fail
+#   FAKE_DOCKER_CREATE   ok | fail
+#   FAKE_PROMTOOL        ok | fail
+#   FAKE_DUMP_SHORT      ULID whose dump stops early, exit 0, as real promtool does
+# A file volume-unknown in FAKE_LOG means a host where Docker has not created the
+# volume. Creating it over an existing _data chowns _data to root, as the real daemon
+# does, and the fake curl then never reports ready: Prometheus runs as nobody.
+set -u
+: "${FAKE_LOG:?FAKE_LOG unset: refusing to run}"
+printf 'docker %s\n' "$*" >>"$FAKE_LOG/docker-calls.log"
+state="$FAKE_LOG/prom.state"
+
+create_volume() {
+  [ -f "$FAKE_LOG/volume-unknown" ] || return 0
+  rm -f "$FAKE_LOG/volume-unknown"
+  if [ -d "$FAKE_VOL" ]; then
+    : >"$FAKE_LOG/live-dir-owned-by-root"
+  else
+    mkdir -p "$FAKE_VOL"
+  fi
+}
+
+case "${1:-}" in
+  exec)
+    case "${FAKE_DOCKER_PUSH:-ok}" in
+      fail)
+        echo "Error response from daemon: container is not running" >&2
+        exit 1
+        ;;
+      hang) exec /bin/sleep 120 ;;
+    esac
+    cat >>"$FAKE_LOG/pushed.prom"
+    exit 0
+    ;;
+  inspect)
+    echo "prom/prometheus:v2.54.1"
+    exit 0
+    ;;
+  compose)
+    case " $* " in
+      *" stop "*)
+        [ "${FAKE_DOCKER_STOP:-ok}" = ok ] || exit 1
+        echo stopped >"$state"
+        ;;
+      *" create "*)
+        [ "${FAKE_DOCKER_CREATE:-ok}" = ok ] || exit 1
+        create_volume
+        ;;
+      *" up "*)
+        [ "${FAKE_DOCKER_UP:-ok}" = ok ] || exit 1
+        create_volume
+        echo running >"$state"
+        ;;
+      *" ps "*)
+        [ "$(cat "$state" 2>/dev/null || echo running)" != running ] || echo fakecontainerid
+        ;;
+    esac
+    exit 0
+    ;;
+  run)
+    case " $* " in
+      *" tsdb dump "*)
+        # promtool tsdb dump | wc -l over the one-block view. Real promtool refuses
+        # a database without wal/, and tombstones hide samples from it.
+        while [ $# -gt 0 ]; do
+          if [ "$1" = -v ]; then
+            view="${2%%:*}"
+            shift
+          fi
+          shift
+        done
+        [ -d "$view/wal" ] || {
+          echo 0
+          exit 0
+        }
+        for block in "$view"/*/; do
+          [ -f "$block/meta.json" ] || continue
+          n="$(jq -r '.stats.numSamples' "$block/meta.json")"
+          [ ! -s "$block/tombstones" ] || n=$((n - 1))
+          [ "$(basename "$block")" != "${FAKE_DUMP_SHORT:-}" ] || n=$((n / 2))
+          printf '%s\n' "$n" | tee -a "$FAKE_LOG/dump-reads.log"
+        done
+        exit 0
+        ;;
+    esac
+    # promtool tsdb list, as real promtool does it: a block without meta.json is
+    # skipped without an error.
+    [ "${FAKE_PROMTOOL:-ok}" = ok ] || {
+      echo "fake promtool: block corrupted" >&2
+      exit 1
+    }
+    printf 'BLOCK ULID                  MIN TIME       MAX TIME\n'
+    while [ $# -gt 0 ]; do
+      if [ "$1" = -v ]; then
+        host="${2%%:*}"
+        [ -f "$host/meta.json" ] && printf '%s  0  1\n' "$(basename "$host")"
+        shift
+      fi
+      shift
+    done
+    exit 0
+    ;;
+esac
+echo "fake docker: unsupported: $*" >&2
+exit 125

@@ -1,0 +1,92 @@
+#!/bin/bash
+# FAKE curl. No network. Models the Prometheus v2.54.1 endpoints the scripts call.
+#
+# Snapshot: hardlink every loaded block, then write the head as ONE NEW block, no WAL.
+#   FAKE_CURL   ok | down | http503 | evil_name | missing_dir | no_blocks
+#   FAKE_SNAPSHOT_DROP  path inside the snapshot to remove once it is taken
+# Ready and metrics read the fake container state and the live data directory.
+#   FAKE_READY  ok | never | only_with_marker (ready only if live.marker is in the data)
+#   FAKE_BLOCKS_LOADED  override prometheus_tsdb_blocks_loaded
+#   FAKE_GAUGE_AFTER    calls to /metrics before the gauge appears (never: it does not)
+set -u
+: "${FAKE_VOL:?FAKE_VOL unset: refusing to run}"
+: "${FAKE_LOG:?FAKE_LOG unset: refusing to run}"
+printf '%s curl %s\n' "${FAKE_NOW:-0}" "$*" >>"$FAKE_LOG/curl-calls.log"
+
+is_running() { [ "$(cat "$FAKE_LOG/prom.state" 2>/dev/null || echo running)" = running ]; }
+
+case "$*" in
+  */-/ready*)
+    is_running || exit 7
+    [ ! -f "$FAKE_LOG/live-dir-owned-by-root" ] || exit 22
+    case "${FAKE_READY:-ok}" in
+      never) exit 22 ;;
+      only_with_marker) [ -f "$FAKE_VOL/live.marker" ] || exit 22 ;;
+    esac
+    echo "Prometheus Server is Ready."
+    exit 0
+    ;;
+  */metrics*)
+    is_running || exit 7
+    calls=$(($(cat "$FAKE_LOG/metrics.count" 2>/dev/null || echo 0) + 1))
+    echo "$calls" >"$FAKE_LOG/metrics.count"
+    case "${FAKE_GAUGE_AFTER:-0}" in
+      never) exit 0 ;;
+      *) [ "$calls" -gt "${FAKE_GAUGE_AFTER:-0}" ] || exit 0 ;;
+    esac
+    n=0
+    for meta in "$FAKE_VOL"/*/meta.json; do
+      [ -f "$meta" ] && n=$((n + 1))
+    done
+    printf '# TYPE prometheus_tsdb_blocks_loaded gauge\nprometheus_tsdb_blocks_loaded %s\n' "${FAKE_BLOCKS_LOADED:-$n}"
+    exit 0
+    ;;
+  */api/v1/admin/tsdb/snapshot*) ;;
+  *)
+    echo "fake curl: unexpected url: $*" >&2
+    exit 2
+    ;;
+esac
+
+case "${FAKE_CURL:-ok}" in
+  down)
+    echo "curl: (7) Failed to connect to 127.0.0.1 port 9090" >&2
+    exit 7
+    ;;
+  http503)
+    printf '{"status":"error","errorType":"unavailable","error":"admin APIs disabled"}\n'
+    exit 0
+    ;;
+  evil_name)
+    printf '{"status":"success","data":{"name":"../../../outside"}}\n'
+    exit 0
+    ;;
+esac
+
+c=$(($(cat "$FAKE_LOG/snapctr" 2>/dev/null || echo 0) + 1))
+echo "$c" >"$FAKE_LOG/snapctr"
+name="$(date -u +%Y%m%dT%H%M%SZ)-$(printf '%016x' "$c")"
+if [ "${FAKE_CURL:-ok}" = missing_dir ]; then
+  printf '{"status":"success","data":{"name":"%s"}}\n' "$name"
+  exit 0
+fi
+snap="$FAKE_VOL/snapshots/$name"
+mkdir -p "$snap"
+if [ "${FAKE_CURL:-ok}" != no_blocks ]; then
+  for b in "$FAKE_VOL"/01*; do
+    [ -d "$b" ] || continue
+    id="$(basename "$b")"
+    mkdir -p "$snap/$id/chunks"
+    for f in meta.json index tombstones; do ln "$b/$f" "$snap/$id/$f"; done
+    for f in "$b"/chunks/*; do ln "$f" "$snap/$id/chunks/$(basename "$f")"; done
+  done
+  ulid="$(printf '01HEAD%020d' "$c")"
+  h="$snap/$ulid"
+  mkdir -p "$h/chunks"
+  dd if=/dev/urandom of="$h/chunks/000001" bs=1024 count="${FAKE_HEAD_KB:-64}" 2>/dev/null
+  dd if=/dev/urandom of="$h/index" bs=1024 count=8 2>/dev/null
+  printf '{"ulid":"%s","minTime":%s,"maxTime":%s,"stats":{"numSamples":100}}\n' "$ulid" "${FAKE_HEAD_MIN:-1790000000000}" "${FAKE_HEAD_MAX:-1790000900000}" >"$h/meta.json"
+  : >"$h/tombstones"
+fi
+[ -z "${FAKE_SNAPSHOT_DROP:-}" ] || rm -f "${snap:?}/$FAKE_SNAPSHOT_DROP"
+printf '{"status":"success","data":{"name":"%s"}}\n' "$name"

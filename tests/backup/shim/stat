@@ -1,0 +1,12 @@
+#!/bin/bash
+# stat that reports another device for FAKE_STAT_OTHER_DEVICE and is real otherwise.
+last="${!#}"
+case "$*" in
+  *%d*)
+    if [ -n "${FAKE_STAT_OTHER_DEVICE:-}" ] && [ "$last" = "$FAKE_STAT_OTHER_DEVICE" ]; then
+      echo 999
+      exit 0
+    fi
+    ;;
+esac
+exec "$REAL_STAT" "$@"
