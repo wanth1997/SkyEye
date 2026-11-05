@@ -67,10 +67,78 @@ local_day_start_epoch() {
   TZ="$TQ_TIMEZONE" date -d "$day 00:00:00" '+%s' 2>/dev/null
 }
 
+# Event times are read in awk: forking date per line would dominate every full-log
+# scan. Programs that use event_time_trusted set future_limit with -v.
+# shellcheck disable=SC2016
+AWK_EVENT_TIME='
+  # The first time= is the record time, as in logfmt_value. A later one is an attribute.
+  function event_time(    i, value) {
+    for (i = 1; i <= NF; i++) {
+      if (index($i, "time=") == 1) {
+        value = substr($i, 6)
+        gsub(/^"|"$/, "", value)
+        return value
+      }
+    }
+    return ""
+  }
+  # RFC 3339 to epoch seconds, or -1 when it is not a real instant. Regex intervals
+  # are avoided: older mawk does not support them.
+  function event_epoch(value,    year, month, day, hour, minute, second, zone,
+      zone_hours, zone_minutes, offset, month_days) {
+    if (value !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]([.][0-9]+)?(Z|[-+][0-9][0-9]:?[0-9][0-9])$/) {
+      return -1
+    }
+    year = substr(value, 1, 4) + 0
+    month = substr(value, 6, 2) + 0
+    day = substr(value, 9, 2) + 0
+    hour = substr(value, 12, 2) + 0
+    minute = substr(value, 15, 2) + 0
+    second = substr(value, 18, 2) + 0
+    if (year < 1970 || month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) {
+      return -1
+    }
+    month_days = substr("312831303130313130313031", month * 2 - 1, 2) + 0
+    if (month == 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) month_days = 29
+    if (day < 1 || day > month_days) return -1
+
+    zone = substr(value, 20)
+    sub(/^[.][0-9]+/, "", zone)
+    sub(/:/, "", zone)
+    offset = 0
+    if (zone != "Z") {
+      zone_hours = substr(zone, 2, 2) + 0
+      zone_minutes = substr(zone, 4, 2) + 0
+      if (zone_hours > 23 || zone_minutes > 59) return -1
+      offset = zone_hours * 3600 + zone_minutes * 60
+      if (substr(zone, 1, 1) == "-") offset = -offset
+    }
+
+    # Counting years from March puts the leap day at the end of the year.
+    if (month <= 2) {
+      year--
+      month += 12
+    }
+    return (365 * year + int(year / 4) - int(year / 100) + int(year / 400) + \
+      int((153 * (month - 3) + 2) / 5) + day - 719469) * 86400 + \
+      hour * 3600 + minute * 60 + second - offset
+  }
+  # An unreadable time cannot be shown to be past, so it is not trusted either.
+  function event_time_trusted(    epoch) {
+    epoch = event_epoch(event_time())
+    return epoch >= 0 && epoch <= future_limit
+  }
+'
+
+# With require_trusted_time=1 the latest line is the latest one whose time can be
+# trusted, so a future event falls back to the event before it.
 latest_pnl_line() {
   local log_path="$1"
   local require_completed="$2"
-  awk -v require_completed="$require_completed" '
+  local require_trusted_time="${3:-0}"
+  awk -v require_completed="$require_completed" \
+      -v require_trusted_time="$require_trusted_time" \
+      -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
     {
       message = ""
       stable = ""
@@ -88,7 +156,8 @@ latest_pnl_line() {
         if (key == "cycle_completed") completed = value
       }
       if (message == "pnl_status" && stable == "true" &&
-          (require_completed != "1" || completed == "true")) {
+          (require_completed != "1" || completed == "true") &&
+          (require_trusted_time != "1" || event_time_trusted())) {
         latest = $0
       }
     }
@@ -98,7 +167,7 @@ latest_pnl_line() {
 
 completed_cycle_pnl_series() {
   local log_path="$1"
-  awk '
+  awk -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
     function valid_number(value) {
       return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
     }
@@ -125,7 +194,7 @@ completed_cycle_pnl_series() {
       if (cycle == "") cycle = fallback_cycle
       if (message != "pnl_status" || stable != "true" ||
           completed != "true" || cycle !~ /^[0-9]+$/ ||
-          !valid_number(real_pnl)) {
+          !valid_number(real_pnl) || !event_time_trusted()) {
         next
       }
       if (!(cycle in seen)) {
@@ -146,10 +215,11 @@ completed_cycle_pnl_series() {
 mapped_executor_volumes() {
   local log_path="$1"
   local latest_line volume_snapshot
-  latest_line="$(latest_pnl_line "$log_path" 0)"
+  latest_line="$(latest_pnl_line "$log_path" 0 1)"
   volume_snapshot="$(logfmt_value "$latest_line" volume_usd_by_executor)"
 
-  awk -v mapping="$TQ_EXECUTOR_MAP" -v snapshot="$volume_snapshot" '
+  awk -v mapping="$TQ_EXECUTOR_MAP" -v snapshot="$volume_snapshot" \
+      -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
     function valid_number(value) {
       return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
     }
@@ -206,7 +276,7 @@ mapped_executor_volumes() {
       }
 
       if (message != "trade_status" || !valid_number(volume_usd) ||
-          volume_usd + 0 < 0) {
+          volume_usd + 0 < 0 || !event_time_trusted()) {
         next
       }
 
@@ -429,7 +499,7 @@ normalize_reason() {
 }
 
 is_future_epoch() {
-  [[ "$1" -gt "$((PROBE_NOW + MAX_FUTURE_SKEW_SECONDS))" ]]
+  [[ "$1" -gt "$FUTURE_EVENT_LIMIT" ]]
 }
 
 # Prints the event time as epoch seconds, or nothing when it is absent or
@@ -654,6 +724,7 @@ ACTUAL_INSTANCE_ID="$(config_instance_id)"
 MAX_FUTURE_SKEW_SECONDS=120
 MAX_PROCESS_START_DRIFT_SECONDS=10
 PROBE_NOW="$(date +%s)"
+FUTURE_EVENT_LIMIT=$((PROBE_NOW + MAX_FUTURE_SKEW_SECONDS))
 
 # A failed or implausible listing is unknown, never zero processes. Exiting here
 # leaves the old textfile in place, so the frozen probe timestamp raises
@@ -821,6 +892,8 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       COMPLETED_CYCLE_PNL_SERIES="$(completed_cycle_pnl_series "$MANIFEST_LOG_PATH")"
       CURRENT_EXCHANGE_VOLUMES="$(mapped_executor_volumes "$MANIFEST_LOG_PATH")"
 
+      # Unfiltered on purpose: a value called current must not fall back to an older
+      # event, so a future newest line invalidates it instead.
       CURRENT_PNL_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 0)"
       if [[ -n "$CURRENT_PNL_LINE" ]]; then
         current_pnl_time="$(logfmt_value "$CURRENT_PNL_LINE" time)"
@@ -849,7 +922,7 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
         fi
       fi
 
-      LAST_COMPLETED_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 1)"
+      LAST_COMPLETED_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 1 1)"
       if [[ -n "$LAST_COMPLETED_LINE" ]]; then
         last_completed_time="$(logfmt_value "$LAST_COMPLETED_LINE" time)"
         LAST_COMPLETED_CYCLE_TIMESTAMP="$(timestamp_to_epoch "$last_completed_time" || true)"
