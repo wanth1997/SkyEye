@@ -71,6 +71,7 @@ LOCK_HELD=0
 CHILD_PID=""
 WORK_DIR=""
 SNAP_ID=""
+UNPUBLISHED_ID="" # the snapshot of this run, until its manifest is confirmed
 LAST_SUCCESS=""
 LAST_UPLOADED_BYTES=0
 CONSECUTIVE_FAILURES=0
@@ -201,8 +202,11 @@ disk_below_low_water() {
   df -Pk "$VOL_PATH" | awk -v pct="$LOW_WATER_PCT" 'NR == 2 { below = ($4 * 100 < $2 * pct) } END { exit !below }'
 }
 
-# Trim recorded generations to the bounds, oldest first, never the newest one.
-# Directories without a record are only counted, by the metrics.
+# Trim recorded generations to the bounds, oldest first. The pending count and low
+# water keep the newest one. The pinned limit is a hard cap and keeps none: a lone
+# generation over it goes too, or a run that cannot snapshot would hold it forever.
+# Only counted, by the metrics: directories without a record. Never touched: the
+# snapshot this run has not published. The next run may give that one up.
 enforce_retention() {
   local id pinned ids=() remaining
   [ -d "$PENDING_DIR" ] || return 0
@@ -216,12 +220,11 @@ enforce_retention() {
   remaining=${#ids[@]}
 
   for id in ${ids[@]+"${ids[@]}"}; do
-    [ "$remaining" -gt 1 ] || break
-    if [ "$remaining" -le "$MAX_PENDING" ]; then
-      pinned="$(pinned_bytes)" || pinned=0
-      if [ "$pinned" -le "$MAX_PINNED_BYTES" ] && ! disk_below_low_water; then
-        break
-      fi
+    [ "$id" != "$UNPUBLISHED_ID" ] || continue
+    pinned="$(pinned_bytes)" || pinned=0
+    if [ "$pinned" -le "$MAX_PINNED_BYTES" ]; then
+      [ "$remaining" -gt 1 ] || break
+      [ "$remaining" -gt "$MAX_PENDING" ] || disk_below_low_water || break
     fi
     delete_generation "$id" || continue
     remaining=$((remaining - 1))
@@ -325,6 +328,7 @@ request_snapshot() {
   [ -n "$name" ] || fail "$EXIT_SNAPSHOT" "snapshot API returned no name; is --web.enable-admin-api set?"
   [[ "$name" =~ $SNAPSHOT_ID_REGEX ]] || fail "$EXIT_SNAPSHOT" "snapshot API returned an unexpected name: $name"
   SNAP_ID="$name"
+  UNPUBLISHED_ID="$name"
   [ -d "$SNAP_ROOT/$SNAP_ID" ] || fail "$EXIT_INVENTORY" "expected snapshot dir $SNAP_ROOT/$SNAP_ID not found"
   # Record it before the slow hashing below, so a killed run still leaves a
   # snapshot that retention is allowed to reclaim.
@@ -473,6 +477,7 @@ main() {
 
   local prefix="generations/${SNAP_ID:0:4}-${SNAP_ID:4:2}-${SNAP_ID:6:2}/$SNAP_ID/"
   publish_generation "$prefix"
+  UNPUBLISHED_ID=""
 
   LAST_SUCCESS="$(date +%s)"
   LAST_UPLOADED_BYTES="$(jq -r '.total_bytes' "$PENDING_DIR/$SNAP_ID.json")"

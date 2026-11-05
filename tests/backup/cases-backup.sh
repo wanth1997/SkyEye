@@ -197,7 +197,44 @@ b_limit_pinned_bytes_under_three_gib() {
   check "the metric counts it, not du" [ "$(metric_value skyeye_backup_snapshot_pinned_bytes)" -ge $((2 * 1024 * 1024 * 1024 + 512 * 1024 * 1024)) ]
 }
 
-b_limit_newest_is_never_deleted() {
+b_limit_lone_snapshot_over_three_gib_goes_when_the_next_snapshot_fails() {
+  seed_live
+  sparse_generation "$OLD_ID_1" $((3 * 1024 * 1024 * 1024 + 512 * 1024 * 1024))
+  mkdir -p "$VOL/snapshots/$APRIL_ID/$BLOCK_A"
+  echo april >"$VOL/snapshots/$APRIL_ID/$BLOCK_A/index"
+  run_backup "$T0" FAKE_CURL=down
+  check_eq "the run failed at the snapshot" 2 "$RC"
+  check_not "the 3 GiB limit has no spare: the only generation goes" [ -e "$VOL/snapshots/$OLD_ID_1" ]
+  check_not "with its record" [ -e "$STATE/pending/$OLD_ID_1.json" ]
+  check "an unrecorded directory still stays" [ -f "$VOL/snapshots/$APRIL_ID/$BLOCK_A/index" ]
+  check "the metric is back under the limit" [ "$(metric_value skyeye_backup_snapshot_pinned_bytes)" -le $((3 * 1024 * 1024 * 1024)) ]
+}
+
+b_limit_lone_snapshot_under_three_gib_stays_when_the_next_snapshot_fails() {
+  seed_live
+  sparse_generation "$OLD_ID_1" $((2 * 1024 * 1024 * 1024 + 512 * 1024 * 1024))
+  run_backup "$T0" FAKE_CURL=down
+  check_eq "the run failed at the snapshot" 2 "$RC"
+  check "under the limit it is kept" [ -d "$VOL/snapshots/$OLD_ID_1" ]
+}
+
+# Only the next run may give it up: this one is still trying to publish it.
+b_limit_unpublished_snapshot_of_this_run_outlives_three_gib() {
+  seed_live
+  local hook="$SB/bloat-snapshot"
+  printf '#!/bin/bash\ndd if=/dev/zero of="$1/bloat" bs=1 count=0 seek=%s 2>/dev/null\n' \
+    $((3 * 1024 * 1024 * 1024 + 512 * 1024 * 1024)) >"$hook"
+  chmod +x "$hook"
+  run_backup "$T0" FAKE_AWS_SYNC=fail_all FAKE_AWS_SYNC_HOOK="$hook"
+  check_eq "the upload failed" 4 "$RC"
+  check_eq "over the limit, its own snapshot stays" 1 "$(snapcount)"
+  check "and the metric says so" [ "$(metric_value skyeye_backup_snapshot_pinned_bytes)" -gt $((3 * 1024 * 1024 * 1024)) ]
+  run_backup $((T0 + DAY)) FAKE_CURL=down
+  check_eq "the next run failed at the snapshot" 2 "$RC"
+  check_eq "now it is an old generation over the limit" 0 "$(snapcount)"
+}
+
+b_limit_low_water_keeps_the_newest() {
   seed_live
   run_backup "$T0" FAKE_AWS_SYNC=fail_all FAKE_DF_AVAIL_PCT=1
   check_eq "at 1% free the newest still stays" 1 "$(snapcount)"
