@@ -470,7 +470,8 @@ run_probe
 assert_metric tnauqquant_current_position_btc 0.003 'exchange="lighter",side="long"'
 assert_metric tnauqquant_current_net_position_btc 0.003
 
-mode="$(stat -f '%Lp' "$METRICS_PATH" 2>/dev/null || stat -c '%a' "$METRICS_PATH")"
+# GNU first: its stat -f prints filesystem data before failing, which would stay in mode.
+mode="$(stat -c '%a' "$METRICS_PATH" 2>/dev/null || stat -f '%Lp' "$METRICS_PATH")"
 if [[ "$mode" != "640" ]]; then
   printf 'FAIL: metrics mode expected=640 actual=%s\n' "$mode" >&2
   exit 1
