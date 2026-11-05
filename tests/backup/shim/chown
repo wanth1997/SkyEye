@@ -1,0 +1,3 @@
+#!/bin/bash
+# FAKE chown: tests do not run as root.
+printf 'chown %s\n' "$*" >>"$FAKE_LOG/chown-calls.log"

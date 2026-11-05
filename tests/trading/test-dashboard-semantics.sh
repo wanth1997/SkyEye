@@ -77,13 +77,18 @@ out += case(f'({expr(summary, "B")}) - scalar(count({inventory}))', "{}", 0)
 open(output, "w", encoding="utf-8").write("\n".join(out) + "\n")
 
 # Separate file without trading.yml: its own alerts would inflate the count.
+# The modes are mixed so a filter on either one leaves the count short.
+alerts = [("TradingCriticalSafetyState", "page"), ("TradingProcessDown", "page"),
+          ("TradingRiskStopped", "page"), ("TradingDuplicateProcess", "shadow")]
 promoted = ["rule_files:", "  - inventory.yml", "evaluation_interval: 30s", "tests:",
-            "  - name: a promoted alert still counts on the dashboard", "    interval: 30s", "    input_series:",
-            f"      - series: 'ALERTS{{alertname=\"TradingDuplicateProcess\",alertstate=\"firing\",notification_mode=\"page\",severity=\"High\",{LABELS}}}'",
-            "        values: '1x40'", "    promql_expr_test:"]
-promoted += case(expr(summary, "E"), "{}", 1)
+            "  - name: promoted and shadow alerts both count on the dashboard", "    interval: 30s", "    input_series:"]
+for alert, mode in alerts:
+    promoted += [f"      - series: 'ALERTS{{alertname=\"{alert}\",alertstate=\"firing\",notification_mode=\"{mode}\",severity=\"High\",{LABELS}}}'",
+                 "        values: '1x40'"]
+promoted += ["    promql_expr_test:"]
+promoted += case(expr(summary, "E"), "{}", len(alerts))
 # Query L also returns a zero row per inventory strategy, so sum the column.
-promoted += case(f'sum({expr(fleet, "L")})', "{}", 1)
+promoted += case(f'sum({expr(fleet, "L")})', "{}", len(alerts))
 open(output.replace("dashboard.test", "promoted.test"), "w", encoding="utf-8").write("\n".join(promoted) + "\n")
 PY
 

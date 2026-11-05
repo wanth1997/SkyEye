@@ -1,0 +1,7 @@
+#!/bin/bash
+# FAKE df -Pk: FAKE_DF_AVAIL_PCT percent of a FAKE_DF_TOTAL_KB filesystem is free.
+[ -z "${FAKE_DF_FAIL:-}" ] || exit 1
+total="${FAKE_DF_TOTAL_KB:-31457280}"
+avail=$((total * ${FAKE_DF_AVAIL_PCT:-60} / 100))
+printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
+printf '/dev/fake %s %s %s 40%% /\n' "$total" "$((total - avail))" "$avail"

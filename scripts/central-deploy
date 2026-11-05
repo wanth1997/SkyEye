@@ -5,22 +5,38 @@ set -euo pipefail
 #
 # Run on monitoring-prod from the SkyEye checkout (/home/ubuntu/SkyEye):
 #   scripts/central-deploy --dry-run   # fetch + validate the target commit only
-#   scripts/central-deploy             # validate, fast-forward, reload, verify
+#   scripts/central-deploy             # validate, fast-forward, reload, confirm
 #   scripts/central-deploy --status    # show reload health and live inventory
 #
 # Validation runs on a temporary worktree of the target commit BEFORE the live
 # checkout moves, using the image tags pinned in that commit's compose file, so
-# a failed check changes nothing. Only hot-reloadable paths are deployed; a
-# change that needs a container recreate is refused and must be done by hand.
+# a failed check changes nothing. Dashboards and Loki rules are validated there
+# too, the rules by the real ruler of the pinned Loki image in a throwaway,
+# networkless container. Only hot-reloadable paths are deployed; a change that
+# needs a container recreate is refused and must be done by hand.
 #
-# The last commit that was validated AND reloaded successfully is recorded in
-# .git/skyeye-central-deploy.applied. A run whose checkout is already at the
-# target but not recorded (a failed reload, or a checkout updated by git pull)
-# validates and reloads it again, so rerunning the command is always the retry.
+# Publishing is not the same as loading: after the checkout moves, Loki and
+# Grafana keep serving their old content when they reject a file, and neither
+# has a reload that reports it. So a changed rule or dashboard must be seen
+# loaded through their APIs before the commit counts as applied, and with no
+# record every rule and dashboard counts as changed. If it is not, the run fails
+# with the checkout left at the target, nothing recorded and no automatic
+# rollback: Prometheus and Alertmanager already run that commit, and undoing them
+# is the operator's call.
+#
+# Reading dashboards back takes a Grafana service account token with the Viewer
+# role, in GRAFANA_TOKEN_FILE outside the checkout. A dashboard change without a
+# working token fails before the checkout moves, in a dry run too.
+#
+# The last commit that was validated, reloaded AND confirmed loaded is recorded
+# in .git/skyeye-central-deploy.applied. A run whose checkout is already at the
+# target but not recorded (a failed reload, a load that was not confirmed, or a
+# checkout updated by git pull) validates, reloads and confirms it again, so
+# rerunning the command is always the retry.
 # Everything that differs from HEAD or from that record counts as not yet live,
 # so a recreate-only change pulled by hand is refused too. After applying such a
 # change by hand, `--manual-applied SHA` (the target commit, with the checkout
-# already there) records it once validation and reloads pass.
+# already there) records it once validation, reloads and confirmation pass.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -32,6 +48,12 @@ DOCKER_BIN="${SKYEYE_DOCKER:-docker}"
 CURL_BIN="${SKYEYE_CURL:-curl}"
 PROM_URL="${SKYEYE_PROM_URL:-http://127.0.0.1:9090}"
 AM_URL="${SKYEYE_AM_URL:-http://127.0.0.1:9093}"
+LOKI_URL="${SKYEYE_LOKI_URL:-http://127.0.0.1:3100}"
+GRAFANA_URL="${SKYEYE_GRAFANA_URL:-http://127.0.0.1:3000}"
+GRAFANA_TOKEN_FILE="${SKYEYE_GRAFANA_TOKEN_FILE:-/home/ubuntu/.config/skyeye/grafana-viewer-token}"
+# The ruler and Grafana provisioning both poll every 60s; allow 2.5 cycles.
+ACCEPT_TIMEOUT="${SKYEYE_ACCEPT_TIMEOUT:-150}"
+ACCEPT_INTERVAL="${SKYEYE_ACCEPT_INTERVAL:-5}"
 
 usage() {
   printf '%s\n' \
@@ -39,17 +61,23 @@ usage() {
     '                              [--manual-applied SHA]' \
     '' \
     'Validates REMOTE/BRANCH in a temporary worktree (promtool check config,' \
-    'promtool test rules, the derived Trading inventory test and, when changed,' \
-    'amtool check-config), then fast-forwards this checkout and hot-reloads' \
-    'Prometheus/Alertmanager. Refuses dirty trees, untracked files in loaded' \
-    'config paths, non-fast-forward updates and changes that need a container' \
-    'recreate since HEAD or the last successful apply. Rerunning retries a' \
-    'reload that did not complete.' \
+    'promtool test rules, the derived Trading inventory test, every dashboard,' \
+    'the Loki rules in a throwaway ruler and, when changed, amtool check-config),' \
+    'then fast-forwards this checkout, hot-reloads Prometheus/Alertmanager and,' \
+    'for changed rules or dashboards, waits for Loki and Grafana to load them.' \
+    'Refuses dirty trees, untracked files in loaded config paths,' \
+    'non-fast-forward updates and changes that need a container recreate since' \
+    'HEAD or the last successful apply. Rerunning retries a reload or a load' \
+    'that did not complete.' \
+    '' \
+    'A dashboard change needs a Grafana Viewer service account token, mode 0600' \
+    'and outside the checkout, at SKYEYE_GRAFANA_TOKEN_FILE (default' \
+    "$GRAFANA_TOKEN_FILE)." \
     '' \
     '--manual-applied SHA states that the recreate-only changes up to SHA were' \
     'applied by hand (docker compose up -d <service>); SHA must be the target' \
     'commit and the checkout must already be there. It is recorded as applied' \
-    'only after the same validation and reloads pass.'
+    'only after the same validation, reloads and confirmation pass.'
 }
 
 die() {
@@ -76,12 +104,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+[[ "$ACCEPT_TIMEOUT" =~ ^[0-9]+$ ]] || die "SKYEYE_ACCEPT_TIMEOUT must be whole seconds, got: $ACCEPT_TIMEOUT"
+
 cd "$REPO_ROOT"
 
 # Directories the running services load straight from this checkout, and the
 # only untracked files allowed inside them (local secrets, never in Git).
 LOADED_CONFIG_PATHS=(prometheus alertmanager grafana/dashboards grafana/provisioning loki/rules)
-ALLOWED_LOCAL_FILES=(alertmanager/secrets/tg_token)
+ALLOWED_LOCAL_FILES=(
+  alertmanager/secrets/tg_token
+  alertmanager/secrets/smtp_password
+  alertmanager/secrets/email-addresses.tmpl
+)
 
 applied_file() {
   printf '%s/skyeye-central-deploy.applied\n' "$(git rev-parse --absolute-git-dir)"
@@ -185,6 +219,8 @@ prom_reload=0
 am_reload=0
 loki_rules=0
 dashboards=0
+dashboards_unrecorded=0
+dashboard_paths=()
 manual_paths=()
 classify_path() {
   case "$1" in
@@ -214,17 +250,24 @@ change_bases=("$head_sha")
 if [[ -n "$applied_sha" ]]; then
   change_bases+=("$applied_sha")
 else
-  printf 'No record of a successful central-deploy; reloading Prometheus and Alertmanager\n'
+  printf 'No record of a successful central-deploy; reloading Prometheus and Alertmanager and confirming Loki and Grafana\n'
   prom_reload=1
   am_reload=1
+  loki_rules=1
+  dashboards=1
+  dashboards_unrecorded=1
 fi
 for change_base in "${change_bases[@]}"; do
   [[ "$change_base" != "$target_sha" ]] || continue
-  changed_paths="$(git diff --name-only "$change_base" "$target_sha")" || \
+  # --no-renames: a rule or dashboard moved elsewhere must count as removed.
+  changed_paths="$(git diff --no-renames --name-only "$change_base" "$target_sha")" || \
     die "cannot list the changes from ${change_base:0:12} to ${target_sha:0:12}"
   while IFS= read -r changed_path; do
     [[ -n "$changed_path" ]] || continue
     classify_path "$changed_path" || manual_paths+=("$changed_path")
+    if [[ "$changed_path" == grafana/dashboards/*.json ]]; then
+      dashboard_paths+=("$changed_path")
+    fi
   done <<<"$changed_paths"
 done
 
@@ -260,6 +303,392 @@ compose_image() {
   awk -v want="$1" '$1 == "image:" && index($2, want ":") == 1 { print $2; exit }' \
     "$TREE/docker-compose.yml"
 }
+
+# Dashboard validation and the read-only checks against Loki and Grafana. It
+# reads the token file itself and hands it to curl on stdin, so the token never
+# reaches a process argument or this script's output.
+IFS= read -r -d '' HELPER_PY <<'PY' || true
+import json
+import os
+import re
+import subprocess
+import sys
+
+# Everything else the ruler reports has to match, so a setting that a later Loki
+# adds is compared rather than skipped.
+LOKI_EVALUATION_FIELDS = ("alerts", "evaluationTime", "health", "lastError", "lastEvaluation", "state")
+# Grafana's default dashboards.min_refresh_interval, which compose leaves alone.
+GRAFANA_MIN_REFRESH_SECONDS = 5
+
+
+def refuse_constant(value):
+    raise ValueError("%s is not valid JSON" % value)
+
+
+def check_refresh(refresh):
+    # Grafana serves its minimum instead of a string below it or one it cannot
+    # parse, and leaves anything that is not a string alone. A compound value
+    # such as 1h30m would be kept, but is refused to keep this parser to one unit.
+    if not isinstance(refresh, str) or refresh in ("", "auto"):
+        return
+    match = re.fullmatch(r"([0-9]+)([smhdwMy])", refresh)
+    if not match or int(match[1]) < (GRAFANA_MIN_REFRESH_SECONDS if match[2] == "s" else 1):
+        raise ValueError(
+            'refresh "%s" would be rewritten by Grafana, so the served copy would never match; '
+            'use a whole number and one unit, at least %ds, or "" for none'
+            % (refresh, GRAFANA_MIN_REFRESH_SECONDS)
+        )
+
+
+def load_dashboard(path):
+    with open(path, encoding="utf-8") as handle:
+        dashboard = json.loads(handle.read(), parse_constant=refuse_constant)
+    if not isinstance(dashboard, dict):
+        raise ValueError("top level must be a single JSON object")
+    for field in ("uid", "title"):
+        value = dashboard.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("needs a non-empty %s" % field)
+        if value != value.strip():
+            raise ValueError("%s has spaces around it, which Grafana would trim; remove them" % field)
+    check_refresh(dashboard.get("refresh"))
+    return dashboard
+
+
+def comparable(dashboard):
+    return {key: value for key, value in dashboard.items() if key not in ("id", "version")}
+
+
+def old_uids(bases, path):
+    found = set()
+    for base in bases:
+        shown = subprocess.run(["git", "show", "%s:%s" % (base, path)], capture_output=True)
+        if shown.returncode != 0:
+            continue
+        try:
+            old = json.loads(shown.stdout)
+        except ValueError:
+            continue
+        if isinstance(old, dict) and isinstance(old.get("uid"), str):
+            found.add(old["uid"].strip())
+    return found
+
+
+def dashboards_validate(root, output, unrecorded, rest):
+    # Grafana drops a file with a clashing title silently, and a clashing uid
+    # stops the whole provider from writing, so both are refused up front.
+    split = rest.index("--")
+    bases, changed = rest[:split], rest[split + 1:]
+    dashboards, uids, titles, errors = {}, {}, {}, []
+    for directory, _, names in os.walk(root):
+        for name in sorted(names):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(directory, name)
+            relative = os.path.relpath(path, root)
+            try:
+                dashboard = load_dashboard(path)
+            except (ValueError, OSError) as error:
+                errors.append("%s: %s" % (relative, error))
+                continue
+            dashboards[relative] = dashboard
+            title = (os.path.basename(directory), dashboard["title"])
+            for seen, key, label in ((uids, dashboard["uid"], "uid"), (titles, title, "title")):
+                if key in seen:
+                    errors.append("%s: same %s as %s" % (relative, label, seen[key]))
+                seen.setdefault(key, relative)
+    if errors:
+        sys.exit("\n".join("invalid dashboard " + error for error in errors))
+
+    changed_files = {os.path.relpath(path, "grafana/dashboards") for path in changed}
+    expected, absent = {}, set()
+    for relative, dashboard in dashboards.items():
+        # Without a record nothing tells a UI edit from a load that never
+        # happened, so every dashboard has to match its file.
+        if unrecorded == "1" or relative in changed_files:
+            expected[dashboard["uid"]] = {"path": relative, "body": comparable(dashboard)}
+    # A failed run can leave one uid applied and another at HEAD, and Grafana may
+    # serve either, so every uid the target no longer holds has to be gone.
+    for path in changed:
+        absent |= old_uids(bases, path) - set(uids)
+    manifest = {"expected": expected, "absent": sorted(absent)}
+    with open(output, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle)
+
+
+def token_header(path, checkout):
+    real, root = os.path.realpath(path), os.path.realpath(checkout)
+    if real == root or real.startswith(root + os.sep):
+        sys.exit("Grafana token file %s must be outside the checkout" % path)
+    try:
+        mode = os.stat(path).st_mode
+        with open(path, encoding="ascii") as handle:
+            token = handle.read().strip()
+    except OSError as error:
+        sys.exit("cannot read Grafana token file %s: %s" % (path, error.strerror))
+    except UnicodeError:
+        sys.exit("Grafana token file %s is not a Grafana token" % path)
+    if mode & 0o077:
+        sys.exit("Grafana token file %s must be mode 0600, not %04o" % (path, mode & 0o777))
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", token):
+        sys.exit("Grafana token file %s is not a Grafana token" % path)
+    return 'header = "Authorization: Bearer %s"\n' % token
+
+
+def grafana_get(curl, url, header, path):
+    done = subprocess.run(
+        [curl, "--config", "-", "-fsS", "--max-time", "10", url + path],
+        input=header, capture_output=True, text=True,
+    )
+    if done.returncode != 0:
+        sys.exit("GET %s failed: %s" % (path, done.stderr.strip() or "curl exit %d" % done.returncode))
+    try:
+        return json.loads(done.stdout)
+    except ValueError:
+        sys.exit("GET %s did not return JSON" % path)
+
+
+def grafana_probe(curl, url, token_file, checkout):
+    # A token without a role is answered with 200 and an empty list.
+    header = token_header(token_file, checkout)
+    if not grafana_get(curl, url, header, "/api/search?type=dash-db&limit=1"):
+        sys.exit("the Grafana token sees no dashboards; it needs the Viewer role")
+
+
+def grafana_confirm(curl, url, token_file, checkout, manifest_path):
+    with open(manifest_path, encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    header = token_header(token_file, checkout)
+    served = {item["uid"] for item in grafana_get(curl, url, header, "/api/search?type=dash-db&limit=5000")}
+    problems = ["%s was removed but is still served" % uid for uid in manifest["absent"] if uid in served]
+    differing = []
+    for uid, want in sorted(manifest["expected"].items()):
+        if uid not in served:
+            problems.append("%s (%s) is not provisioned" % (uid, want["path"]))
+            continue
+        live = grafana_get(curl, url, header, "/api/dashboards/uid/" + uid)
+        if comparable(live.get("dashboard", {})) != want["body"]:
+            problems.append("%s still serves other content than %s" % (uid, want["path"]))
+            differing.append(uid)
+        elif live.get("meta", {}).get("provisionedExternalId") != want["path"]:
+            problems.append("%s is not provisioned from %s" % (uid, want["path"]))
+    if differing:
+        problems.append("if that is a UI edit, export %s to Git and deploy that, or undo the edit" % ", ".join(differing))
+    if problems:
+        sys.exit("; ".join(problems))
+    print("%d confirmed, %d removed" % (len(manifest["expected"]), len(manifest["absent"])))
+
+
+def loki_settings(entry):
+    return {key: value for key, value in entry.items() if key not in LOKI_EVALUATION_FIELDS}
+
+
+def loki_groups(path):
+    with open(path, encoding="utf-8") as handle:
+        groups = json.load(handle)["data"]["groups"]
+    return {
+        (group["file"], group["name"]): dict(
+            loki_settings(group), rules=[loki_settings(rule) for rule in group["rules"]]
+        )
+        for group in groups
+    }
+
+
+def loki_compare(expected_path, live_path):
+    try:
+        live = loki_groups(live_path)
+    except (ValueError, KeyError, TypeError):
+        sys.exit("the ruler did not return a rule list")
+    expected = loki_groups(expected_path)
+    differing = sorted(
+        "%s/%s" % key for key in set(expected) | set(live) if expected.get(key) != live.get(key)
+    )
+    if differing:
+        sys.exit("loaded rules differ from the target in " + ", ".join(differing))
+    print(len(expected))
+
+
+mode, arguments = sys.argv[1], sys.argv[2:]
+if mode == "dashboards-validate":
+    dashboards_validate(arguments[0], arguments[1], arguments[2], arguments[3:])
+elif mode == "grafana-probe":
+    grafana_probe(*arguments)
+elif mode == "grafana-confirm":
+    grafana_confirm(*arguments)
+elif mode == "loki-compare":
+    loki_compare(*arguments)
+else:
+    sys.exit("unknown helper mode: %s" % mode)
+PY
+
+helper() {
+  python3 -I -c "$HELPER_PY" "$@"
+}
+
+# Runs inside the pinned Loki image with no network. The ruler's own loader is
+# the check: an invalid file fails the rule API, and that same loader is what
+# the live ruler will use. Prints the rules as loaded, which is the normalized
+# form the live ruler must report later. Only the ruler section of
+# loki/loki-config.yml matters here; storage is a throwaway local path.
+IFS= read -r -d '' LOKI_CHECK_SH <<'SH' || true
+cat >/tmp/loki-check.yaml <<'YAML'
+auth_enabled: false
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 3100
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9096
+  log_level: warn
+common:
+  path_prefix: /tmp/loki
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /tmp/loki/chunks
+      rules_directory: /tmp/loki/unused
+schema_config:
+  configs:
+    - from: 2026-04-22
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+  rule_path: /tmp/loki/rules-temp
+  enable_api: true
+analytics:
+  reporting_enabled: false
+YAML
+/usr/bin/loki -config.file=/tmp/loki-check.yaml -target=ruler >/tmp/loki-check.log 2>&1 &
+pid=$!
+fail() {
+  printf 'Loki ruler check: %s\n' "$1" >&2
+  grep -E 'level=(error|warn)' /tmp/loki-check.log | tail -n 5 | cut -c1-600 >&2
+  kill "$pid" 2>/dev/null
+  exit 1
+}
+tries=0
+until wget -q -T 2 -O /dev/null http://127.0.0.1:3100/ready 2>/dev/null; do
+  kill -0 "$pid" 2>/dev/null || fail 'Loki exited during startup'
+  tries=$((tries + 1))
+  [ "$tries" -lt 120 ] || fail 'Loki did not become ready'
+  sleep 0.25
+done
+wget -q -O /dev/null http://127.0.0.1:3100/loki/api/v1/rules 2>/dev/null || \
+  fail 'the ruler rejected the rule files'
+tries=0
+until wget -q -O /tmp/loki-check.json http://127.0.0.1:3100/prometheus/api/v1/rules 2>/dev/null &&
+  grep -q '"groups":\[{' /tmp/loki-check.json; do
+  tries=$((tries + 1))
+  [ "$tries" -lt 40 ] || fail 'the ruler did not load the rule files'
+  sleep 0.25
+done
+cat /tmp/loki-check.json
+kill "$pid" 2>/dev/null
+exit 0
+SH
+
+validate_dashboards() {
+  printf 'Validating dashboards in %s\n' "${target_sha:0:12}"
+  helper dashboards-validate "$TREE/grafana/dashboards" "$WORK_DIR/grafana-expected.json" \
+    "$dashboards_unrecorded" "${change_bases[@]}" -- \
+    ${dashboard_paths[@]+"${dashboard_paths[@]}"} || \
+    die "dashboards in ${target_sha:0:12} are invalid; nothing moved"
+}
+
+validate_loki_rules() {
+  local rules_dir="$TREE/loki/rules" stray image
+  printf '{"status":"success","data":{"groups":[]}}\n' >"$WORK_DIR/loki-expected.json"
+  [[ -d "$rules_dir" ]] || return 0
+  # auth_enabled=false reads tenant "fake" only. The ruler skips subdirectories
+  # without a word, and a bad file in another tenant blanks every rule.
+  stray="$(cd "$rules_dir" && find . -mindepth 1 ! -path ./fake \
+    ! \( -type f -path './fake/*' ! -path './fake/*/*' \))"
+  [[ -z "$stray" ]] || die "loki/rules may only hold files directly in fake/; found: ${stray//$'\n'/ }"
+  [[ -n "$(find "$rules_dir/fake" -type f -print -quit 2>/dev/null)" ]] || return 0
+  image="$(compose_image grafana/loki)"
+  [[ -n "$image" ]] || die "cannot find the pinned Loki image in docker-compose.yml"
+  printf 'Validating Loki rules with %s\n' "$image"
+  # --pull=never: this must not download anything onto the host.
+  "$DOCKER_BIN" run --rm --pull=never --network none -v "$rules_dir:/loki/rules:ro" \
+    --entrypoint /bin/sh "$image" -c "$LOKI_CHECK_SH" >"$WORK_DIR/loki-expected.json" || \
+    die "Loki rules in ${target_sha:0:12} were rejected or could not be checked; nothing moved. If the target commit changed the Loki tag, pull it first: docker pull $image"
+}
+
+check_grafana_token() {
+  helper grafana-probe "$CURL_BIN" "$GRAFANA_URL" "$GRAFANA_TOKEN_FILE" "$REPO_ROOT" || \
+    die "dashboards changed, but Grafana cannot be read back with the token in $GRAFANA_TOKEN_FILE; nothing moved"
+}
+
+# Prints why the ruler has not loaded the target rules, if it has not.
+loki_accepted() {
+  local live="$WORK_DIR/loki-live.json"
+  if ! "$CURL_BIN" -fsS --max-time 10 "$LOKI_URL/prometheus/api/v1/rules" >"$live" 2>&1; then
+    printf 'cannot read the loaded rules: %s\n' "$(tail -n 1 "$live")"
+    return 1
+  fi
+  helper loki-compare "$WORK_DIR/loki-expected.json" "$live" 2>&1
+}
+
+# The ruler keeps its old rules on a bad file; only this view gives the reason.
+loki_store_error() {
+  if ! "$CURL_BIN" -fsS --max-time 10 "$LOKI_URL/loki/api/v1/rules" >/dev/null 2>&1; then
+    "$CURL_BIN" -sS --max-time 10 "$LOKI_URL/loki/api/v1/rules" 2>&1 | head -c 500 || true
+  fi
+}
+
+confirm_services() {
+  local deadline=$((SECONDS + ACCEPT_TIMEOUT)) result store_error
+  local loki_pending="$loki_rules" grafana_pending="$dashboards"
+  local loki_reason="" grafana_reason="" reasons=""
+  if [[ "$loki_pending" -eq 1 || "$grafana_pending" -eq 1 ]]; then
+    printf 'Published %s; waiting up to %ss for Loki=%s Grafana=%s to load it\n' \
+      "${target_sha:0:12}" "$ACCEPT_TIMEOUT" "$loki_pending" "$grafana_pending"
+  fi
+  while [[ "$loki_pending" -eq 1 || "$grafana_pending" -eq 1 ]]; do
+    if [[ "$loki_pending" -eq 1 ]]; then
+      if result="$(loki_accepted)"; then
+        printf 'Loki ruler loaded %s: %s rule groups\n' "${target_sha:0:12}" "$result"
+        loki_pending=0
+      else
+        loki_reason="$result"
+      fi
+    fi
+    if [[ "$grafana_pending" -eq 1 ]]; then
+      if result="$(helper grafana-confirm "$CURL_BIN" "$GRAFANA_URL" "$GRAFANA_TOKEN_FILE" \
+        "$REPO_ROOT" "$WORK_DIR/grafana-expected.json" 2>&1)"; then
+        printf 'Grafana loaded %s: %s\n' "${target_sha:0:12}" "$result"
+        grafana_pending=0
+      else
+        grafana_reason="$result"
+      fi
+    fi
+    [[ "$loki_pending" -eq 1 || "$grafana_pending" -eq 1 ]] || return 0
+    [[ "$SECONDS" -lt "$deadline" ]] || break
+    sleep "$ACCEPT_INTERVAL"
+  done
+  if [[ "$loki_pending" -eq 1 ]]; then
+    store_error="$(loki_store_error)"
+    reasons="Loki ruler: $loki_reason${store_error:+ (rule API: $store_error)}. "
+  fi
+  if [[ "$grafana_pending" -eq 1 ]]; then
+    reasons="${reasons}Grafana: $grafana_reason. "
+  fi
+  if [[ -n "$reasons" ]]; then
+    die "${target_sha:0:12} is published but not loaded after ${ACCEPT_TIMEOUT}s, so it is not recorded as applied and the checkout stays there. $reasons$rollback_hint"
+  fi
+}
+
 prom_image="$(compose_image prom/prometheus)"
 am_image="$(compose_image prom/alertmanager)"
 [[ -n "$prom_image" ]] || die "cannot find the pinned Prometheus image in docker-compose.yml"
@@ -290,10 +719,15 @@ if [[ "$am_reload" -eq 1 ]]; then
   "$DOCKER_BIN" run --rm -v "$TREE/alertmanager:/etc/alertmanager:ro" --entrypoint /bin/amtool \
     "$am_image" check-config /etc/alertmanager/alertmanager.yml
 fi
+validate_dashboards
+validate_loki_rules
+if [[ "$dashboards" -eq 1 ]]; then
+  check_grafana_token
+fi
 
 if [[ "$MODE" == "dry-run" ]]; then
-  printf 'Dry run: validation passed; checkout left at %s and nothing reloaded (would reload: Prometheus=%s Alertmanager=%s)\n' \
-    "${head_sha:0:12}" "$prom_reload" "$am_reload"
+  printf 'Dry run: validation passed; checkout left at %s and nothing reloaded (would reload: Prometheus=%s Alertmanager=%s; would confirm: Loki=%s Grafana=%s)\n' \
+    "${head_sha:0:12}" "$prom_reload" "$am_reload" "$loki_rules" "$dashboards"
   exit 0
 fi
 
@@ -314,16 +748,13 @@ if [[ "$am_reload" -eq 1 ]]; then
     die "Alertmanager rejected the reload; $rollback_hint"
   printf 'Alertmanager reloaded\n'
 fi
-[[ "$loki_rules" -eq 0 ]] || \
-  printf 'Loki rules changed: the ruler picks them up on its next poll (no reload needed)\n'
-[[ "$dashboards" -eq 0 ]] || \
-  printf 'Dashboards changed: Grafana provisioning picks them up within 60s\n'
 
 if [[ "$prom_reload" -eq 1 ]]; then
   show_status
   [[ "$(prom_query 'prometheus_config_last_reload_successful')" == "value=1" ]] || \
     die "Prometheus reports an unsuccessful config reload; $rollback_hint"
 fi
+confirm_services
 applied_path="$(applied_file)"
 printf '%s\n' "$target_sha" >"$applied_path.tmp"
 mv "$applied_path.tmp" "$applied_path"

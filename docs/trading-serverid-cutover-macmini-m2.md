@@ -60,7 +60,7 @@ q 'count by (__name__) ({__name__=~"trading_strategy_.+",server_id="tnauqquant-p
 
 印出 `STOP:` 時不要進入 Step 1。這個區塊其餘命令都是唯讀，照樣執行，用 `--dry-run` 列出的 commits 確認 merge 後多出什麼。核准人同意它們一起上線，才把 `MERGE` 設為新的 `origin/master` 完整 SHA 並重跑 Step 0；否則延後 cutover。
 
-`--dry-run` 必須以 `Dry run: validation passed` 結束。若它拒絕部署（dirty tree、checkout 不在 master、loaded config paths 內有 untracked 檔案、需要 container recreate 的路徑），先在 cutover 時窗外排除原因，不要改用手動 `git pull`。
+`--dry-run` 必須以 `Dry run: validation passed` 結束。若它拒絕部署（dirty tree、checkout 不在 master、loaded config paths 內有 untracked 檔案、需要 container recreate 的路徑、dashboard 或 Loki rule 驗證失敗、Grafana token 缺失或無效），先在 cutover 時窗外排除原因，不要改用手動 `git pull`。Grafana token 的建立步驟見 [README](../README.md#one-time-setup-for-scriptscentral-deploy)；monitoring-prod 沒有 applied 紀錄時，這次部署也需要 token。
 
 也檢查 Alertmanager silences（`http://127.0.0.1:9093/#/silences`）：記下 matcher 含 `server_id="tnauqquant-prod-1"` 的 silence，Step 6 再處理。
 
@@ -146,8 +146,10 @@ fi
 
 - **`STOP:`**：central-deploy 沒有執行，中央沒有任何變更。用 `git log --oneline "$MERGE..origin/master"` 與 `scripts/central-deploy --dry-run` 重新審閱多出的 commit。核准人同意它們一起上線，才把 `MERGE` 設為新的 `origin/master` 完整 SHA 並重跑這個區塊；不同意，或無法在 Step 1 的 silence 到期前完成審閱，執行 **Rollback A**。
 - **`rc=0` 且最後一行是 `central-deploy: done; applied <12 碼 SHA>`**：成功，接著跑下面的部署後檢查。
-- **在 `Checkout fast-forwarded` 之前失敗**（promtool check、rule test、inventory test 或前置檢查失敗）：中央沒有任何變更，Prometheus 仍是舊 inventory。不要重試或手動 reload，執行 **Rollback A**。
+- **在 `Checkout fast-forwarded` 之前失敗**（promtool check、rule test、inventory test、dashboard 或 Loki rule 驗證、Grafana token 或前置檢查失敗）：中央沒有任何變更，Prometheus 仍是舊 inventory。不要重試或手動 reload，執行 **Rollback A**。
 - **在 `Checkout fast-forwarded` 之後失敗**（`Prometheus rejected the reload` 或 `unsuccessful config reload`）：磁碟已是新版，Prometheus 未套用。不要重啟 Prometheus，也不要照 central-deploy 提示的 `git reset --hard`；執行 **Rollback B**，再執行 **Rollback A**。
+- **訊息含 `is published but not loaded`**（只有 monitoring-prod 沒有 applied 紀錄時才會在這次 cutover 出現）：Prometheus 已通過 reload 檢查，改名已生效，但 Loki 或 Grafana 未確認載入，applied 紀錄沒有寫入。不要執行 Rollback，也不要照提示 `git reset --hard`。排除訊息指出的原因後重跑這個區塊，直到 `rc=0`，再跑部署後檢查。
+- **訊息同時含 `if that is a UI edit`**：沒有 applied 紀錄時，central-deploy 會比對每一個 dashboard，所以在 UI 改過、沒有 export 回 Git 的 dashboard 會擋住紀錄，訊息會指名 uid，而且沒有略過的旗標。處理方式同上一項，不要 Rollback。修改不用保留，就在 Grafana 的 dashboard settings → Versions 還原成 Git 的版本，再重跑這個區塊。要保留，就 export 回 Git 並 merge，核准後依 `STOP:` 那一項把 `MERGE` 改成新的 SHA，再重跑這個區塊。
 
 部署後檢查（只在成功時執行）：
 
@@ -166,7 +168,7 @@ jq -S 'map(if .server_id == "tnauqquant-prod-1" then .server_id = "macmini-m2" e
 
 預期的 inventory 等於 **cutover 前的集合，只把 `tnauqquant-prod-1` 換成 `macmini-m2`**，其他 target（包括可能已存在的 `trading01/lighter-mainnet-btc-canary`）都要原樣保留。不要拿固定筆數比對。
 
-Loki rules、Grafana dashboards 與 Alertmanager config 沒有變更。若 monitoring-prod 從未用 central-deploy 成功部署過（沒有 `.git/skyeye-central-deploy.applied`），它會另外跑 `amtool check-config` 並 reload Alertmanager；config 未變，silence 不受影響。
+Loki rules、Grafana dashboards 與 Alertmanager config 沒有變更。若 monitoring-prod 從未用 central-deploy 成功部署過（沒有 `.git/skyeye-central-deploy.applied`），它會另外跑 `amtool check-config`、reload Alertmanager，並確認 Loki 與 Grafana 已載入現有內容；config 未變，silence 不受影響。
 
 ## Step 5 — 驗證（Step 4 後 ≥ 5 分鐘）
 

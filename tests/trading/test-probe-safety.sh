@@ -8,6 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PROBE="$REPO_ROOT/agents/alloy/trading/probe.sh"
 REAL_PS="$(command -v ps)"
+REAL_DATE="$(command -v date)"
 
 for tool in cc jq shasum; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -59,12 +60,29 @@ case "\${PS_MODE:-real}" in
 esac
 SHIM_EOF
 chmod 755 "$SHIM/ps"
+# FAKE_NOW pins the clock the probe reads, for cases that need a chosen day. Other
+# date calls stay real. Pinned days are in the past, so a fresh log passes the
+# probe's skip of logs not written today.
+cat >"$SHIM/date" <<SHIM_EOF
+#!/usr/bin/env bash
+if [[ -n "\${FAKE_NOW:-}" ]]; then
+  case "\$*" in
+    +%s) printf '%s\n' "\$FAKE_NOW"; exit 0 ;;
+    +%F) "$REAL_DATE" -r "\$FAKE_NOW" +%F 2>/dev/null || "$REAL_DATE" -d "@\$FAKE_NOW" +%F; exit ;;
+  esac
+fi
+exec "$REAL_DATE" "\$@"
+SHIM_EOF
+chmod 755 "$SHIM/date"
 
 iso_at() {
   date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ
 }
 iso_offset() {
   iso_at "$(($(date +%s) + $1))"
+}
+epoch_of() { # epoch_of UTC_ISO
+  TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null || TZ=UTC date -d "$1" +%s
 }
 iso_with_fraction() { # iso_with_fraction ISO DIGITS
   printf '%s.%sZ\n' "${1%Z}" "$2"
@@ -114,6 +132,15 @@ fixture() {
 pnl_line() {
   printf 'time=%s level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 equity_now=1000 real_pnl_usdt=12.5 cycles_completed=1 cycle_real_pnl_usdt=1 risk_stopped=%s\n' \
     "$1" "${2:-false}"
+}
+
+cycle_line() { # cycle_line TIME CYCLE REAL_PNL CYCLE_PNL [EXTRA_FIELDS]
+  printf 'time=%s level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.%s session_cycle=%s real_pnl_usdt=%s cycles_completed=%s cycle_real_pnl_usdt=%s %s\n' \
+    "$1" "$2" "$2" "$3" "$2" "$4" "${5:-}"
+}
+
+trade_line() { # trade_line TIME EXECUTOR VOLUME
+  printf 'time=%s level=INFO msg=trade_status state=closed executor=%s volume_usd=%s\n' "$1" "$2" "$3"
 }
 
 start() { # start ARGV... from the fixture repo
@@ -390,6 +417,163 @@ expect 'small skew inside the allowance stays valid' "$(metric current_pnl_valid
 venue_line "$(iso_offset 3600)" 0.1 >"$LOG"
 run_probe
 expect 'a future position sample is invalid' "$(metric current_position_valid)" 0
+
+printf '# future events in financial outputs\n'
+fixture
+start "$QUANT" -config "$CONFIG_REL"
+manifest "$LAST_PID"
+past_epoch=$(($(date +%s) - 300))
+past_time="$(iso_at "$past_epoch")"
+future_time="$(iso_offset 3600)"
+{
+  cycle_line "$past_time" 1 10 10 'volume_usd_by_executor=venue-a:100,venue-b:50'
+  cycle_line "$future_time" 2 999 989 'volume_usd_by_executor=venue-a:9000,venue-b:9000'
+} >"$LOG"
+run_probe
+expect 'a future latest cycle still invalidates current P&L' "$(metric current_pnl_valid)" 0
+expect 'last cycle P&L falls back past a future cycle' "$(metric last_cycle_real_pnl_usdt)" 10
+expect 'last cycle time falls back past a future cycle' \
+  "$(metric last_completed_cycle_timestamp_seconds)" "$past_epoch"
+expect 'the curve keeps the valid cycle' "$(metric cycle_cumulative_real_pnl_usdt 'cycle="1"')" 10
+expect 'the curve drops the future cycle' "$(metric cycle_cumulative_real_pnl_usdt 'cycle="2"')" ''
+expect 'volume falls back past a future snapshot' \
+  "$(metric current_run_exchange_volume_usd 'exchange="exa"')" 100
+expect 'every exchange volume falls back together' \
+  "$(metric current_run_exchange_volume_usd 'exchange="exb"')" 50
+
+cycle_line "$future_time" 1 999 989 'volume_usd_by_executor=venue-a:9000,venue-b:9000' >"$LOG"
+run_probe
+expect 'with only a future cycle no last P&L is published' "$(metric last_cycle_real_pnl_usdt)" ''
+expect 'with only a future cycle no last time is published' \
+  "$(metric last_completed_cycle_timestamp_seconds)" ''
+expect 'with only a future cycle the curve is empty' "$(metric cycle_cumulative_real_pnl_usdt)" ''
+expect 'with only a future snapshot no volume is claimed' \
+  "$(metric current_run_exchange_volume_usd 'exchange="exa"')" 0
+
+{
+  cycle_line "$past_time" 1 10 10
+  cycle_line "$future_time" 1 999 999
+} >"$LOG"
+run_probe
+expect 'a future rewrite does not replace a cycle on the curve' \
+  "$(metric cycle_cumulative_real_pnl_usdt 'cycle="1"')" 10
+
+recent_epoch=$(($(date +%s) - 60))
+{
+  cycle_line "$past_time" 1 10 10
+  cycle_line "$future_time" 2 999 989
+  cycle_line "$(iso_at "$recent_epoch")" 3 13 3
+} >"$LOG"
+run_probe
+expect 'a valid event after a future one is still the latest cycle' \
+  "$(metric last_cycle_real_pnl_usdt)" 3
+expect 'and its time is the one published' \
+  "$(metric last_completed_cycle_timestamp_seconds)" "$recent_epoch"
+expect 'and the future cycle between them stays off the curve' \
+  "$(metric cycle_cumulative_real_pnl_usdt 'cycle="2"')" ''
+
+{
+  cycle_line "$past_time" 1 10 10
+  trade_line "$past_time" venue-a 100
+  trade_line "$future_time" venue-a 5000
+  trade_line "$past_time" venue-b 50
+} >"$LOG"
+run_probe
+expect 'a future trade adds no volume' "$(metric current_run_exchange_volume_usd 'exchange="exa"')" 100
+expect 'valid trades keep their volume' "$(metric current_run_exchange_volume_usd 'exchange="exb"')" 50
+
+cycle_line "$future_time" 1 999 989 "time=$past_time" >"$LOG"
+run_probe
+expect 'the record time decides, not a later time attribute' \
+  "$(metric cycle_cumulative_real_pnl_usdt 'cycle="1"')" ''
+
+# An unreadable time cannot be shown to be past. GNU date would still read a time
+# with no zone, so a gap here would publish a far-future time on Linux only.
+for bad_time in not-a-time 2025-02-30T00:00:00Z 2099-01-01T00:00:00; do
+  {
+    cycle_line "$past_time" 1 10 10 'volume_usd_by_executor=venue-a:100,venue-b:50'
+    cycle_line "$bad_time" 2 999 989 'volume_usd_by_executor=venue-a:9000,venue-b:9000'
+    trade_line "$bad_time" venue-a 5000
+  } >"$LOG"
+  run_probe
+  expect "unreadable time $bad_time stays off the curve" \
+    "$(metric cycle_cumulative_real_pnl_usdt 'cycle="2"')" ''
+  expect "unreadable time $bad_time is not the last cycle" "$(metric last_cycle_real_pnl_usdt)" 10
+  expect "unreadable time $bad_time is not the volume" \
+    "$(metric current_run_exchange_volume_usd 'exchange="exa"')" 100
+done
+
+{
+  cycle_line "$past_time" 1 10 10
+  trade_line "$past_time" venue-a 100
+  trade_line not-a-time venue-a 5000
+  cycle_line "$past_time" 2 999 989 | sed 's/^time=[^ ]* //'
+} >"$LOG"
+run_probe
+expect 'a cycle with no time stays off the curve' \
+  "$(metric cycle_cumulative_real_pnl_usdt 'cycle="2"')" ''
+expect 'a trade with an unreadable time adds no volume' \
+  "$(metric current_run_exchange_volume_usd 'exchange="exa"')" 100
+
+pinned_now="$(epoch_of 2025-07-17T02:00:00Z)"
+{
+  cycle_line "$(iso_at "$((pinned_now + 120))")" 1 10 10
+  cycle_line "$(iso_at "$((pinned_now + 121))")" 2 20 10
+} >"$LOG"
+FAKE_NOW="$pinned_now" run_probe
+expect 'a cycle at the skew limit is accepted' "$(metric cycle_cumulative_real_pnl_usdt 'cycle="1"')" 10
+expect 'a cycle past the skew limit is rejected' "$(metric cycle_cumulative_real_pnl_usdt 'cycle="2"')" ''
+
+printf '# completed cycles today\n'
+today_case() { # today_case DESCRIPTION ZONE NOW_UTC WANT TIME...
+  local description="$1" zone="$2" now="$3" want="$4" cycle=0 event_time
+  shift 4
+  fixture
+  export TQ_TIMEZONE="$zone"
+  : >"$LOG"
+  for event_time in "$@"; do
+    cycle=$((cycle + 1))
+    cycle_line "$event_time" "$cycle" 1 1 >>"$LOG"
+  done
+  FAKE_NOW="$(epoch_of "$now")" run_probe
+  expect "$description" "$(metric completed_cycles_today)" "$want"
+}
+
+# Taipei's 2025-07-17 starts at 2025-07-16T16:00:00Z.
+today_case 'a UTC log in Taipei counts the Taipei day' Asia/Taipei 2025-07-17T02:00:00Z 2 \
+  2025-07-16T15:59:59Z 2025-07-16T16:00:00Z 2025-07-17T01:00:00Z
+today_case 'a +08:00 log in UTC counts the UTC day' UTC 2025-07-17T23:30:00Z 2 \
+  2025-07-17T07:00:00+08:00 2025-07-17T07:59:59+08:00 2025-07-17T08:00:00+08:00 \
+  2025-07-18T07:00:00+08:00
+today_case 'a negative offset can land on the next UTC day' UTC 2025-07-17T12:00:00Z 1 \
+  2025-07-16T19:00:00-05:00
+today_case 'a half-hour offset with fractions is read to the second' UTC 2025-07-17T12:00:00Z 1 \
+  2025-07-17T05:29:59.123456789+05:30 2025-07-17T05:30:00.000+05:30
+today_case 'a same-offset log starts the day at midnight and skips future events' \
+  Asia/Taipei 2025-07-17T02:00:00Z 1 \
+  2025-07-16T23:59:59+08:00 2025-07-17T00:00:00+08:00 2025-07-17T23:00:00+08:00
+# The last two would land inside today if they were read as rollovers.
+today_case 'a same-offset log does not count unreadable times' Asia/Taipei 2025-07-17T02:00:00Z 1 \
+  2025-07-17T09:00:00+08:00 2025-07-17Tbroken 2025-07-17T00:60:00+08:00 2025-07-16T24:00:00+08:00
+today_case 'a leap day is a real day' UTC 2024-02-29T12:00:00Z 1 \
+  2024-02-28T23:59:59Z 2024-02-29T00:00:00Z
+# Thirty seconds ahead is inside the skew allowance, so only the day end excludes it.
+today_case 'tomorrow does not count even inside the skew allowance' \
+  Asia/Taipei 2025-07-17T15:59:30Z 1 \
+  2025-07-17T23:59:29+08:00 2025-07-18T00:00:00+08:00
+# New York's 2025-03-09 lasts 23 hours and 2025-11-02 lasts 25.
+today_case 'a 23-hour day ends at the next local midnight' \
+  America/New_York 2025-03-10T03:59:30Z 2 \
+  2025-03-09T05:00:00Z 2025-03-10T03:59:00Z 2025-03-10T04:00:30Z
+today_case 'a 25-hour day keeps its last hour' America/New_York 2025-11-03T04:30:00Z 2 \
+  2025-11-02T04:00:00Z 2025-11-03T04:20:00Z
+# Havana skips 00:00 on 2025-03-09, so that day starts at 01:00 local, 05:00Z.
+today_case 'a day that skips midnight starts at its first instant' \
+  America/Havana 2025-03-09T16:00:00Z 1 \
+  2025-03-09T04:59:59Z 2025-03-09T05:00:00Z
+today_case 'the day before a skipped midnight ends at that first instant' \
+  America/Havana 2025-03-09T04:59:30Z 1 \
+  2025-03-08T05:00:00Z 2025-03-09T05:00:30Z
 
 stop_processes
 if [[ "$FAILURES" -gt 0 ]]; then

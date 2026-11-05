@@ -51,5 +51,6 @@ groups:
         for: 5m
         labels:
           severity: High
+          notification_mode: shadow
         annotations:
           summary: "systemd unit {{ $labels.name }} failed on {{ $labels.instance }}"

@@ -283,4 +283,30 @@ METRICS_PATH="$RACE_ROOT/textfile/tnauqquant-pnl-history.prom"
 assert_metric tnauqquant_pnl_history_build_timestamp_seconds 1787803260
 assert_metric tnauqquant_pnl_history_current_value_usdt 4
 
+printf 'case: a future cycle fails the build and leaves published history untouched\n'
+FUTURE_ROOT="$TEST_ROOT/future"
+mkdir -p "$FUTURE_ROOT/raw" "$FUTURE_ROOT/textfile"
+export TQ_RAW_LOG_GLOB="$FUTURE_ROOT/raw/*.raw.log"
+export TQ_TEXTFILE_DIR="$FUTURE_ROOT/textfile"
+export TQ_PNL_HISTORY_CACHE_DIR="$FUTURE_ROOT/cache"
+export TQ_PNL_HISTORY_NOW_SECONDS=1787803200
+METRICS_PATH="$FUTURE_ROOT/textfile/tnauqquant-pnl-history.prom"
+cat >"$FUTURE_ROOT/raw/run-future.raw.log" <<'EOF'
+time=2026-08-27T09:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=future.1 cycle_real_pnl_usdt=4 real_pnl_usdt=4
+EOF
+"$BUILDER"
+assert_metric tnauqquant_pnl_history_current_value_usdt 4
+published_before="$(checksum "$METRICS_PATH")"
+cat >>"$FUTURE_ROOT/raw/run-future.raw.log" <<'EOF'
+time=2026-08-27T13:00:00+08:00 level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=future.2 cycle_real_pnl_usdt=900 real_pnl_usdt=904
+EOF
+if "$BUILDER" 2>/dev/null; then
+  printf 'FAIL: a future cycle must fail the build\n' >&2
+  exit 1
+fi
+[[ "$(checksum "$METRICS_PATH")" == "$published_before" ]] || {
+  printf 'FAIL: a failed build must not replace published history\n' >&2
+  exit 1
+}
+
 printf 'PASS: historical P&L cache and accumulation contract\n'

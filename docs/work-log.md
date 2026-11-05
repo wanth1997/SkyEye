@@ -15,6 +15,26 @@
 ---
 -->
 
+## 2026-11-06 07:42 — 監控覆蓋、備份、log scrub、通知路由與部署驗證（10 項）
+
+**改動摘要：** 合併 Codex review v2 與第三份 review 後續的 10 項工作：Stack health 訊號修正、Prometheus 世代備份與分階段還原、monitoring-prod 主機指標、Alloy log scrub 強化、paged 告警的休眠 email 路由、probe 時間處理、`setup.sh` 原子安裝、`central-deploy` 實際載入驗證與 `scripts/verify-all` 本機 merge gate。Trading 告警維持全 shadow，這次只 merge，未部署。
+
+**修改的檔案：**
+- `scripts/verify-all` — 新增本機 merge gate，自動探索 `tests/` 與 rule test
+- `prometheus/rules/stack-health.yml`、`prometheus/rules/system.yml`、`grafana/dashboards/SkyEye/skyeye-stack-health.json`、`tests/stack/` — `PrometheusRuleEvalSlow` 改用存在的指標，新增 `PrometheusRuleIterationsMissed`，`SystemdUnitFailed` 改 shadow，修正 Panel 12、22、54
+- `prometheus/rules/backup.yml`、`runbooks/backup-failed.md`、`runbooks/disk-full.md`、`docs/operations.md` — 4 條備份 shadow 告警與安全還原流程
+- `scripts/backup-prometheus.sh`、`scripts/restore-prometheus.sh`、`tests/backup/` — 世代備份、`MANIFEST.json`、3 GiB 上限、staged 還原與自動 rollback
+- `docker-compose.yml`、`prometheus/prometheus.yml`、`prometheus/rules/tests/monitoring-host.test.yml` — 新增 `node-exporter` 與 `monitoring-host` job
+- `agents/alloy/config-logs.alloy.tmpl`、`agents/alloy/trading/config-linux.alloy.tmpl`、`agents/alloy/trading/config-macos.alloy.tmpl`、`tests/fixtures/scrub/`、`tests/trading/test-scrub-pipeline.sh` — 強化 scrub 規則，155 個案例在真實 Alloy 與 Loki 上實跑
+- `alertmanager/alertmanager.yml`、`scripts/trading-target`、`runbooks/trading-alert-promotion.md` — paged High 的休眠 email 路由，`check-alert-modes` 限定 3 條 Trading 告警可設為 `page`，新增升級 runbook
+- `agents/alloy/trading/probe.sh` — 未來或無法解析時間的事件不進入損益、曲線與成交量；今日完成週期改用 `TQ_TIMEZONE` 的 epoch 區間
+- `agents/alloy/setup.sh`、`tests/alloy/test-setup-atomic.sh` — 寫入前完成檢查，暫存檔 `alloy validate` 後原子替換，失敗時還原舊設定
+- `scripts/central-deploy`、`tests/trading/test-central-deploy.sh` — 確認 Prometheus、Loki ruler 與 Grafana 實際載入後才記錄 applied SHA
+
+**原因/備註：** 部署要另外核准。`central-deploy` 上線前要先在 monitoring-prod 建 Grafana Viewer service account token，否則有 dashboard 變更或沒有 applied 紀錄的部署會在 fast-forward 前被擋下。`node-exporter` 要先 `docker compose up -d node-exporter` 再跑 `central-deploy`。`PrometheusBackupSignalMissing` 在新備份腳本上線前會以 shadow firing，Overview 的 Active alerts 會多 1。3 GiB 上限會刪最後一份受管 snapshot。Scrub 已知洩漏殘留 A30、A31、T19、X17、M02，以及 4 種 fail closed 丟掉 `msg` 的形式（X16、X23、A35、E15），rollout 前要先唯讀統計線上是否有這種行。C-4 修好前 PROD02 不可重跑 `setup.sh`，scrub rollout 也一樣。真實 S3、真實 systemd 與 Grafana 前端未驗證。
+
+---
+
 ## 2026-11-06 07:35 — 同步已上線的 LinkCourt 付款告警
 
 **改動摘要：** 把 Wan 在 linkcourt D111、D114 核准、11-03 直接加到 monitoring-prod 的三條付款告警原樣同步進 Git，補上 promtool 測試。規則內容與直接送 High 的行為都不變。

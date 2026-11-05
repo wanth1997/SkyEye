@@ -22,6 +22,8 @@ Phase 2A is log-only — no code changes on the host, low risk.
 - systemd (for journald collection)
 - Outbound HTTPS to `*.wanbrain.com` (via Cloudflare Tunnel endpoints)
 - root / sudo
+- `envsubst` (Debian/Ubuntu package `gettext-base`)
+- Grafana Alloy v1.9.0 or newer if it is already installed. Older versions have no `alloy validate`, so `setup.sh` stops and asks you to upgrade.
 
 ## Phase 2A install — log collection only
 
@@ -92,6 +94,37 @@ Trigger a payment flow on PPClub (or just let a normal request come in). In Graf
 ```
 
 You should see lines where `'Email': '<address>'` has been replaced by `'Email': '[REDACTED]'` or similar. If you see a raw email in any log line, add a regex to `config-logs.alloy.tmpl` and re-run setup.sh.
+
+## How setup.sh handles failure
+
+`setup.sh` renders into a private file beside the config, runs `alloy validate` on it, and only then renames it over `/etc/alloy/config.alloy`. If Alloy does not come up on the new config, the old one is put back.
+
+| What went wrong | What happens | Exit |
+|---|---|---|
+| Bad input, or a missing template or `envsubst` | Nothing is written and apt does not run | 2 |
+| Not root, config is a symlink, or an earlier run did not finish | Nothing is written | 1 |
+| Render or `alloy validate` fails, or Alloy has no `validate` | The live config is not touched and Alloy is not restarted | 1 |
+| Restart or health check fails, and Alloy was running | Old config restored, Alloy restarted and checked again | 1 |
+| Restart or health check fails, and Alloy was stopped | Old config restored, Alloy stopped again | 1 |
+| Restart or health check fails, and there was no old config | New config deleted so no credentials stay on disk, Alloy stopped | 1 |
+| The rollback itself fails | A `CRITICAL` message says what to check by hand | 3 |
+
+On a host where apt just installed Alloy, the package's sample config counts as the old config. Alloy is only enabled at boot after a run succeeds.
+
+**What stays on disk.** After a successful run, `/etc/alloy/config.alloy.previous` holds the config that was replaced. To go back to it:
+
+```bash
+sudo cp -p /etc/alloy/config.alloy.previous /etc/alloy/config.alloy
+sudo systemctl restart alloy
+```
+
+The next successful run overwrites this file, and it holds the credentials of the old config. A failed run leaves it alone.
+
+`/etc/alloy/config.alloy.rollback` only exists during a run. If you find one, that run was killed: it holds the config from before that run. Compare it with `config.alloy`, then move it over the config or delete it. `setup.sh` refuses to run until you do.
+
+**What the health check does not cover.** The check confirms that `alloy.service` stays active on one process for 5 seconds. It says nothing about the pipeline. A wrong CF Access Client ID or Secret leaves Alloy active while every push gets a 401, so it does not trigger a rollback and `setup.sh` reports success. Always do the end-to-end check in Grafana after a run.
+
+**Hand edits are not merged.** `setup.sh` re-renders the whole config from the templates, and `APP_METRICS_TARGET` takes one target. Extra scrape targets added by hand are dropped by a re-run, and because that run succeeds, nothing rolls back. Compare the running config with the render before re-running on a host that was edited by hand.
 
 ## Troubleshooting
 

@@ -72,29 +72,89 @@ loki.process "@@COMPONENT_ID@@" {
     replace    = "[EMAIL]"
   }
 
+  // stage.replace rewrites capture groups and nothing else, so a group wraps a value and
+  // never its key. A branch with no group matches text that must stay: RE2 has no
+  // lookahead, and this is how an expression says "not this". Where an expression has
+  // two groups they are alternatives, and only one takes part in a match.
+  //
+  // A value is tried as an escaped \"...\", a "..." that may run to the end of the line,
+  // a '...', a [...] or {...} composite, then a bare word. A bare word stops at a quote:
+  // eating it would swallow the rest of the line, msg included.
+  //
+  // A quote followed by a space usually closes an enclosing value, as in
+  // err="bad token: " detail=x. It opens a value only when the next quote is followed by
+  // a delimiter, as in token=" x".
+  //
+  // Composites balance up to four levels, spelled out because RE2 cannot recurse. A value
+  // nested deeper, or never closed, is redacted through the last ] or } on the line, or
+  // to the end of the line when there is none, and a quote followed by a space stops it
+  // either way. A ] or } inside the data closes a composite early.
+  //
+  // The next field is a lowercase key, =, and a value. It stays after key= and a space,
+  // and after a bare scheme such as Bearer. A credential ending in = padding is not one.
+
+  // Python header tuples, ('Authorization', 'Basic x'). The opening ( keeps this off
+  // JSON, where "token","next" is a value followed by the next key.
   stage.replace {
-    expression = "(?i)authorization[=:][[:space:]]*([^[:space:]]+)"
+    expression = `(?i)[(\[]\s*\\*["'][\w.\-]*(?:authorization|token|cookie|api[_-]?key|secret(?:[_-]?key)?|passw(?:or)?d|passphrase|private[_-]?key|signature)\\*["']\s*,\s*(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`
+    replace    = "[SECRET]"
+  }
+
+  // Scheme plus credential: redact both words, not just the scheme. Tried in order: a
+  // comma separated parameter list (Digest, AWS4-HMAC-SHA256), the next field, which
+  // stays, then a credential with any further scheme and credential pairs after it.
+  stage.replace {
+    expression = `(?i)authorization(?:\\*["'])?\s*[=:]\s*\[?(?:([A-Za-z][A-Za-z0-9_.+\-]*\s+[A-Za-z0-9_.\-]+=(?:\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|[^\s",\\]*)\s*,\s*[A-Za-z0-9_.\-]+=(?:\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|[^\s",\\]*)(?:\s*,\s*[A-Za-z0-9_.\-]+=(?:\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|[^\s",\\]*))*)|[A-Za-z][A-Za-z0-9_.+\-]*\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|([A-Za-z][A-Za-z0-9_.+\-]*\s+(?:[^\s"\\,]|\\[^"])+(?:\s*,\s*(?:bearer|basic|token|digest|negotiate|apikey)\s+(?:[^\s"\\,]|\\[^"])+|,(?:[^\s"\\,]|\\[^"])+)*))`
     replace    = "[TOKEN]"
   }
 
   stage.replace {
-    expression = "(?i)token=([^[:space:]]+)"
+    expression = `(?i)authorization(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
+    replace    = "[TOKEN]"
+  }
+
+  // Bare bearer credential. It runs before the token rule so that X-Auth-Token: Bearer x
+  // cannot redact the scheme and leave the credential.
+  stage.replace {
+    expression = `(?i)\bbearer\s+(?:(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|((?:[^\s"\\]|\\[^"])+))`
     replace    = "[TOKEN]"
   }
 
   stage.replace {
-    expression = "(?i)(order_id|client_action_id)=([^[:space:]]+)"
+    expression = `(?i)token(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = `(?i)(?:order_?id|client_?action_?id)(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
     replace    = "[ORDER_REF]"
   }
 
   stage.replace {
-    expression = "(?i)(attempt_id|parent_attempt_id|reservation_id|linked_reservation_id|recovery_group_id)=([^[:space:]]+)"
+    expression = `(?i)(?:attempt_id|parent_attempt_id|reservation_id|linked_reservation_id|recovery_group_id)(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
     replace    = "[TRACE_REF]"
   }
 
   stage.replace {
-    expression = "(?i)(grant_id|mutation_id|mutations|account)=([^[:space:]]+)"
+    expression = `(?i)(?:grant_id|mutation_id|mutations|account)(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
     replace    = "[EXECUTION_REF]"
+  }
+
+  stage.replace {
+    expression = `(?i)(?:api[_-]?secret|client[_-]?secret|secret[_-]?key|secret|passw(?:or)?d|passphrase|private[_-]?key|signature)(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
+    replace    = "[SECRET]"
+  }
+
+  // At least 12 characters: loki/rules/fake/zenincome.yml alerts on the literal text
+  // of an invalid-key error, which this rule must leave readable.
+  stage.replace {
+    expression = `(?i)api[_-]?key(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\]){12,}\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.){11,}(?:"|$)|'(?:[^'\\]|\\.){12,}'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|(?:[^\s"\\]|\\[^"]){12,})|("\s(?:[^"\\]|\\.){11,}")(?:[\s,;)}\]]|$)))`
+    replace    = "[SECRET]"
+  }
+
+  stage.replace {
+    expression = `(?i)cookie(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[^\s;"\\]+;\s*)*[^\s"\\]+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
+    replace    = "[SECRET]"
   }
 
   stage.label_drop {

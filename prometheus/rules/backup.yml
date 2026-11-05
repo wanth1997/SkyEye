@@ -1,0 +1,76 @@
+groups:
+  - name: skyeye-backup
+    interval: 1m
+    rules:
+      # The backup script reports skyeye_backup_* itself. The deployed script does
+      # not report yet, so PrometheusBackupSignalMissing firing in shadow is the
+      # expected state until it does, and the other three stay silent.
+      #
+      # One missed nightly run surfaces at 09:05 Taipei (19:05 UTC + 30h), inside
+      # the Medium work-hours window, instead of paging at 03:00.
+      # last_over_time keeps working for a once-a-day pushed sample, which falls
+      # out of the 5m instant lookback, and for a scraped textfile series alike.
+      # The 31d window outlives Prometheus retention, so an outage does not
+      # resolve itself while the success sample ages out of a shorter window.
+      # An attempt with no success on record counts as timestamp 0: a lost or
+      # never-written success series must not read as healthy.
+      - alert: PrometheusBackupStale
+        expr: |
+          time() - (
+            last_over_time(skyeye_backup_last_success_timestamp_seconds{job="skyeye-backup"}[31d])
+            or on (job, instance)
+            0 * last_over_time(skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup"}[31d])
+          ) > 30 * 3600
+        for: 10m
+        labels:
+          severity: Medium
+          product: skyeye
+          notification_mode: shadow
+        annotations:
+          summary: "No completed Prometheus backup generation for over 30h"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+
+      # Two nightly runs missed. S3 lifecycle keeps expiring old generations
+      # whether or not new ones arrive, so this cannot wait.
+      - alert: PrometheusBackupStaleCritical
+        expr: |
+          time() - (
+            last_over_time(skyeye_backup_last_success_timestamp_seconds{job="skyeye-backup"}[31d])
+            or on (job, instance)
+            0 * last_over_time(skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup"}[31d])
+          ) > 54 * 3600
+        for: 10m
+        labels:
+          severity: High
+          product: skyeye
+          notification_mode: shadow
+        annotations:
+          summary: "No completed Prometheus backup generation for over 54h"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+
+      # The script did not report at all: cron gone, script crashed before its
+      # first metric write, or the transport is broken.
+      - alert: PrometheusBackupSignalMissing
+        expr: absent_over_time(skyeye_backup_last_attempt_timestamp_seconds{job="skyeye-backup"}[30h])
+        for: 10m
+        labels:
+          severity: Medium
+          product: skyeye
+          notification_mode: shadow
+        annotations:
+          summary: "Prometheus backup has reported nothing for 30h"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"
+
+      - alert: PrometheusBackupSnapshotsAccumulating
+        expr: |
+          last_over_time(skyeye_backup_snapshot_pinned_bytes{job="skyeye-backup"}[30h]) > 3 * 1024 * 1024 * 1024
+          or
+          last_over_time(skyeye_backup_pending_generations{job="skyeye-backup"}[30h]) > 2
+        for: 10m
+        labels:
+          severity: Medium
+          product: skyeye
+          notification_mode: shadow
+        annotations:
+          summary: "Local Prometheus snapshots exceed the retention bound"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/backup-failed.md"

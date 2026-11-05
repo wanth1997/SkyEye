@@ -27,6 +27,10 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 
 Add a row + a runbook here every time you add a rule with `severity: High` or `Medium`.
 
+## Procedures
+
+- [`trading-alert-promotion.md`](./trading-alert-promotion.md) — Trading silence rule, SMTP fill-in, real canary and the promotion checklist.
+
 ## Template
 
 [`_template.md`](./_template.md) — copy as a starting point.

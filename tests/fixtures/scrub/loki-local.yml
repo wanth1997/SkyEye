@@ -1,0 +1,45 @@
+# Throwaway single-binary Loki for tests/trading/test-scrub-pipeline.sh. The
+# container runs with --network none, so nothing here is reachable off loopback.
+auth_enabled: false
+
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 3100
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /tmp/loki
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /tmp/loki/chunks
+      rules_directory: /tmp/loki/rules
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  allow_structured_metadata: false
+  reject_old_samples: false
+  # The label assertion needs exactly what the pipeline sent, nothing derived.
+  discover_service_name: []
+  max_entries_limit_per_query: 50000
+  max_query_series: 5000
+  ingestion_rate_mb: 64
+  ingestion_burst_size_mb: 128
+
+analytics:
+  reporting_enabled: false

@@ -1,0 +1,36 @@
+rule_files:
+  - ../system.yml
+
+evaluation_interval: 30s
+
+tests:
+  # Shadow changes only who is told. Severity, the 5 minute wait and which units
+  # count as failed stay as they were before the collector is turned on.
+  - name: a failed unit fires after 5 minutes as High and stays in shadow
+    interval: 1m
+    input_series:
+      - series: 'node_systemd_unit_state{name="x.service",state="failed",instance="host-a",product="alpha",server_id="host-a"}'
+        values: '1x20'
+      - series: 'node_systemd_unit_state{name="x.service",state="active",instance="host-a",product="alpha",server_id="host-a"}'
+        values: '0x20'
+      - series: 'node_systemd_unit_state{name="y.service",state="failed",instance="host-a",product="alpha",server_id="host-a"}'
+        values: '0x20'
+      - series: 'node_systemd_unit_state{name="y.service",state="active",instance="host-a",product="alpha",server_id="host-a"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SystemdUnitFailed
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SystemdUnitFailed
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              notification_mode: shadow
+              name: x.service
+              state: failed
+              instance: host-a
+              product: alpha
+              server_id: host-a
+            exp_annotations:
+              summary: "systemd unit x.service failed on host-a"

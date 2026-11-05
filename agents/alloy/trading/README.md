@@ -112,11 +112,16 @@ full shadow → canary process.
    no test edits are needed.
 3. Central, on monitoring-prod in `/home/ubuntu/SkyEye`: `scripts/central-deploy`
    (optionally `--dry-run` first). It validates the merged commit in a
-   temporary worktree, fast-forwards, reloads Prometheus and prints the live
-   `trading_target_info` rows. Glance at the fleet dashboard once. It records
-   the last successfully applied commit in `.git/skyeye-central-deploy.applied`,
-   so if a reload fails, re-running the same command validates and reloads the
-   checkout again (also the first run on a checkout updated by `git pull`).
+   temporary worktree, including every dashboard and the Loki rules,
+   fast-forwards, reloads Prometheus and prints the live `trading_target_info`
+   rows. For a changed rule or dashboard it then waits for Loki and Grafana to
+   load it, up to about 150 seconds; a dashboard change needs the Grafana token
+   from [the one-time setup](../../../README.md#one-time-setup-for-scriptscentral-deploy).
+   Glance at the fleet dashboard once. It records the last successfully applied
+   commit in `.git/skyeye-central-deploy.applied`, so if a reload or a load
+   fails, re-running the same command validates, reloads and confirms the
+   checkout again (also the first run on a checkout updated by `git pull`). See
+   [what it proves](../../../README.md#what-scriptscentral-deploy-proves).
    A change that needs a container recreate (such as `docker-compose.yml`) is
    refused when it differs from HEAD or from that record, so a `git pull` by
    hand cannot slip one past it. Apply it by hand (`docker compose up -d

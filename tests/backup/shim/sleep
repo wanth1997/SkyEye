@@ -1,0 +1,3 @@
+#!/bin/bash
+# FAKE sleep: records the requested delay and returns at once.
+printf '%s\n' "$*" >>"$FAKE_LOG/sleep.log"
