@@ -30,7 +30,7 @@ If all three are fine, you're done. Total: under 2 minutes.
 1. **Alert rule review** — do we need any new rules? Any that have never fired? (Use `count_over_time(ALERTS_FOR_STATE[30d])` to find.)
 2. **Disk forecast** — in Grafana Hosts dashboard, look at 30-day disk growth trend per host.
 3. **Image pins** — verify versions in `docker-compose.yml` are current-ish. Bump quarterly, not monthly.
-4. **Backup verification** — run steps 1-3 of "Restore Prometheus TSDB from S3 snapshot" below against the newest prefix, then delete the staging directory with `sudo rm -rf /var/lib/skyeye-restore/<date>`. Prometheus keeps running and live data is not touched.
+4. **Backup verification** — run steps 1-3 of "Restore Prometheus TSDB from S3 snapshot" below against the newest prefix, then delete the staging directory with `sudo rm -rf /var/lib/skyeye-restore/<date>`. Step 3 can take hours, so leave it running in `tmux`. Prometheus keeps running and live data is not touched.
 
 ## Quarterly (1-2 hours)
 
@@ -93,7 +93,7 @@ Before you start:
 - Prefix dates are UTC: the 03:00 Taipei run on 11-02 is under `2026-11-01/`.
 - Avoid 19:00 UTC, when the nightly backup runs.
 
-**1. Pick a prefix and check space.** Paste the first block in the shell you will use for every step. If the session drops, paste it again; the steps fail harmlessly without it.
+**1. Pick a prefix and check space.** Start `tmux` first, because step 3 takes hours and must survive an SSH drop. Paste the first block in the shell you will use for every step. If the session drops, paste it again; the steps fail harmlessly without it.
 
 ```bash
 SNAP=2026-11-01    # newest prefix unless you have a reason; list them below
@@ -142,6 +142,10 @@ EOF
 
 **3. Verify staging.** `promtool` silently skips a block with no `meta.json`, and Prometheus only logs a line for it, so each block is checked file by file first. A block missing `index` or `chunks` would stop Prometheus from starting.
 
+File checks cannot see a final chunk segment that never reached S3: the listing and the numbering still agree. So this step reads every sample of every block with `promtool tsdb dump`. That command exits 0 with no error when it hits a missing chunk and simply stops early, so the check is the sample count against `meta.json`, not the exit code.
+
+The read is slow. Plan for 1 to 4 hours on a 1.9 GB backup. That is an estimate: synthetic data read at about 40 minutes per billion samples on one fast core, and a backup that size likely holds 1-3 billion samples. The step prints the real total first. It uses one CPU and about 30 MB of memory, and no extra disk, because the blocks are hardlinked and the output goes straight to a counter.
+
 ```bash
 restore_step <<'EOF'
 rm -f "$STAGE/VERIFIED"
@@ -183,6 +187,23 @@ jq -rs 'sort_by(.minTime) | reduce .[] as $b ({end: null, out: [], newest: 0};
      then .out += ["GAP \(.end / 1000 | floor | todate) -> \($b.minTime / 1000 | floor | todate)"] else . end)
     | .end = ([.end, $b.maxTime] | max) | .newest = .end)
   | .out + ["NEWEST \(.newest / 1000 | floor | todate)"] | .[]' ./*/meta.json | tee "$STAGE/timeline"
+
+# Read every sample, one block at a time, through a hardlinked view: dump needs
+# a wal/ directory, and without tombstones it must return exactly numSamples.
+echo "Reading $(jq -s 'map(.stats.numSamples) | add' ./*/meta.json) samples in $BLOCKS blocks"
+for entry in *; do
+  rm -rf "$STAGE/check"
+  mkdir -p "$STAGE/check/wal"
+  cp -al "$entry" "$STAGE/check/"
+  rm -f "$STAGE/check/$entry/tombstones"
+  EXPECTED=$(jq -r '.stats.numSamples' "$entry/meta.json")
+  ACTUAL=$(docker run --rm --network none --cpus=1 --entrypoint /bin/sh -v "$STAGE/check:/check:ro" "$IMAGE" \
+    -c 'promtool tsdb dump --sandbox-dir-root=/tmp /check | wc -l')
+  [ "$ACTUAL" -eq "$EXPECTED" ] || stop "$entry: read $ACTUAL of $EXPECTED samples, chunk data is missing"
+  echo "$entry: $ACTUAL samples"
+done
+rm -rf "$STAGE/check"
+
 if grep -q '^GAP' "$STAGE/timeline"; then
   stop "timeline has gaps; a gap can be a real outage or a missing block. Compare with an older prefix"
 fi
@@ -224,10 +245,17 @@ for _ in $(seq 1 60); do
   sleep 5
 done
 curl -fsS http://127.0.0.1:9090/-/ready >/dev/null || stop "not ready after 5 minutes; check logs and roll back"
-query() { curl -fsS http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" ${2:+--data-urlencode "time=$2"}; }
-LOADED=$(query prometheus_tsdb_blocks_loaded | jq -r '.data.result[0].value[1] // 0')
-SERIES=$(query 'count(up)' "${SNAP}T18:00:00Z" | jq -r '.data.result[0].value[1] // 0')
-[ "$LOADED" -gt 0 ] || stop "no blocks loaded"
+# Read /metrics, not a query: a query has no sample until the first self-scrape,
+# about 15 seconds after ready. Give it 2 minutes before calling this a failure.
+LOADED=0
+for _ in $(seq 1 24); do
+  LOADED=$(curl -fsS http://127.0.0.1:9090/metrics | awk '$1 == "prometheus_tsdb_blocks_loaded" {print $2}' || true)
+  [ "${LOADED:-0}" -gt 0 ] && break
+  sleep 5
+done
+[ "${LOADED:-0}" -gt 0 ] || stop "no blocks loaded after 2 minutes; check logs and roll back"
+SERIES=$(curl -fsS http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=count(up)' \
+  --data-urlencode "time=${SNAP}T18:00:00Z" | jq -r '.data.result[0].value[1] // 0')
 [ "$SERIES" -gt 0 ] || stop "no data at ${SNAP}T18:00Z"
 echo "OK: $LOADED blocks loaded, $SERIES up series at ${SNAP}T18:00Z"
 EOF
