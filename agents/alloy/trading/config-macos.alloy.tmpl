@@ -75,28 +75,47 @@ loki.process "trading" {
     replace    = "[EMAIL]"
   }
 
+  // Every expression has one capture group, around the value, because stage.replace
+  // rewrites capture groups and nothing else. A value is tried as an escaped \"...\",
+  // a "..." that may run to the end of the line, a '...', a [...] list, then a bare
+  // word. A quote followed by a space closes an enclosing value rather than opening
+  // one, and a bare word stops at a quote: eating that quote would swallow the rest
+  // of the line, msg included.
+
+  // Scheme plus credential: redact both words, not just the scheme.
   stage.replace {
-    expression = "(?i)authorization[=:][[:space:]]*([^[:space:]]+)"
+    expression = `(?i)authorization(?:\\*["'])?\s*[=:]\s*\[?((?:bearer|basic|token|digest|negotiate|apikey)\s+(?:[^\s"\\]|\\[^"])+)`
+    replace    = "[TOKEN]"
+  }
+
+  // Unknown scheme. A second word containing = is the next logfmt key, so it is left alone.
+  stage.replace {
+    expression = `(?i)authorization(?:\\*["'])?\s*[=:]\s*\[?([A-Za-z][A-Za-z0-9_.+\-]*[ \t]+[^\s"\\=]+)(?:[\s"\\\]]|$)`
     replace    = "[TOKEN]"
   }
 
   stage.replace {
-    expression = "(?i)token=([^[:space:]]+)"
+    expression = `(?i)authorization(?:\\*["'])?\s*[=:]\s*(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'[^'"]*'|\[[^\]]*\]|(?:[^\s"\\]|\\[^"])+)`
     replace    = "[TOKEN]"
   }
 
   stage.replace {
-    expression = "(?i)(order_id|client_action_id)=([^[:space:]]+)"
+    expression = `(?i)token(?:\\*["'])?\s*[=:]\s*(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'[^'"]*'|\[[^\]]*\]|(?:[^\s"\\]|\\[^"])+)`
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = `(?i)(?:order_?id|client_?action_?id)(?:\\*["'])?\s*[=:]\s*(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'[^'"]*'|\[[^\]]*\]|(?:[^\s"\\]|\\[^"])+)`
     replace    = "[ORDER_REF]"
   }
 
   stage.replace {
-    expression = "(?i)(attempt_id|parent_attempt_id|reservation_id|linked_reservation_id|recovery_group_id)=([^[:space:]]+)"
+    expression = `(?i)(?:attempt_id|parent_attempt_id|reservation_id|linked_reservation_id|recovery_group_id)(?:\\*["'])?\s*[=:]\s*(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'[^'"]*'|\[[^\]]*\]|(?:[^\s"\\]|\\[^"])+)`
     replace    = "[TRACE_REF]"
   }
 
   stage.replace {
-    expression = "(?i)(grant_id|mutation_id|mutations|account)=([^[:space:]]+)"
+    expression = `(?i)(?:grant_id|mutation_id|mutations|account)(?:\\*["'])?\s*[=:]\s*(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'[^'"]*'|\[[^\]]*\]|(?:[^\s"\\]|\\[^"])+)`
     replace    = "[EXECUTION_REF]"
   }
 
