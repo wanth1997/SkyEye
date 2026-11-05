@@ -37,6 +37,18 @@ scrape_configs:
     static_configs:
       - targets: ['blackbox:9115']
 
+  # monitoring-prod host metrics. Local network only: this is the central
+  # host, so nothing here opens a scrape port towards product hosts.
+  - job_name: monitoring-host
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          product: skyeye
+          server_id: monitoring-prod
+    relabel_configs:
+      - target_label: instance
+        replacement: monitoring-prod
+
   # External dependency HTTP probes. The blackbox exporter itself lives
   # locally; each `target` below is the URL we want probed.
   # Trick: relabel so `target` (the probed URL) becomes a label, and

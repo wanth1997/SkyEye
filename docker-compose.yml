@@ -106,6 +106,24 @@ services:
     ports:
       - "127.0.0.1:9115:9115"
 
+  # Host CPU/memory/disk for monitoring-prod. No published port: Prometheus
+  # scrapes it on the compose network, so node_network_* and netstat describe
+  # this container, not the host. pid: host reads the host's mount table, which
+  # keeps the container's own /etc/hosts-style mounts out of node_filesystem_*.
+  node-exporter:
+    image: prom/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
+    restart: unless-stopped
+    logging: *default-logging
+    # The Hosts dashboard selects on nodename; without this it is the container
+    # ID and changes on every recreate.
+    hostname: monitoring-prod
+    pid: host
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|run|sys|var/lib/docker/.+)($$|/)
+    volumes:
+      - /:/host:ro,rslave
+
   cloudflared:
     image: cloudflare/cloudflared:2026.10.3
     restart: unless-stopped
