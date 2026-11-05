@@ -1,0 +1,230 @@
+#!/bin/bash
+# FAKE aws. Never forwards to a real binary. The bucket is a local directory.
+#
+# Failure modes, per operation:
+#   FAKE_AWS_SYNC      ok | fail_all | fail_after:N | fail_times:N | fail_match:REGEX | skip_match:REGEX | hang
+#   FAKE_AWS_DOWNLOAD  ok | fail_all | fail_after:N
+#   FAKE_AWS_CP        ok | fail | fail_times:N | truncate
+#   FAKE_AWS_LS        ok | fail | fail_times:N
+# FAKE_AWS_SYNC_HOOK runs with the source directory before an upload.
+# FAKE_AWS_DOWNLOAD_HOOK runs before a download.
+set -u
+: "${FAKE_S3:?FAKE_S3 unset: refusing to run}"
+: "${FAKE_LOG:?FAKE_LOG unset: refusing to run}"
+printf '%s aws %s\n' "${FAKE_NOW:-0}" "$*" >>"$FAKE_LOG/aws-calls.log"
+
+refuse() {
+  printf 'FORBIDDEN aws %s\n' "$*" >>"$FAKE_LOG/aws-forbidden.log"
+  echo "fake aws: unsupported: $*" >&2
+  exit 252
+}
+
+# True for the first N calls of the named operation.
+within_first() { # name, N
+  local counter="$FAKE_LOG/aws-$1.count" n
+  n=$(($(cat "$counter" 2>/dev/null || echo 0) + 1))
+  echo "$n" >"$counter"
+  [ "$n" -le "$2" ]
+}
+
+size_of() { wc -c <"$1" | tr -d ' '; }
+s3path() { printf '%s/%s' "$FAKE_S3" "${1#s3://}"; }
+
+service="${1:-}"
+sub="${2:-}"
+[ $# -ge 2 ] || refuse "$service"
+shift 2
+pos=()
+recursive=0
+summarize=0
+bucket=""
+prefix=""
+excludes=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --region | --output) shift 2 ;;
+    --only-show-errors | --no-follow-symlinks) shift ;;
+    --recursive) recursive=1; shift ;;
+    --summarize) summarize=1; shift ;;
+    --exclude) excludes+=("$2"); shift 2 ;;
+    --bucket) bucket="$2"; shift 2 ;;
+    --prefix) prefix="$2"; shift 2 ;;
+    --*) refuse "flag $1" ;;
+    *) pos+=("$1"); shift ;;
+  esac
+done
+
+excluded() {
+  local pattern
+  for pattern in ${excludes[@]+"${excludes[@]}"}; do
+    [ "$1" = "$pattern" ] && return 0
+  done
+  return 1
+}
+
+sync_download() {
+  local from to mode n=0 limit=-1 f
+  from="$(s3path "$1")"
+  to="$2"
+  mode="${FAKE_AWS_DOWNLOAD:-ok}"
+  [ -z "${FAKE_AWS_DOWNLOAD_HOOK:-}" ] || "$FAKE_AWS_DOWNLOAD_HOOK"
+  if [ "$mode" = fail_all ]; then
+    echo "fatal error: An error occurred (AccessDenied) when calling the ListObjectsV2 operation: fake" >&2
+    exit 1
+  fi
+  case "$mode" in fail_after:*) limit="${mode#fail_after:}" ;; esac
+  [ -d "$from" ] || exit 0
+  while read -r f; do
+    excluded "$f" && continue
+    if [ "$limit" -ge 0 ] && [ "$n" -ge "$limit" ]; then
+      echo "download failed: s3://$f: fake: Connection was closed" >&2
+      exit 1
+    fi
+    mkdir -p "$to/$(dirname "$f")"
+    cp "$from/$f" "$to/$f"
+    n=$((n + 1))
+  done < <(cd "$from" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
+  exit 0
+}
+
+sync_upload() {
+  local src="$1" dst to mode n=0 limit=-1 rc=0 f match=""
+  dst="$2"
+  to="$(s3path "$dst")"
+  mode="${FAKE_AWS_SYNC:-ok}"
+  [ -z "${FAKE_AWS_SYNC_HOOK:-}" ] || "$FAKE_AWS_SYNC_HOOK" "$src"
+  case "$mode" in
+    fail_all)
+      echo "upload failed: fake: An error occurred (AccessDenied) when calling the PutObject operation" >&2
+      exit 1
+      ;;
+    fail_times:*)
+      if within_first sync "${mode#fail_times:}"; then
+        echo "upload failed: fake: An error occurred (SlowDown) when calling the PutObject operation" >&2
+        exit 1
+      fi
+      ;;
+    hang) exec /bin/sleep 120 ;;
+    fail_after:*) limit="${mode#fail_after:}" ;;
+    fail_match:* | skip_match:*) match="${mode#*:}" ;;
+  esac
+  while read -r f; do
+    if [ "$limit" -ge 0 ] && [ "$n" -ge "$limit" ]; then
+      echo "upload failed: $f to $dst: fake: Connection was closed before we received a valid response" >&2
+      exit 1
+    fi
+    # The real CLI uploads in parallel and carries on past a failed file, so any
+    # subset can land, including meta.json without the chunks it describes.
+    if [ -n "$match" ] && printf '%s\n' "$f" | grep -Eq "$match"; then
+      case "$mode" in fail_match:*)
+        echo "upload failed: $f to $dst: fake: Connection reset" >&2
+        rc=1
+        ;;
+      esac
+      continue
+    fi
+    mkdir -p "$to/$(dirname "$f")"
+    # Same key and size is skipped, nothing is ever deleted: no --delete here.
+    if [ -f "$to/$f" ] && [ "$(size_of "$to/$f")" = "$(size_of "$src/$f")" ]; then
+      :
+    else
+      cp "$src/$f" "$to/$f"
+      printf '%s\n' "${dst#s3://}$f" >>"$FAKE_LOG/s3-put-order.log"
+      n=$((n + 1))
+    fi
+  done < <(cd "$src" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
+  exit "$rc"
+}
+
+copy_object() {
+  local src="$1" dst="$2" mode="${FAKE_AWS_CP:-ok}" to from
+  case "$src" in
+    s3://*)
+      from="$(s3path "$src")"
+      if [ ! -f "$from" ]; then
+        echo "fatal error: An error occurred (404) when calling the HeadObject operation: Key not found" >&2
+        exit 1
+      fi
+      cp "$from" "$dst"
+      exit 0
+      ;;
+  esac
+  case "$mode" in
+    fail)
+      echo "upload failed: fake: An error occurred (AccessDenied) when calling the PutObject operation" >&2
+      exit 1
+      ;;
+    fail_times:*)
+      if within_first cp "${mode#fail_times:}"; then
+        echo "upload failed: fake: Connection reset" >&2
+        exit 1
+      fi
+      ;;
+  esac
+  to="$(s3path "$dst")"
+  mkdir -p "$(dirname "$to")"
+  if [ "$mode" = truncate ]; then
+    head -c 10 "$src" >"$to"
+  else
+    cp "$src" "$to"
+  fi
+  printf '%s\n' "${dst#s3://}" >>"$FAKE_LOG/s3-put-order.log"
+  exit 0
+}
+
+check_list_mode() {
+  local mode="${FAKE_AWS_LS:-ok}"
+  case "$mode" in
+    ok) return 0 ;;
+    fail_times:*) within_first ls "${mode#fail_times:}" || return 0 ;;
+  esac
+  echo "fatal error: An error occurred (InternalError) when calling the ListObjectsV2 operation: fake" >&2
+  exit 1
+}
+
+list_objects() {
+  local root="$FAKE_S3/$bucket" key
+  check_list_mode
+  [ -d "$root" ] || exit 0
+  while read -r key; do
+    case "$key" in "$prefix"*) printf '%s\t%s\n' "$key" "$(size_of "$root/$key")" ;; esac
+  done < <(cd "$root" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) >"$FAKE_LOG/listing.tsv"
+  # Some CLI versions print nothing at all for an empty result.
+  [ -s "$FAKE_LOG/listing.tsv" ] || exit 0
+  jq -R -s '{Contents: (split("\n") | map(select(length > 0) | split("\t")
+    | {Key: .[0], Size: (.[1] | tonumber), StorageClass: "STANDARD"}))}' <"$FAKE_LOG/listing.tsv"
+  exit 0
+}
+
+list_s3() {
+  local p total=0 count=0 f s
+  check_list_mode
+  p="$(s3path "${pos[0]}")"
+  if [ "$recursive" = 1 ]; then
+    if [ -d "$p" ]; then
+      while read -r f; do
+        s="$(size_of "$f")"
+        total=$((total + s))
+        count=$((count + 1))
+        printf '2026-01-01 00:00:00 %10s %s\n' "$s" "${f#"$FAKE_S3"/*/}"
+      done < <(find "$p" -type f | LC_ALL=C sort)
+    fi
+    [ "$summarize" = 0 ] || printf '\nTotal Objects: %s\n   Total Size: %s\n' "$count" "$total"
+  elif [ -d "$p" ]; then
+    (cd "$p" && for d in */; do [ -d "$d" ] && printf '                           PRE %s\n' "$d"; done)
+  fi
+  exit 0
+}
+
+case "$service $sub" in
+  "s3 sync")
+    case "${pos[0]}" in
+      s3://*) sync_download "${pos[0]}" "${pos[1]}" ;;
+      *) sync_upload "${pos[0]}" "${pos[1]}" ;;
+    esac
+    ;;
+  "s3 cp") copy_object "${pos[0]}" "${pos[1]}" ;;
+  "s3 ls") list_s3 ;;
+  "s3api list-objects-v2") list_objects ;;
+  *) refuse "$service $sub" ;;
+esac

@@ -1,0 +1,22 @@
+#!/bin/bash
+# FAKE sudo for the legacy script and steps: never elevates, and refuses any path
+# outside the sandbox.
+set -u
+: "${SANDBOX:?SANDBOX unset}"
+printf 'sudo %s\n' "$*" >>"$FAKE_LOG/sudo-calls.log"
+cmd="${1:-}"
+case "$cmd" in rm | mkdir | chown | aws | docker) ;; *)
+  echo "fake sudo: refused: $*" >&2
+  exit 1
+  ;;
+esac
+for a in "$@"; do
+  case "$a" in
+    /*) case "$a" in "$SANDBOX"/*) ;; *)
+      echo "fake sudo: path outside sandbox: $a" >&2
+      exit 1
+      ;;
+    esac ;;
+  esac
+done
+exec "$@"

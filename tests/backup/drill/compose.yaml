@@ -1,0 +1,25 @@
+# Restore drill only: same image and storage flags as the production service, its
+# own project, named volume and loopback port. See run-drill.sh.
+name: skyeye-restore-drill
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    volumes:
+      - ${DRILL_CONFIG_DIR:?run this through run-drill.sh}:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=4GB
+      - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
+      - --web.enable-admin-api
+      - --web.external-url=http://prometheus:9090
+    ports:
+      - "127.0.0.1:19090:9090"
+
+volumes:
+  prometheus_data:
