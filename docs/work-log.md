@@ -15,6 +15,18 @@
 ---
 -->
 
+## 2026-11-06 07:35 — 同步已上線的 LinkCourt 付款告警
+
+**改動摘要：** 把 Wan 在 linkcourt D111、D114 核准、11-03 直接加到 monitoring-prod 的三條付款告警原樣同步進 Git，補上 promtool 測試。規則內容與直接送 High 的行為都不變。
+
+**修改的檔案：**
+- `prometheus/rules/business.yml` — 與線上檔案逐位元相同，SHA-256 為 `728519d977d3aa2a1c1f1bb7f39a417464922d6e269bfe14a5374c519eb66daf`
+- `prometheus/rules/tests/linkcourt-payment-alerts.test.yml` — 八組測試，涵蓋三條規則、缺失 metrics、counter 時窗與 result 過濾
+
+**原因/備註：** 線上與 Git 不一致時 `central-deploy` 會拒絕部署，主機重建時這三條告警也會消失。依 SkyEye D20 A 同步，部署由 operator 另外執行。
+
+---
+
 ## 2026-11-05 03:17 — Trading probe 與告警的假安全修正
 
 **改動摘要：** 修正 Codex review v2 的八項 Trading finding（P2-07～P2-12、P2-22、P2-24）：probe 不再把矛盾的 safe marker、`ps` 失敗、wrapper 與未來時間當成正常，dashboard 顯示財務與持倉資料年齡，shadow 告警不再抑制已升級的告警。所有 Trading 告警維持 shadow，這次只 merge，未部署。

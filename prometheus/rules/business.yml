@@ -99,3 +99,30 @@ groups:
         annotations:
           summary: "TLS cert for {{ $labels.target }} has EXPIRED ({{ $value | humanizeDuration }} ago)"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/external-api-down.md"
+
+      # LinkCourt paid-expire guard (#542, D111) and invoice cutoff (#547, D114),
+      # added 2026-11-03 by Wan's decision; High pages telegram-high directly.
+      - alert: LinkcourtPaymentGuardHeld
+        expr: ppc_payment_guard_held > 0
+        for: 15m
+        labels:
+          severity: High
+          product: ppclub
+        annotations:
+          summary: "LinkCourt: payment guard has held paid order(s) for 15min ({{ $value }} now)"
+
+      - alert: LinkcourtPaymentNotifyUnknownOrder
+        expr: increase(ppc_payment_guard_notify_unknown_order_total[1h]) > 0
+        labels:
+          severity: High
+          product: ppclub
+        annotations:
+          summary: "LinkCourt: payment notify for an unknown order in the last 1h"
+
+      - alert: LinkcourtInvoiceBeforeCutoff
+        expr: ppc_invoice_dispatch_total{result="before_invoicing_cutoff"} > 0
+        labels:
+          severity: High
+          product: ppclub
+        annotations:
+          summary: "LinkCourt: invoice dispatch blocked before the invoicing cutoff"
