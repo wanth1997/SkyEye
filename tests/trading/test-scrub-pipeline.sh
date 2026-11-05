@@ -45,6 +45,15 @@ GENERAL_RESIDUALS=(
   "A31:FAKE-CREDENTIAL-0031"
   "T19:FAKE-CREDENTIAL-0119"
 )
+# Accepted msg losses, by case. Nothing leaks here, but the branch that stops a leak
+# also takes a msg written after the value. slog writes msg first and quotes values
+# with spaces, so these lines need another writer. The rule and msg comparisons skip
+# exactly these cases, and fail if one of them stops differing.
+#   X16  a composite that never closes runs to the end of the line
+#   X23  a composite over four levels runs to the last ], here one after msg
+#   A35  key=value, msg=x after a scheme reads as a comma separated parameter list
+#   E15  an apostrophe after a key runs to the next apostrophe, here one after msg
+MSG_RESIDUALS=("X16" "X23" "A35" "E15")
 # Order, trace and execution rules are deliberately Trading-only, so these values
 # must pass through general untouched.
 TRADING_ONLY_PREFIXES=("FAKE-ORDER-" "FAKE-TRACE-" "FAKE-ACCOUNT-")
@@ -342,6 +351,9 @@ for residual in "${TRADING_RESIDUALS[@]}"; do
 done
 for residual in "${GENERAL_RESIDUALS[@]}"; do
   judge_args+=(--general-residual "$residual")
+done
+for residual in "${MSG_RESIDUALS[@]}"; do
+  judge_args+=(--msg-residual "$residual")
 done
 for prefix in "${TRADING_ONLY_PREFIXES[@]}"; do
   judge_args+=(--trading-only-prefix "$prefix")

@@ -304,7 +304,11 @@ def compare_residuals(leaks, residual):
     return failures
 
 
-def judge_trading(loki, server, entries, residual, rules, baseline):
+def case_ids(idents):
+    return {ident.split("-")[0] for ident in idents}
+
+
+def judge_trading(loki, server, entries, residual, msg_residual, rules, baseline):
     lines = lines_by_ident(loki, server, "run_id")
     failures, leaks = compare_common(entries, lines)
     failures += compare_residuals(leaks, residual)
@@ -316,16 +320,17 @@ def judge_trading(loki, server, entries, residual, rules, baseline):
     hits = rule_hits(loki, server, rules)
     for name, expected in baseline["hits"].items():
         got = hits[name]
-        wrong = sorted(ident for ident in set(got) | set(expected) if got.get(ident) != expected.get(ident))
-        if wrong:
-            cases = sorted({ident.split("-")[0] for ident in wrong})
-            failures.append(f"{name}: {len(wrong)} hits differ from the unscrubbed baseline, cases {' '.join(cases)}")
+        wrong = {ident for ident in set(got) | set(expected) if got.get(ident) != expected.get(ident)}
+        cases = sorted(case_ids(wrong) - msg_residual)
+        if cases:
+            failures.append(f"{name}: hits differ from the unscrubbed baseline, cases {' '.join(cases)}")
 
     msgs = parsed_msgs(loki, server)
-    wrong = sorted(ident for ident, expected in baseline["msgs"].items() if msgs.get(ident) != expected)
-    if wrong:
-        cases = sorted({ident.split("-")[0] for ident in wrong})
-        failures.append(f"msg differs from the baseline on {len(wrong)} entries, cases {' '.join(cases)}")
+    lost = case_ids(ident for ident, expected in baseline["msgs"].items() if msgs.get(ident) != expected)
+    if lost - msg_residual:
+        failures.append(f"msg differs from the baseline, cases {' '.join(sorted(lost - msg_residual))}")
+    if msg_residual - lost:
+        failures.append(f"known msg loss list is out of date: {' '.join(sorted(msg_residual - lost))}")
     return failures
 
 
@@ -383,9 +388,10 @@ def judge(args):
 
     trading_residual = parse_residuals(args.trading_residual)
     general_residual = parse_residuals(args.general_residual)
+    msg_residual = set(args.msg_residual)
     trading_only = tuple(args.trading_only_prefix)
     for server in args.trading:
-        failures = judge_trading(loki, server, manifest["trading"], trading_residual, rules, baseline)
+        failures = judge_trading(loki, server, manifest["trading"], trading_residual, msg_residual, rules, baseline)
         for failure in failures:
             print(f"FAIL {server}: {failure}")
         if not failures:
@@ -448,6 +454,7 @@ def main():
     verdict.add_argument("--general", action="append", required=True)
     verdict.add_argument("--trading-residual", action="append", required=True, help="CASE:MARKER")
     verdict.add_argument("--general-residual", action="append", required=True, help="CASE:MARKER")
+    verdict.add_argument("--msg-residual", action="append", required=True, help="CASE")
     verdict.add_argument("--trading-only-prefix", action="append", required=True)
     verdict.set_defaults(run=judge)
 
