@@ -24,13 +24,27 @@ ALLOY_OLD="grafana/alloy:v1.16.3@sha256:84b76d56c5943025515438fd45cbb5995386a026
 LOKI_IMAGE="grafana/loki:3.1.1@sha256:e689cc634841c937de4d7ea6157f17e29cf257d6a320f1c293ab18d46cfea986"
 LOKI_PUSH_URL="http://127.0.0.1:3100/loki/api/v1/push"
 
-# Accepted residuals, CASE:MARKER. A stateless per-line regex cannot reach these.
-# The test fails if a case leaks anything else, and also if one of these stops
-# leaking, so this list cannot go stale.
-#   A15  Digest parameters after the scheme
+# Accepted residuals, CASE:MARKER. A stateless per-line RE2 expression cannot reach
+# these without breaking another case. The test fails if a case leaks anything else,
+# and also if one of these stops leaking, so this list cannot go stale.
+#   A30  a scheme followed by one lowercase key=value: this is exactly what the next
+#   A31  logfmt field looks like, and eating that field is how msg gets lost
+#   T19  an opening quote plus a space with no closing quote reads the same as the
+#        closing quote of an enclosing value, as in E07
+#   X17  a ] or } inside the data closes the composite early
 #   M02  a value split across physical lines; only the first line carries the key
-TRADING_RESIDUALS=("A15:FAKE-CREDENTIAL-0015" "M02:FAKE-CREDENTIAL-0604B")
-GENERAL_RESIDUALS=("A15:FAKE-CREDENTIAL-0015")
+TRADING_RESIDUALS=(
+  "A30:FAKE-CREDENTIAL-0030"
+  "A31:FAKE-CREDENTIAL-0031"
+  "T19:FAKE-CREDENTIAL-0119"
+  "X17:FAKE-ACCOUNT-0317B"
+  "M02:FAKE-CREDENTIAL-0604B"
+)
+GENERAL_RESIDUALS=(
+  "A30:FAKE-CREDENTIAL-0030"
+  "A31:FAKE-CREDENTIAL-0031"
+  "T19:FAKE-CREDENTIAL-0119"
+)
 # Order, trace and execution rules are deliberately Trading-only, so these values
 # must pass through general untouched.
 TRADING_ONLY_PREFIXES=("FAKE-ORDER-" "FAKE-TRACE-" "FAKE-ACCOUNT-")

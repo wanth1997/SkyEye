@@ -115,14 +115,13 @@ def check_static(args):
     if len(linux) < 2 or linux[1:] != macos[1:]:
         failures.append("Linux and macOS stage.replace blocks differ")
 
-    # stage.replace only rewrites capture groups: none is a silent no-op, and a
-    # second one overwrites the key as well as the value.
+    # stage.replace only rewrites capture groups, so an expression with none is a
+    # silent no-op. A group that wraps a key is caught by the keep column at runtime.
     for name, blocks in (("Linux", linux[1:]), ("macOS", macos[1:]), ("general", general)):
         for block in blocks:
             expression = block_expression(block)
-            groups = re.compile(expression).groups
-            if groups != 1:
-                failures.append(f"{name} expression has {groups} capture groups, needs exactly 1: {expression}")
+            if re.compile(expression).groups == 0:
+                failures.append(f"{name} expression has no capture group: {expression}")
 
     placeholders = {block_replacement(block) for block in general}
     for trading_only in ("[ORDER_REF]", "[TRACE_REF]", "[EXECUTION_REF]"):
@@ -140,7 +139,7 @@ def check_static(args):
             failures.append(f"duplicate case id {case['id']}")
         seen.add(case["id"])
         for marker in case["markers"]:
-            if not re.fullmatch(r"FAKE-\S+|0900-?000-?00\d", marker):
+            if not re.fullmatch(r"FAKE-\S+|fakecredential\d+|0900-?000-?00\d", marker):
                 failures.append(f"{case['id']}: marker is not synthetic: {marker}")
             if marker not in case["payload"]:
                 failures.append(f"{case['id']}: marker missing from payload: {marker}")
