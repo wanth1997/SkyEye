@@ -49,17 +49,30 @@ groups:
       # ────────────────────────────────────────────────────────────
 
       - alert: PrometheusRuleEvalSlow
-        # Healthy rule eval is < 1s p95. If it creeps to 10s+, Prom is
-        # under load (cardinality, query cost). TSDB performance degrades.
+        # prometheus_rule_evaluation_duration_seconds is a summary in v2.54
+        # (no _bucket), so compare each group's last run with its interval.
         expr: |
-          histogram_quantile(0.95,
-            sum by (le) (rate(prometheus_rule_evaluation_duration_seconds_bucket[10m]))
-          ) > 10
+          max by (rule_group) (
+            prometheus_rule_group_last_duration_seconds
+            / prometheus_rule_group_interval_seconds
+          ) > 0.8
         for: 15m
         labels:
           severity: Medium
+          notification_mode: shadow
         annotations:
-          summary: "Prometheus rule evaluation p95 > 10s for 15min — cardinality or query cost spike"
+          summary: "Rule group {{ $labels.rule_group }} uses > 80% of its interval for 15min — cardinality or query cost spike"
+
+      - alert: PrometheusRuleIterationsMissed
+        # A group that outruns its interval skips runs, so every alert in it
+        # is checked less often than its rule says. One skip is enough.
+        expr: sum by (rule_group) (increase(prometheus_rule_group_iterations_missed_total[15m])) > 0
+        for: 0m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "Rule group {{ $labels.rule_group }} skipped evaluations in the last 15min"
 
       - alert: PrometheusRuleEvalFailures
         expr: |

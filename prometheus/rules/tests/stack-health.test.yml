@@ -1,0 +1,85 @@
+rule_files:
+  - ../stack-health.yml
+
+evaluation_interval: 30s
+
+tests:
+  # 25s of a 30s interval is over 80%. The same 25s of a 60s interval is not: the
+  # rule compares a group with its own schedule, not with a fixed number of seconds.
+  - name: a group near its own interval fires after 15 minutes and others stay quiet
+    interval: 30s
+    input_series:
+      - series: 'prometheus_rule_group_last_duration_seconds{rule_group="slow"}'
+        values: '25x60'
+      - series: 'prometheus_rule_group_interval_seconds{rule_group="slow"}'
+        values: '30x60'
+      - series: 'prometheus_rule_group_last_duration_seconds{rule_group="roomy"}'
+        values: '25x60'
+      - series: 'prometheus_rule_group_interval_seconds{rule_group="roomy"}'
+        values: '60x60'
+      - series: 'prometheus_rule_group_last_duration_seconds{rule_group="fast"}'
+        values: '0.1x60'
+      - series: 'prometheus_rule_group_interval_seconds{rule_group="fast"}'
+        values: '30x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PrometheusRuleEvalSlow
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: PrometheusRuleEvalSlow
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              rule_group: slow
+            exp_annotations:
+              summary: "Rule group slow uses > 80% of its interval for 15min — cardinality or query cost spike"
+
+  - name: a slow spike shorter than 15 minutes does not fire
+    interval: 30s
+    input_series:
+      - series: 'prometheus_rule_group_last_duration_seconds{rule_group="spiky"}'
+        values: '1x10 25x20 1x30'
+      - series: 'prometheus_rule_group_interval_seconds{rule_group="spiky"}'
+        values: '30x60'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: PrometheusRuleEvalSlow
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: PrometheusRuleEvalSlow
+        exp_alerts: []
+
+  - name: one skipped run fires at once and clears when it leaves the window
+    interval: 1m
+    input_series:
+      - series: 'prometheus_rule_group_iterations_missed_total{rule_group="busy",instance="a"}'
+        values: '0x10 1x30'
+      - series: 'prometheus_rule_group_iterations_missed_total{rule_group="calm",instance="a"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: PrometheusRuleIterationsMissed
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: PrometheusRuleIterationsMissed
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              rule_group: busy
+            exp_annotations:
+              summary: "Rule group busy skipped evaluations in the last 15min"
+      - eval_time: 30m
+        alertname: PrometheusRuleIterationsMissed
+        exp_alerts: []
+
+  - name: a Prometheus restart resetting the counter is not a skipped run
+    interval: 1m
+    input_series:
+      - series: 'prometheus_rule_group_iterations_missed_total{rule_group="busy"}'
+        values: '5x10 0x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: PrometheusRuleIterationsMissed
+        exp_alerts: []
