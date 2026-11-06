@@ -322,7 +322,7 @@ On a rebuilt host the same steps apply: `docker compose up -d` has created an em
 7. Restore Prometheus data from latest S3 snapshot (see above). With the tool, use `switch <id> --yes --fresh`.
 8. Verify via Grafana Overview.
 
-Estimated recovery: 45-60 minutes from cold start for everything except step 7, which adds about 1-4 hours for the full read. Neither number has been measured.
+Estimated recovery: the 45-60 minutes from cold start written here earlier predates the full read in step 7, which takes about 1-4 hours by itself. Neither number has been measured.
 
 ### Upgrade cloudflared
 
