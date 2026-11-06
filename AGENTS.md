@@ -12,28 +12,48 @@ Codex 直接讀取本檔）。只放這個專案獨有的內容。
 
 ## 專案是什麼
 
-SkyEye 是 wanbrain 各產品共用的自架監控平台。它集中接收遠端主機的 metrics 與已去識別化 logs，透過 Grafana 顯示，並由 Alertmanager 將告警送往 Telegram 與 email。
+SkyEye 是 wanbrain 各產品共用的自架監控平台。它集中接收遠端主機的 metrics 與已去識別化 logs，透過 Grafana 顯示，並由 Alertmanager 將告警送往 Telegram。Email 路由已 merge 但仍休眠，目前不會寄信。
 
 ## 架構速覽
 
-- 中央端以 Docker Compose 執行 Prometheus、Loki、Grafana、Alertmanager、Blackbox Exporter 與 Cloudflare Tunnel。
+- 中央端以 Docker Compose 執行 Prometheus、Loki、Grafana、Alertmanager、Blackbox Exporter、Node Exporter（`monitoring-host` job）與 Cloudflare Tunnel。
 - 被監控主機執行 Grafana Alloy，透過 Cloudflare Access Service Token 將 metrics remote-write 到 Prometheus、將 logs push 到 Loki。
 - Prometheus rules 位於 `prometheus/rules/`；Loki ruler 目前使用單一 tenant directory `/loki/rules/fake/`。
 - Grafana dashboard 由 `grafana/dashboards/` 的 JSON provisioning，datasource UID 固定為 `prometheus`、`loki`、`alertmanager`。
-- High alerts 會送 Telegram 與 email；新告警必須先用 shadow routing 驗證，不能未經 canary 直接 paging。
+- High alerts 目前實際只送 Telegram。已決定補 email，`email-high` 休眠路由已 merge，但它只收 `notification_mode="page"`，目前沒有這種告警，`alertmanager.yml` 的 SMTP 也還是 `example.invalid` placeholder，所以不會寄信。啟用流程見 `runbooks/trading-alert-promotion.md`。
+- 新告警必須先用 shadow routing 驗證，不能未經 canary 直接 paging。
 
 ## 驗證命令
 
+`scripts/verify-all` 是 merge gate，merge 前必須通過。Repo 沒有 CI，這是唯一的整合檢查。它跑下列全部檢查、`alloy validate`、`plutil -lint`、`lokitool rules lint` 與 `tests/` 內所有 suite，不需要 secrets，不連 production，也不發通知。
+
+```bash
+scripts/verify-all          # 全部通過才 rc=0；suite 印出 SKIP 也算失敗
+scripts/verify-all --list   # 只列出會跑的 suite 與 rule test
+```
+
+缺任何工具都會在第一步之前停下，完整清單見 `scripts/verify-all` 的 `REQUIRED_TOOLS`。比較容易缺的是：
+
+- `rg`：必須是 PATH 上的執行檔，shell function 不算。
+- `lokitool`：版本必須等於 `docker-compose.yml` 釘的 `grafana/loki`，目前是 3.1.1。
+- `alloy`（要有 `validate` 子命令）、可連線的 Docker daemon 與 compose plugin。
+- `plutil`、`ioreg`：只有 macOS 有，所以這個 gate 目前只能在 macOS 跑。
+
+開發中只想跑單項時：
+
 ```bash
 docker compose config --quiet
-docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" prom/prometheus:v2.54.1 \
-  promtool check config /etc/prometheus/prometheus.yml
-docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" prom/alertmanager:v0.27.0 \
-  amtool check-config /etc/alertmanager/alertmanager.yml
+docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint /bin/promtool \
+  prom/prometheus:v2.54.1 check config /etc/prometheus/prometheus.yml
+docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint sh \
+  prom/prometheus:v2.54.1 -c 'promtool test rules /etc/prometheus/rules/tests/*.yml'
+docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" --tmpfs /etc/alertmanager/secrets \
+  --entrypoint /bin/amtool prom/alertmanager:v0.27.0 \
+  check-config /etc/alertmanager/alertmanager.yml
 find grafana/dashboards -name '*.json' -exec jq empty {} +
 ```
 
-涉及 Alloy、launchd 或 ruler 規則時，另執行文件指定的 `alloy validate`、`plutil -lint`、`promtool test rules` 與 `lokitool rules lint`。
+單獨跑 `lokitool rules lint` 時要加 `--dry-run`，否則它會直接改寫規則檔。
 
 ## 專案特有規則與禁忌
 

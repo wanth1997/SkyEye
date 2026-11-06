@@ -193,10 +193,11 @@ bash -n agents/alloy/trading/pnl-history.sh agents/alloy/trading/setup-macos.sh
 plutil -lint agents/alloy/trading/com.wanbrain.skyeye-trading-pnl-history.plist.tmpl
 alloy validate agents/alloy/trading/config-macos.alloy.tmpl
 docker compose config --quiet
-docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" prom/prometheus:v2.54.1 \
-  promtool check config /etc/prometheus/prometheus.yml
-docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" prom/alertmanager:v0.27.0 \
-  amtool check-config /etc/alertmanager/alertmanager.yml
+docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint /bin/promtool \
+  prom/prometheus:v2.54.1 check config /etc/prometheus/prometheus.yml
+docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" --tmpfs /etc/alertmanager/secrets \
+  --entrypoint /bin/amtool prom/alertmanager:v0.27.0 \
+  check-config /etc/alertmanager/alertmanager.yml
 find grafana/dashboards -name '*.json' -exec jq empty {} +
 ```
 
