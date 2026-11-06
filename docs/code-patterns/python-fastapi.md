@@ -77,6 +77,10 @@ LABEL CARDINALITY RULES:
 
 Violating this will OOM Prometheus — one series per unique label combo.
 """
+import time
+from contextlib import contextmanager
+
+import requests
 from prometheus_client import Counter, Histogram, Gauge
 
 # ---- Payment ----
@@ -141,7 +145,7 @@ scheduled_job_last_run = Gauge(
 unhandled_exception = Counter(
     "ppc_unhandled_exception_total",
     "Unhandled exceptions caught by global exception handler",
-    ["path", "exc_type"],
+    ["path", "exc_type"],   # path: matched route template or "unmatched", never the raw URL
 )
 
 
@@ -152,29 +156,50 @@ def amount_bucket(amount_twd: int) -> str:
     if amount_twd < 1000:  return "500-1000"
     if amount_twd < 5000:  return "1000-5000"
     return "5000+"
+
+
+# ---- Helper: external call timing ----
+@contextmanager
+def timed_external(api: str, endpoint: str):
+    """Record one external call's duration under its final result label."""
+    start = time.monotonic()
+    result = "ok"
+    try:
+        yield
+    except (TimeoutError, requests.Timeout):
+        result = "timeout"
+        raise
+    except Exception:
+        result = "error"
+        raise
+    finally:
+        external_api_duration.labels(
+            api=api, endpoint=endpoint, result=result
+        ).observe(time.monotonic() - start)
 ```
 
 ### Using counters at hook points
 
 ```python
 # In app/newebpay.py
-from app.metrics import payment_created, external_api_duration
+from app.metrics import payment_created, timed_external
 
 def create_payment(method: str, ...):
-    with external_api_duration.labels(
-        api="newebpay", endpoint="CreatePayment", result="pending"
-    ).time():
-        try:
+    try:
+        with timed_external("newebpay", "CreatePayment"):
             response = requests.post(newebpay_url, ...)
-            payment_created.labels(method=method, status="ok").inc()
-            return response
-        except requests.Timeout:
-            payment_created.labels(method=method, status="timeout").inc()
-            raise
-        except Exception:
-            payment_created.labels(method=method, status="api_error").inc()
-            raise
+            response.raise_for_status()
+    except requests.Timeout:
+        payment_created.labels(method=method, status="timeout").inc()
+        raise
+    except Exception:
+        payment_created.labels(method=method, status="api_error").inc()
+        raise
+    payment_created.labels(method=method, status="ok").inc()
+    return response
 ```
+
+Always use `timed_external`. A timer started with `.labels(result="pending").time()` keeps that label when the call fails, and the external API error panel only counts `error` and `timeout`. Only an exception counts as a failure, so call `raise_for_status()` inside the block.
 
 ### Scheduler deadman pattern
 
@@ -198,14 +223,21 @@ def my_hourly_job():
 # In app/main.py
 from app.metrics import unhandled_exception
 
+def route_label(request) -> str:
+    """Matched route template, so IDs in the URL never become label values."""
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or "unmatched"
+
 @app.exception_handler(Exception)
 async def global_exc_handler(request, exc):
     unhandled_exception.labels(
-        path=request.url.path[:100],       # truncate to cap cardinality
+        path=route_label(request),
         exc_type=type(exc).__name__,
     ).inc()
     # ... existing 500 response construction ...
 ```
+
+Do not use `request.url.path` here, even truncated. Truncating does not bound the number of distinct paths, and raw paths can carry IDs into central storage. An exception raised before routing, such as in middleware, gets the fixed value `unmatched`.
 
 ## Label cardinality — do NOT ignore
 
