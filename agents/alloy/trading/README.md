@@ -147,6 +147,12 @@ full shadow → canary process.
    history and Loki data stay. It prints the `add --env-file` command that
    re-installs the archived env; re-running reports "Already retired".
 
+**Move** a strategy to another server: finish every Remove step on the old
+server, then run the Add steps on the new one. Strategy slugs must be unique
+across servers, because fleet views key rows by strategy alone, so
+`scripts/trading-target add` refuses the new server while the old row exists.
+The strategy has no monitoring between the retire and the new probe.
+
 Shared collector, units and `probe.sh` are rewritten only while every
 templated probe is stopped and disabled; both commands refuse otherwise.
 

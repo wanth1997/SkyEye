@@ -246,6 +246,8 @@ Create `docs/contracts/fixtures/done-marker.v1.json`:
 }
 ```
 
+這個範例只示範 `max_cycles_complete`。`phase` 不要求等於 `reason`，見 4.6。
+
 ### 4.6 Reason and overwrite semantics
 
 | reason | Classification | Marker precedence |
@@ -255,6 +257,27 @@ Create `docs/contracts/fixtures/done-marker.v1.json`:
 | `risk_halt` | critical | First critical marker wins |
 | `max_cycles_drain_failed` | critical | First critical marker wins |
 | any unrecognized value | critical/unknown to SkyEye | First critical marker wins |
+
+`phase` 是 Engine 當下的 stage，不是 `reason` 的別名：
+
+| reason | phase |
+|---|---|
+| `max_cycles_complete` | 一定是 `max_cycles_complete` |
+| `reduce_only_complete` | 目前是 `startup`、`signal_loop` 或 `cycle`，不會等於 `reason`。Contract 沒有固定這組值，producer 可以新增 |
+
+這些行為讀自 tnauqquant `d273d69` 的原始碼，沒有讀過實際 marker。
+
+Safe reason 是宣告，不是證明。SkyEye probe 會檢查 safe marker，任一項不成立就改以 `reason=unknown` 發布，走 `TradingCriticalSafetyState`：
+
+- `error` 為空，`phase` 非空。
+- `max_cycles_complete` 的 `phase` 等於 `max_cycles_complete`。`reduce_only_complete` 不檢查 `phase` 的值。
+- `dust_tolerance_btc >= 0`，0 是合法值。
+- `long_btc`、`short_btc`、`net_btc` 的絕對值都不超過 `dust_tolerance_btc`。前兩者是非負量值，`net_btc` 有正負號。
+- `completed_at` 可解析、不在未來，且不早於 manifest 的 `process_started_at`。
+
+矛盾的 safe marker 有一條真實路徑：`max_cycles_complete` 經 precision-dust residual 分支時，寫出的數值可能超過 tolerance。程式路徑已確認，實際是否發生過未知。通過檢查也不代表交易所已平倉：`cycle_limit_flat` 依 Engine 記憶體狀態寫入全 0，沒有查交易所。
+
+尚未確認：各 host 實際執行的 tnauqquant commit、各 lane 是否開 `reduce_only_mode`、`logging.format` 的實際值、`process_started_at` 與 OS 啟動時間的實際差距，以及真實環境是否發生過 PID 重用或 wrapper。
 
 `WriteDoneMarker` behavior:
 
