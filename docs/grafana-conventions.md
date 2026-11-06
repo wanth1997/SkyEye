@@ -109,3 +109,5 @@ TODO (low priority): add a pre-commit hook that runs `jq` against every dashboar
 | Trading | Trading · 策略總覽 | trading-strategy-fleet | One row per strategy with PnL first, exact process state, telemetry freshness, active shadow alerts, and detail navigation. |
 
 Add a row here each time a new dashboard is committed.
+
+**Hosts on `monitoring-prod`:** its `node-exporter` runs in a container, not on the host network, because `network_mode: host` would bind port 9100 on the host. `node_network_*` therefore shows only the container's `eth0` and `lo`. The 33 network panels, such as `網路流量`, `Sockstat` and `Netstat`, describe the container, so the host looks almost idle there. No alert rule uses these metrics. The count comes from a local Compose stack and has not been checked on EC2.

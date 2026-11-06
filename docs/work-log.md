@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-06 08:22 — 文件與現況同步
+
+**改動摘要：** 修正文件與現況不一致的地方：告警實際路由、驗證命令、project brief 待辦、`node-exporter` 部署順序、還原流程與成本數字。只改文件，不影響線上。
+
+**修改的檔案：**
+- `AGENTS.md` — High 告警目前只送 Telegram、`scripts/verify-all` 是 merge gate、驗證命令補 `--entrypoint`
+- `docs/project-brief.md` — 更新目前狀態與過期待辦
+- `docs/operations.md`、`runbooks/disk-full.md`、`runbooks/README.md`、`docs/grafana-conventions.md` — 還原工具與 RTO 估計、`node-exporter` 部署與回滾順序、儲存量與成本數字、備份告警
+- `docs/code-patterns/python-fastapi.md`、`docs/phase-2d-ppclub-business-counters.md` — 修正例外路徑 label 與外部 API 計時範例
+- `docs/trading-serverid-cutover-macmini-m2.md` — 補執行紀錄與舊名資料清除
+- `agents/alloy/trading/README.md`、`docs/trading-runtime-contract-agent-spec.md`、`docs/trading-monitoring-development-plan.md`、`docs/trading-accumulated-pnl-development-plan.md`、`runbooks/trading-critical-safety-state.md` — strategy 搬移要先 remove 再 add、safe marker phase、持倉順序
+
+**原因/備註：** macmini-m2 cutover 時窗為 2026-11-01T13:31:29Z～15:31:29Z，Shadow 與 canary 證據要排除這段。文件裡的部署、回滾與還原指令都沒有在 monitoring-prod 或真實 S3 跑過，RTO 與成本數字是估計。PR #61 部署後，`docs/operations.md`、`runbooks/disk-full.md`、`docs/project-brief.md` 的「尚未部署」要更新，`runbooks/backup-failed.md` 也要改成新腳本行為。
+
+---
+
 ## 2026-11-06 07:42 — 監控覆蓋、備份、log scrub、通知路由與部署驗證（10 項）
 
 **改動摘要：** 合併 Codex review v2 與第三份 review 後續的 10 項工作：Stack health 訊號修正、Prometheus 世代備份與分階段還原、monitoring-prod 主機指標、Alloy log scrub 強化、paged 告警的休眠 email 路由、probe 時間處理、`setup.sh` 原子安裝、`central-deploy` 實際載入驗證與 `scripts/verify-all` 本機 merge gate。Trading 告警維持全 shadow，這次只 merge，未部署。

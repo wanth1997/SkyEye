@@ -29,6 +29,8 @@ Probe 的 portable inputs 新增：
 
 Volume 優先取最新 stable `pnl_status.volume_usd_by_executor`，避免只加總部分 `trade_status` 而低估 Lighter close actions。Position 優先使用 coordinator-book 的 `net_side` / `net_qty_btc` 產生 signed net，同時保留雙交易所 initiator/carrier position contract。
 
+Probe 只在 net 所在的行不早於最新 venue 行時才採用 net，同一行矛盾時改採 venue 加總，避免舊 net 蓋過新 venue。讀 tnauqquant `d273d69` 原始碼確認 net 與 venue 一定同行，所以這個順序目前不會發生，檢查是防禦性的；實際 log 沒有讀過。net 行較新時（等待平倉，或只有一腿），各 venue 的持倉序列會停在舊值，要看 `tnauqquant_position_sample_timestamp_seconds{source="venue"}` 的年齡。這些欄位是 Engine 記憶體帳本的投影，不是交易所讀回。持倉事件的時間鍵是 `time=`，只有 `logging.format=text` 時讀得到。
+
 中央 target source 改為 `trading_target_info`。Raw `tnauqquant_*` metric 不改名，透過 `trading_strategy_*` recording rules 提供 dashboard/alerts 的 engine-neutral 介面。新 detail dashboard 以 `server_id` / `strategy` 變數選取 target；fleet dashboard 每策略一列顯示 current-run P&L、cycles、volume、position、process/binding/risk 與 telemetry freshness。不同 run 沒有共同 accounting period，因此禁止 fleet current-run P&L total。
 
 所有 generalized Prometheus/Loki alerts 保持 `notification_mode=shadow`。Trading01 若 manifest 仍為 running、但 process 已正常退出且沒有 bound done marker，監控必須顯示 process down / stale telemetry；不得由 SkyEye 偽造 done marker 或重啟交易程序。

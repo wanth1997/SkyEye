@@ -3,6 +3,8 @@
 > **決策：** 2026-10-31 使用者決策 D14 — 真正更名 label，不使用 Grafana display mapping。Trading01 維持 `trading01`。
 >
 > **本文件是 operator 程序，repo 變更 merge 後不會自動生效。** 舊 ID 只保留在本文件中，供 cutover、rollback 與查詢歷史使用。
+>
+> **狀態：** 已於 2026-11-01 完成，見[執行紀錄](#執行紀錄)。
 
 ## 執行前必讀
 
@@ -206,12 +208,30 @@ Grafana dashboards：
 - 新設定穩定 ≥ 24 小時後，刪除 Mac mini 上的 `config.env.bak-20261031`。
 - 通知 operator 更新含 `var-server_id=tnauqquant-prod-1` 的 Grafana bookmark 或分享連結。
 
+## 執行紀錄
+
+**Shadow/canary 證據要排除 2026-11-01T13:31:29Z – 2026-11-01T15:31:29Z。** 結束時間取 Step 1 silence 到期的時間。
+
+| 項目 | 時間（UTC，2026-11-01） | 結果 |
+|---|---|---|
+| Step 1 silence | 13:31:29 – 15:31:29 | 2 小時，自然到期，沒有延長 |
+| Step 2 host 改名 | 14:54:53 | textfile 只剩 `server_id="macmini-m2"` |
+| Step 3 新 series 抵達中央 | 14:55:03 | 通過 |
+| Step 4 central-deploy | 14:55:25 | applied `256ea5c8656e`（PR #58），`HEAD-IS-MERGE`、`TARGETS-OK`、`LEGACY-OK` 都通過，沒有多出的 commit |
+| Step 5 驗證 | 15:00:34 | 通過。metric 名稱由 17 個變 29 個，多的 12 個 P&L metric 來自 14:07:45 的 run 重啟，沒有缺少。Grafana 畫面未檢查 |
+
+- Step 2 到 Step 4 間隔約 32 秒，低於 5 分鐘的目標。
+- Loki 從 13:30:05Z 起補入 `macmini-m2` stream，當時 24 小時計數 229。
+- Cutover 開始時沒有舊名 silence，不需要改寫。
+- 觀察期間 `TradingRunBindingInvalid`（`macmini-m2` / `toobit-mexc-btc`，shadow）於 15:31:44Z 開始 firing。Manager 判定這是 Trading 端狀態，與更名無關：程序約 15:02Z 停止，之後 `config_snapshot_match=0`，而這條 rule 不看 inventory。
+
 ## 歷史資料
 
-- 更名前的 Prometheus raw／recorded series 與 Loki streams 留在 `server_id="tnauqquant-prod-1"`，直到 30 天 retention 到期，不做改寫或複製。
-- Dashboard 不加雙名過渡查詢。Prometheus panel 全是 instant query；週期走勢與 P&L history 由 host 每輪重新輸出，所以不會中斷。受影響的只有 Explore 中跨 cutover 的時間序列，以及 cutover 當日未被重讀補回的 log。
-- 查詢更名前資料，在 Explore 使用舊 label，例如：
-  - `trading_strategy_current_real_pnl_usdt{server_id="tnauqquant-prod-1",strategy="toobit-mexc-btc"}`
+- 更名前的 Prometheus 資料已在 2026-11-02 03:26Z 刪除。範圍是 `{server_id="tnauqquant-prod-1"}` 的全部 series，所以舊 label 查不到東西，跨 cutover 的 Prometheus 查詢只會回傳 `macmini-m2`。這推翻了原本「留到 30 天 retention 到期」的做法。
+- 日期早於 2026-11-02 的 S3 備份還含舊名資料，還原這些備份會把它帶回來。
+- Loki 沒有刪除。262 個舊名 streams 留到 720h retention 到期，要用舊 label 查：
+  - `{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1"}`
+- Dashboard 不加雙名過渡查詢。Prometheus panel 全是 instant query；週期走勢與 P&L history 由 host 每輪重新輸出，所以不會中斷。
   - `{product="tnauqquant",environment="production",server_id="tnauqquant-prod-1"}`
   - 跨 cutover 查看：`trading_strategy_current_real_pnl_usdt{server_id=~"tnauqquant-prod-1|macmini-m2",strategy="toobit-mexc-btc"}`
 

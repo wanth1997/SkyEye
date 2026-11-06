@@ -12,7 +12,8 @@
 
 - Medium fires quietly (< 20%); High is audible (< 5%).
 - At < 5%, SQLite writes can start failing; Loki on the monitoring machine can fall over.
-- monitoring-prod reports no host metrics (no `node_filesystem` series as of 2026-11-04), so these alerts do not fire for the monitoring machine itself. Check `df -h /` there by hand.
+- monitoring-prod reports host metrics only once the `node-exporter` service is deployed there (it was not as of 2026-11-06; see [the deploy order](../docs/operations.md#deploy-a-commit-that-adds-a-container)). Until then these alerts do not fire for the monitoring machine itself, so check `df -h /` there by hand.
+- If `up{job="monitoring-host"}` is 0, the disk alerts stop evaluating and nothing else tells you. Check by hand then too.
 
 ## Likely causes
 
@@ -60,6 +61,25 @@ ls -lh /home/ubuntu/PPClub/backend/ppc.db
 sqlite3 /home/ubuntu/PPClub/backend/ppc.db 'PRAGMA wal_checkpoint(TRUNCATE); VACUUM;'
 # First arrange for zero writes — stop the service if needed.
 ```
+
+### On monitoring-prod
+
+The root disk is 30 GB. It was 32% used on 2026-11-04, with the Prometheus volume at 1.9 GB. Loki chunks live in S3.
+
+```bash
+cd /home/ubuntu/SkyEye
+sudo docker compose ps
+# Volumes, then the largest container stdout logs
+sudo sh -c 'du -sh /var/lib/docker/volumes/skyeye_*/_data'
+sudo sh -c 'du -sh /var/lib/docker/containers/*/*-json.log | sort -h | tail -5'
+# Leftover restore staging, if any
+sudo du -sh /var/lib/skyeye-restore 2>/dev/null
+```
+
+- **Loki stdout log:** it once reached 14 GB on this disk. `x-logging` caps it now, so a large file means the container predates the cap: `sudo docker compose up -d loki`.
+- **Prometheus volume:** use the `snapshots/` check above. Also look for `_data.pre-restore-*` next to `_data`: that is the only way back from a restore, so ask Wan before removing it.
+- **Restore staging:** delete `/var/lib/skyeye-restore/<id>` only when no restore is in progress.
+- **Volumes:** never remove a `skyeye_*` volume to gain space.
 
 If space is desperately low (<1 GB remaining):
 
