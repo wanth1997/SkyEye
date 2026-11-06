@@ -45,6 +45,10 @@ LABEL CARDINALITY RULES (non-negotiable):
 Violating this OOMs Prometheus — one time series per unique label combo.
 See docs/code-patterns/python-fastapi.md in the SkyEye repo for rationale.
 """
+import time
+from contextlib import contextmanager
+
+import requests
 from prometheus_client import Counter, Histogram, Gauge
 
 # ─────────────────────────── Payment ───────────────────────────
@@ -130,6 +134,7 @@ unhandled_exception = Counter(
     "ppc_unhandled_exception_total",
     "Unhandled exceptions caught by global exception handler",
     ["path", "exc_type"],
+    # path: matched route template or "unmatched", never the raw URL
 )
 
 # ─────────────────────── Helpers ───────────────────────────────
@@ -144,6 +149,25 @@ def amount_bucket(amount_twd) -> str:
     if n < 1000:   return "500-1000"
     if n < 5000:   return "1000-5000"
     return "5000+"
+
+
+@contextmanager
+def timed_external(api: str, endpoint: str):
+    """Record one external call's duration under its final result label."""
+    start = time.monotonic()
+    result = "ok"
+    try:
+        yield
+    except (TimeoutError, requests.Timeout):
+        result = "timeout"
+        raise
+    except Exception:
+        result = "error"
+        raise
+    finally:
+        external_api_duration.labels(
+            api=api, endpoint=endpoint, result=result
+        ).observe(time.monotonic() - start)
 ```
 
 ## Step 2 — Instrument hook points
@@ -159,26 +183,24 @@ Find the function that sends the create-payment request to NewebPay
 HTTP response comes back and is classified as success/failure, insert:
 
 ```python
-from app.metrics import payment_created, external_api_duration
+from app.metrics import payment_created, timed_external
 
 def create_payment(..., method: str, ...):
     # Existing code ...
 
-    # === NEW: wrap the outbound HTTP call in a timer
-    with external_api_duration.labels(
-        api="newebpay", endpoint="CreatePayment", result="pending"
-    ).time():
-        try:
+    # === NEW: time the outbound HTTP call; timed_external records the final result
+    try:
+        with timed_external("newebpay", "CreatePayment"):
             response = newebpay_api_post(...)    # ← whatever existing call is
-            status = "ok"
-        except requests.Timeout:
-            status = "timeout"
-            raise
-        except Exception:
-            status = "api_error"
-            raise
-        finally:
-            payment_created.labels(method=method, status=status).inc()
+        status = "ok"
+    except requests.Timeout:
+        status = "timeout"
+        raise
+    except Exception:
+        status = "api_error"
+        raise
+    finally:
+        payment_created.labels(method=method, status=status).inc()
     # === END NEW
 
     # Existing code continues to process response ...
@@ -218,13 +240,11 @@ distort the rate.
 Find the main refund function. Wrap its outcome:
 
 ```python
-from app.metrics import refund, external_api_duration
+from app.metrics import refund, timed_external
 
 def do_refund(..., reason: str):
     try:
-        with external_api_duration.labels(
-            api="newebpay", endpoint="Refund", result="pending"
-        ).time():
+        with timed_external("newebpay", "Refund"):
             existing_refund_logic(...)
 
         refund.labels(reason=reason, result="ok").inc()
@@ -317,56 +337,20 @@ async def verify_phone(code: str, ...):
 Same pattern as NewebPay external API timing:
 
 ```python
-from app.metrics import external_api_duration
-
-def get_device_details(device_id: int):
-    with external_api_duration.labels(
-        api="hengfu", endpoint="DeviceDetails", result="pending"
-    ).time():
-        try:
-            response = requests.get(...)
-            # mark label after success — see note below
-            return response.json()
-        except Exception:
-            raise
-```
-
-**Note on result label**: `external_api_duration` has a `result` label on
-the timer. If you want it to reflect the ACTUAL outcome per call (`ok` /
-`error` / `timeout`), you must re-create the timer with the final label.
-Simpler pattern: wrap in a helper.
-
-```python
-# Put this at the bottom of app/metrics.py (optional refinement)
-from contextlib import contextmanager
-import time
-
-@contextmanager
-def timed_external(api: str, endpoint: str):
-    """Context manager that records duration + result label in one go."""
-    start = time.monotonic()
-    result = "ok"
-    try:
-        yield
-    except Exception as e:
-        result = "timeout" if isinstance(e, (TimeoutError,)) else "error"
-        raise
-    finally:
-        external_api_duration.labels(
-            api=api, endpoint=endpoint, result=result
-        ).observe(time.monotonic() - start)
-```
-
-Usage:
-
-```python
 from app.metrics import timed_external
 
-with timed_external("hengfu", "DeviceDetails"):
-    response = requests.get(...)
+def get_device_details(device_id: int):
+    with timed_external("hengfu", "DeviceDetails"):
+        response = requests.get(...)
+        return response.json()
 ```
 
-Either pattern works. The helper is cleaner if you have many external calls.
+**Note on the result label**: always use `timed_external` for
+`external_api_duration`. A timer started with
+`.labels(result="pending").time()` keeps that label when the call fails, so the
+external API error panel, which counts only `error` and `timeout`, shows
+nothing. Only an exception counts as a failure: a call that returns an HTTP
+error status is recorded as `ok` unless the existing code raises on it.
 
 ### 2.9 Scheduler heartbeats — `app/scheduler.py`
 
@@ -399,11 +383,16 @@ The plan says the global exception handler is at around L94. Find it
 ```python
 from app.metrics import unhandled_exception
 
+def route_label(request) -> str:
+    """Matched route template, so IDs in the URL never become label values."""
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or "unmatched"
+
 @app.exception_handler(Exception)
 async def global_exc_handler(request, exc):
     # === NEW ===
     unhandled_exception.labels(
-        path=request.url.path[:100],       # truncate to cap cardinality
+        path=route_label(request),
         exc_type=type(exc).__name__,
     ).inc()
     # === END NEW ===

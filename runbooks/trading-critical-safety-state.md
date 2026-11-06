@@ -4,7 +4,7 @@ Used by `TradingCriticalSafetyState`, `TradingRuntimeContractMissing`, `TradingR
 
 ## Symptoms
 
-- Marker reason is `risk_halt`, `max_cycles_drain_failed` or `unknown`.
+- Marker reason is `risk_halt`, `max_cycles_drain_failed` or `unknown`. A safe marker that fails the probe's consistency check is also published as `unknown`, so read the marker itself: see section 4.6 of [the runtime contract](../docs/trading-runtime-contract-agent-spec.md). This needs the probe from master, which is not on the Trading hosts yet.
 - A run is expected, but its runtime manifest contract is unavailable.
 - Manifest, process, config snapshot, log or marker binding is invalid.
 - A high-confidence execution-confirmation event reached Loki.
