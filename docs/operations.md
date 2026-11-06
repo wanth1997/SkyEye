@@ -85,7 +85,7 @@ cd /home/ubuntu/SkyEye
 sudo scripts/restore-prometheus.sh list
 sudo scripts/restore-prometheus.sh fetch <id>
 sudo scripts/restore-prometheus.sh verify <id>        # hours: run it in tmux
-sudo scripts/restore-prometheus.sh switch <id> --yes  # needs Wan's approval; add --fresh on a rebuilt host
+sudo scripts/restore-prometheus.sh switch <id> --yes  # needs Wan's approval; add --fresh only if _data is missing or empty
 ```
 
 A failed health check after `switch` rolls back by itself. `rollback` undoes the last switch, and `finalize --yes` deletes the renamed-aside data at least 24 hours later. `--help` is the full reference. The tool passed a drill against a real Prometheus in a local VM, with `aws` faked (`tests/backup/README.md`). Real S3 has not been tested.
@@ -309,7 +309,7 @@ EOF
 sudo ls -d /var/lib/docker/volumes/skyeye_prometheus_data/_data.* /var/lib/skyeye-restore/*
 ```
 
-On a rebuilt host the same steps apply: `docker compose up -d` has created an empty `_data`, and step 4 renames that aside.
+On a rebuilt host the same steps apply: `docker compose up -d` has already started Prometheus, so `_data` holds what it wrote since then, and step 4 renames that aside.
 
 ### Full stack rebuild (if this machine dies)
 
@@ -319,7 +319,7 @@ On a rebuilt host the same steps apply: `docker compose up -d` has created an em
 4. `git clone` this repo, populate `alertmanager/secrets/` and `cloudflared/credentials.json` from 1Password.
 5. `docker compose up -d`
 6. `cloudflared tunnel route dns skyeye-monitoring-prod <hostnames>` — re-point DNS (if tunnel UUID is the same, DNS may still be valid — skip if so).
-7. Restore Prometheus data from latest S3 snapshot (see above). With the tool, use `switch <id> --yes --fresh`.
+7. Restore Prometheus data from latest S3 snapshot (see above). With the tool, use `switch <id> --yes`. Step 5 started Prometheus, so `_data` is not empty and `--fresh` would be refused. The new host's own data stays as `_data.pre-restore-*`.
 8. Verify via Grafana Overview.
 
 Estimated recovery: the 45-60 minutes from cold start written here earlier predates the full read in step 7, which takes about 1-4 hours by itself. Neither number has been measured.
@@ -382,13 +382,13 @@ scripts/central-deploy --manual-applied "$TARGET"
 ```bash
 q() { curl -fsS --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
 q 'up{job="monitoring-host"}'                                # value 1
-q 'count(node_filesystem_avail_bytes{mountpoint="/"})'       # value 1
-q 'node_filesystem_avail_bytes{mountpoint="/host"}'          # []
+q 'count(node_filesystem_avail_bytes{job="monitoring-host",server_id="monitoring-prod",mountpoint="/"})'  # value 1
+q 'node_filesystem_avail_bytes{job="monitoring-host",server_id="monitoring-prod",mountpoint="/host"}'     # []
 q '(1 - node_memory_MemAvailable_bytes{server_id="monitoring-prod"} / node_memory_MemTotal_bytes{server_id="monitoring-prod"}) * 100'  # below 90
 q 'ALERTS{server_id="monitoring-prod",alertstate="firing"}'  # []
 ```
 
-If `up` is 0, no alert fires: no rule watches this job, and `HostDisk*` stops evaluating instead of reporting a problem. Only the Overview offline-products panel turns red. `sudo docker compose up -d node-exporter` recovers it without a reload.
+If `up` is 0, no alert fires: no rule watches this job, and `HostDisk*` stops evaluating instead of reporting a problem. It shows only on dashboards: the offline panels on Overview (離線產品數) and Stack health (離線目標數) turn red. `sudo docker compose up -d node-exporter` recovers it without a reload.
 
 If `node-exporter` will not start, read the error first. The `rslave` mount needs `/` to be a shared mount; this has not been tested on EC2. The failure stays with this one service.
 
