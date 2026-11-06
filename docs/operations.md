@@ -30,7 +30,7 @@ If all three are fine, you're done. Total: under 2 minutes.
 1. **Alert rule review** — do we need any new rules? Any that have never fired? (Use `count_over_time(ALERTS_FOR_STATE[30d])` to find.)
 2. **Disk forecast** — in Grafana Hosts dashboard, look at 30-day disk growth trend per host.
 3. **Image pins** — verify versions in `docker-compose.yml` are current-ish. Bump quarterly, not monthly.
-4. **Backup verification** — run steps 1-3 of "Restore Prometheus TSDB from S3 snapshot" below against the newest prefix, then delete the staging directory with `sudo rm -rf /var/lib/skyeye-restore/<date>`. Step 3 can take hours, so leave it running in `tmux`. Prometheus keeps running and live data is not touched.
+4. **Backup verification** — run steps 1-3 of "Restore Prometheus TSDB from S3 snapshot" below against the newest prefix, then delete the staging directory with `sudo rm -rf /var/lib/skyeye-restore/<date>`. Step 3 can take hours, so leave it running in `tmux`. Prometheus keeps running and live data is not touched. Once `scripts/restore-prometheus.sh` is deployed, run its `fetch` and `verify` on the newest generation instead, then delete `/var/lib/skyeye-restore/<id>` the same way.
 
 ## Quarterly (1-2 hours)
 
@@ -67,7 +67,7 @@ Symptom: no silent `DailyHeartbeat` in Telegram for 2+ mornings, `24h Telegram �
 2. **SSH monitoring-prod**:
    ```bash
    sudo docker compose -f /home/ubuntu/SkyEye/docker-compose.yml ps
-   # All 6 containers should be Up
+   # All 7 services should be Up (6 until node-exporter is deployed)
    sudo docker compose -f /home/ubuntu/SkyEye/docker-compose.yml logs --tail=50 alertmanager prometheus grafana loki cloudflared
    ```
 3. **Tunnel down?** — `sudo docker compose restart cloudflared`. Usually recovers within 30 s.
@@ -78,6 +78,29 @@ Symptom: no silent `DailyHeartbeat` in Telegram for 2+ mornings, `24h Telegram �
 
 > **This procedure has never been rehearsed, and no existing backup has ever been proven restorable.** Each `s3://skyeye-prometheus-snapshots/<date>/` prefix has no completion marker, so a prefix can look complete and still be partial. Treat every step's output as evidence, not as a formality.
 
+**`scripts/restore-prometheus.sh` replaces the numbered steps once it is deployed.** As of 2026-11-06 it is on master but not on monitoring-prod, so the numbered steps are the only path on the host. The new backup script publishes to `generations/<date>/<id>/` with a `MANIFEST.json`, and the numbered steps read date prefixes only, so a generation needs the tool. The tool also reads old date prefixes with `--legacy-prefix YYYY-MM-DD`.
+
+```bash
+cd /home/ubuntu/SkyEye
+sudo scripts/restore-prometheus.sh list
+sudo scripts/restore-prometheus.sh fetch <id>
+sudo scripts/restore-prometheus.sh verify <id>        # hours: run it in tmux
+sudo scripts/restore-prometheus.sh switch <id> --yes  # needs Wan's approval; add --fresh on a rebuilt host
+```
+
+A failed health check after `switch` rolls back by itself. `rollback` undoes the last switch, and `finalize --yes` deletes the renamed-aside data at least 24 hours later. `--help` is the full reference. The tool passed a drill against a real Prometheus in a local VM, with `aws` faked (`tests/backup/README.md`). Real S3 has not been tested.
+
+**Time estimate.** These are estimates for a 1.9 GB generation, and none has been measured on monitoring-prod. The drill's 2 seconds of downtime was on 200 KB of data and does not scale.
+
+| Stage | Estimate | Basis |
+|---|---|---|
+| Fetch | Tens of seconds | Uploads took 8-13 seconds in the 2026-11-04 audit; download speed not measured |
+| sha256 and file checks | Tens of seconds | Not measured |
+| `promtool` full read | 1-4 hours | Earlier estimate, not measured on the host |
+| Switch downtime | About 1-2 minutes | Stop limit of 60 seconds, plus startup load |
+
+The total is about 1-4 hours, nearly all of it the full read, or about 5 minutes without it. `switch` hashes the staged data again before it stops Prometheus; that takes tens of seconds and is not downtime.
+
 Live data stays intact until new data is ready:
 
 - Steps 1-3 run while Prometheus keeps serving. They write only to a staging directory, and a failure there costs nothing.
@@ -86,7 +109,7 @@ Live data stays intact until new data is ready:
 
 Before you start:
 
-- Step 4 needs Wan's explicit approval and stops Prometheus, so no alerts are evaluated until it is back. The downtime has not been measured.
+- Step 4 needs Wan's explicit approval and stops Prometheus, so no alerts are evaluated until it is back. The downtime has not been measured; the estimate above is 1-2 minutes.
 - A snapshot has no WAL. Anything after the backup is missing from the restored data and stays only in the renamed-aside copy.
 - Blocks past the 30-day retention are deleted when Prometheus starts on the restored data.
 - Backups from before 2026-11-02 bring back the purged `tnauqquant-prod-1` series.
@@ -290,16 +313,16 @@ On a rebuilt host the same steps apply: `docker compose up -d` has created an em
 
 ### Full stack rebuild (if this machine dies)
 
-1. Provision new EC2 (arm64, Ubuntu 24.04, 40 GB gp3, same VPC subnet).
+1. Provision new EC2 (arm64, Ubuntu 24.04, 30 GB gp3, same VPC subnet). The current root disk is 30 GB.
 2. Update `infra/iam/bootstrap.sh` with new instance ID; re-run (it's idempotent, will attach the existing role to the new instance).
 3. `bash scripts/bootstrap-monitoring-ec2.sh` — installs Docker + AWS CLI.
 4. `git clone` this repo, populate `alertmanager/secrets/` and `cloudflared/credentials.json` from 1Password.
 5. `docker compose up -d`
 6. `cloudflared tunnel route dns skyeye-monitoring-prod <hostnames>` — re-point DNS (if tunnel UUID is the same, DNS may still be valid — skip if so).
-7. Restore Prometheus data from latest S3 snapshot (see above).
+7. Restore Prometheus data from latest S3 snapshot (see above). With the tool, use `switch <id> --yes --fresh`.
 8. Verify via Grafana Overview.
 
-Estimated recovery: 45-60 minutes from cold start.
+Estimated recovery: 45-60 minutes from cold start for everything except step 7, which adds about 1-4 hours for the full read. Neither number has been measured.
 
 ### Upgrade cloudflared
 
@@ -326,6 +349,59 @@ The tunnel runs a single replica, so the restart drops connections for a few sec
 5. https://grafana.wanbrain.com loads, and the Overview `Products UP` panel recovers within a few minutes.
 
 **Rollback:** set the `cloudflared` image back to the previous pin in `docker-compose.yml` (revert the commit), then `sudo docker compose pull cloudflared && sudo docker compose up -d cloudflared` and repeat steps 3-5.
+
+### Deploy a commit that adds a container
+
+`scripts/central-deploy` refuses a change that needs a container recreate, such as `docker-compose.yml`. Use this order for the `node-exporter` service and its `monitoring-host` job, which arrive with `bd63d1a5` (PR #61). It has run on a local Compose stack and against stubbed docker, not on monitoring-prod.
+
+Set up the Grafana token first: see [the one-time setup](../README.md#one-time-setup-for-scriptscentral-deploy). `HostDiskCritical` and `HostOOM` are non-shadow High, so they reach Telegram as soon as their conditions hold. Check disk and memory in step 0.
+
+```bash
+cd /home/ubuntu/SkyEye
+
+# 0. Checks
+df -h / ; free -m ; findmnt -no PROPAGATION /     # the last one must print shared
+git status --short ; git fetch origin master
+git diff --name-only HEAD origin/master           # docker-compose.yml must be the only recreate path
+TARGET=$(git rev-parse origin/master)             # must be the newest commit
+
+# 1. Move the checkout first. Compose reads this file.
+git merge --ff-only "$TARGET"
+
+# 2. Start the container. Always name the service.
+sudo docker compose up -d node-exporter
+sudo docker compose ps node-exporter
+
+# 3. Validate, then reload and record
+scripts/central-deploy --dry-run --manual-applied "$TARGET"
+scripts/central-deploy --manual-applied "$TARGET"
+```
+
+**`--manual-applied` does not check containers.** It reports `done` and records the commit even when `node-exporter` never started. It also accepts every recreate path in the range, including `cloudflared/config.yml`, which is why step 0 lists them. Confirm the result yourself:
+
+```bash
+q() { curl -fsS --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
+q 'up{job="monitoring-host"}'                                # value 1
+q 'count(node_filesystem_avail_bytes{mountpoint="/"})'       # value 1
+q 'node_filesystem_avail_bytes{mountpoint="/host"}'          # []
+q '(1 - node_memory_MemAvailable_bytes{server_id="monitoring-prod"} / node_memory_MemTotal_bytes{server_id="monitoring-prod"}) * 100'  # below 90
+q 'ALERTS{server_id="monitoring-prod",alertstate="firing"}'  # []
+```
+
+If `up` is 0, no alert fires: no rule watches this job, and `HostDisk*` stops evaluating instead of reporting a problem. Only the Overview offline-products panel turns red. `sudo docker compose up -d node-exporter` recovers it without a reload.
+
+If `node-exporter` will not start, read the error first. The `rslave` mount needs `/` to be a shared mount; this has not been tested on EC2. The failure stays with this one service.
+
+**Rollback.** Remove the container before the revert, because compose no longer knows the service afterwards. The target is down between the two steps, and no alert fires.
+
+```bash
+sudo docker compose rm -sf node-exporter
+# merge the revert PR, then:
+git fetch origin master
+TARGET=$(git rev-parse origin/master)
+git merge --ff-only "$TARGET"
+scripts/central-deploy --manual-applied "$TARGET"
+```
 
 ---
 
@@ -391,10 +467,10 @@ See [`onboarding-new-product.md`](./onboarding-new-product.md). 30-minute checkl
 
 ## Cost notes
 
-Month-1 bill (AWS, Tokyo):
+Monthly estimate (AWS, Tokyo). Disk and backup sizes are from the 2026-11-04 audit. Prices are not checked against a bill:
 - EC2 t4g.medium on-demand: ~$24
-- EBS 40 GB gp3: $3.20
-- S3 (Loki chunks ~5 GB, snapshots ~300 MB): <$1
+- EBS 30 GB gp3: ~$2.40 (at $0.08/GB)
+- S3 (Loki chunks ~5 GB, not re-measured; Prometheus backups ~56 GB for the last 30 generations): ~$1.50 (at $0.025/GB)
 - Cloudflare Tunnel: $0
 - **Total: ~$28/mo**
 

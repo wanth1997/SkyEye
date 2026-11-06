@@ -21,6 +21,7 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 | `HostDiskLow` / `HostDiskCritical` | [disk-full.md](./disk-full.md) | Medium / High |
 | `HostHighCPU` | [high-cpu.md](./high-cpu.md) | Medium |
 | `HostOOM` | [oom.md](./oom.md) | High |
+| `PrometheusBackupStale` / `PrometheusBackupStaleCritical` / `PrometheusBackupSignalMissing` / `PrometheusBackupSnapshotsAccumulating` | [backup-failed.md](./backup-failed.md) | Medium / High / Medium / Medium (shadow) |
 | `PaymentSuccessRateLow` | [payment-zero.md](./payment-zero.md) | High |
 | `ExternalApiDown` / `TlsCertExpired` | [external-api-down.md](./external-api-down.md) | High |
 | `SchedulerNoHeartbeat` | [scheduler-dead.md](./scheduler-dead.md) | High |
