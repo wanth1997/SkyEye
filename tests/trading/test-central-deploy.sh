@@ -511,6 +511,19 @@ restore() {
 recorded() {
   cat "$applied_record" 2>/dev/null || true
 }
+# Commits the seed's working tree on a new branch NAME started at START (default
+# master) and merges it into master with a merge commit, as a GitHub merge
+# does, so master's tip stays the merge's first parent. Then pushes master.
+merge_branch() {
+  local name="$1" message="$2" start="${3:-master}"
+  git_q -C "$SEED" checkout --quiet -b "$name" "$start"
+  git_q -C "$SEED" add -A
+  git_q -C "$SEED" commit --quiet -m "$message"
+  git_q -C "$SEED" checkout --quiet master
+  git_q -C "$SEED" merge --quiet --no-ff -m "merge $name" "$name"
+  git_q -C "$SEED" branch --quiet -D "$name"
+  git_q -C "$SEED" push --quiet origin master
+}
 seed_head() {
   git -C "$SEED" rev-parse HEAD
 }
@@ -918,6 +931,54 @@ for attempt in first rerun; do
     'trading-strategy-fleet still serves other content than Trading/trading-strategy-fleet.json'
 done
 expect_applied 'content A loaded'
+restore
+
+# The same change and change back, each merged with a merge commit: on the
+# rerun only the merges' diffs against their first parent name the file.
+printf 'case: a dashboard merged branches changed and changed back must match its file\n'
+cp "$SEED/$FLEET" "$WORK/fleet-content-a.json"
+change_dashboard "$FLEET" merged-content-b
+change_rule
+merge_branch content-b 'dashboard content B with a rule change'
+rm -rf "$WORK/grafana-merged-b"
+cp -R "$SEED/grafana/dashboards" "$WORK/grafana-merged-b"
+FAKE_GRAFANA_ROOT="$WORK/grafana-merged-b" FAKE_LOKI_STALE="$LOKI_BASE" \
+  expect_not_loaded 'merged content B published' 'loaded rules differ'
+cp "$WORK/fleet-content-a.json" "$SEED/$FLEET"
+merge_branch content-a 'dashboard back to content A'
+[[ -z "$(git -C "$SEED" diff --name-only "$base" HEAD -- grafana/dashboards)" ]] || \
+  fail "fixture expected no net dashboard change"
+for attempt in first rerun; do
+  FAKE_GRAFANA_ROOT="$WORK/grafana-merged-b" expect_not_loaded "merged content A not loaded, $attempt" \
+    'trading-strategy-fleet still serves other content than Trading/trading-strategy-fleet.json'
+done
+expect_applied 'merged content A loaded'
+restore
+
+# Review R2 C4. The last apply already holds a dashboard change. A branch forked
+# before that change, which never touches the dashboard, is then merged: the
+# merge differs from its second parent in that file, but master never changed
+# it after the last apply, so a UI edit made to it since must still be kept.
+printf 'case: merging a branch forked before the last apply keeps a UI edit to a dashboard it did not touch\n'
+forked="$(seed_head)"
+change_dashboard "$FLEET" applied-before-the-merge
+publish 'dashboard change'
+expect_applied 'dashboard change before the merge'
+rm -rf "$WORK/grafana-ui-edit"
+cp -R "$LIVE/grafana/dashboards" "$WORK/grafana-ui-edit"
+change_dashboard "$FLEET" 'edited in the UI after the last apply'
+cp "$SEED/$FLEET" "$WORK/grafana-ui-edit/Trading/trading-strategy-fleet.json"
+git_q -C "$SEED" checkout --quiet -- "$FLEET"
+mkdir -p "$SEED/docs"
+printf 'note\n' >"$SEED/docs/forked-before-apply.md"
+merge_branch forked-before-apply 'docs change on a branch forked before the last apply' "$forked"
+[[ -n "$(git -C "$SEED" diff --name-only HEAD^2 HEAD -- "$FLEET")" ]] || \
+  fail "fixture expected the merge to differ from its second parent in $FLEET"
+[[ -z "$(git -C "$SEED" diff --name-only "$(recorded)" HEAD -- grafana/dashboards)" ]] || \
+  fail "fixture expected no dashboard change since the last apply"
+FAKE_GRAFANA_ROOT="$WORK/grafana-ui-edit" expect_applied 'older branch merged after a UI edit'
+[[ "$output" == *'Grafana loaded '*': 0 confirmed, 0 removed'* ]] || \
+  fail "older branch merged: Grafana was not checked, or held a dashboard to its file: $output"
 restore
 
 printf 'case: a UI edit to a dashboard that did not change does not block a deploy\n'
