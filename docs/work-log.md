@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-07 20:10 — Grafana 改驗 Cloudflare Access JWT（P2-16）
+
+**改動摘要：** Grafana 不再相信 `Cf-Access-Authenticated-User-Email` header，改成驗證 Cloudflare Access 簽發的 `Cf-Access-Jwt-Assertion`。新使用者預設 Viewer。這次只 merge，未部署。
+
+**修改的檔案：**
+- `docker-compose.yml`：grafana 關閉 auth proxy 並移除 whitelist。改用 JWT auth，簽章金鑰取自 `https://wanbrain.cloudflareaccess.com/cdn-cgi/access/certs`，並檢查 `aud` 與 `iss`。`cache_ttl=5m`、`skip_org_role_sync=true`，新使用者預設 Viewer（原本是 Admin）。
+- `tests/grafana/test-access-jwt.sh`：新增測試。Grafana 跑在 `--network none` 的真實 11.2.0 container，使用 commit 進去的設定。測試涵蓋合法 token、偽造 header、錯誤的 aud／iss、過期、別的 key 簽的、`alg=none`、簽章金鑰連不到時的 fail closed、既有 Admin 保留，以及 Viewer service account 讀 dashboard。
+- `scripts/verify-all`：`REQUIRED_TOOLS` 加入 `openssl`。
+- `docs/operations.md`：新增 Grafana sign-in 一節，內容有部署順序（停 Grafana 後備份 DB）、Viewer token smoke check、rollback、被鎖在外面時的判讀與 break-glass。runbook 不送 email header。
+- `cloudflared/README.md`：AUD 與 team domain 在哪裡找；一個 hostname 只能有一個不設 path 的 Access app。
+- `monitoring-plan-v2.md`：§13.1 的 auth proxy 設計註記已被取代。
+
+**原因/備註：** 本機用 11.2.0 加上 repo 的設定重現：主機上任何程序，或同一個 Docker network 的 container，送偽造的 email header 就能取得 Admin，冒用既有 email 會直接登入成那個帳號，包括 Server Admin。外部請求先被 Cloudflare Access 擋住。AUD 取自 `grafana.wanbrain.com` 的 Access 302 redirect，Wan 確認這個 hostname 只有一個 Access app。部署要重建 grafana container，須另外核准，Wan 要在瀏覽器旁確認登入。舊 auth proxy 自動建立的 Admin 帳號與 service account 不受影響，上線後需要盤點。Cloudflare 實際的 claim 格式與換 key 的節奏都是推論，沒有在 production 驗證。
+
+---
+
 ## 2026-11-06 08:22 — 文件與現況同步
 
 **改動摘要：** 修正文件與現況不一致的地方：告警實際路由、驗證命令、project brief 待辦、`node-exporter` 部署順序、還原流程與成本數字。只改文件，不影響線上。

@@ -73,16 +73,31 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PW}
       - GF_SERVER_ROOT_URL=https://grafana.wanbrain.com
       - GF_SERVER_SERVE_FROM_SUB_PATH=false
-      # --- Cloudflare Access SSO via trusted header ---
+      # --- Cloudflare Access SSO: Grafana verifies the Access JWT itself ---
+      # Access signs Cf-Access-Jwt-Assertion on every request it lets through.
+      # Grafana checks that signature against the team's keys plus aud and iss,
+      # so an email header sent from the host or another container proves
+      # nothing. The team domain and the application AUD tag are not secrets:
+      # both sit in every token a signed-in browser holds. A wrong value locks
+      # everyone out; recovery is in docs/operations.md (Grafana sign-in).
       - GF_AUTH_DISABLE_LOGIN_FORM=true
       - GF_AUTH_BASIC_ENABLED=false
-      - GF_AUTH_PROXY_ENABLED=true
-      - GF_AUTH_PROXY_HEADER_NAME=Cf-Access-Authenticated-User-Email
-      - GF_AUTH_PROXY_HEADER_PROPERTY=email
-      - GF_AUTH_PROXY_AUTO_SIGN_UP=true
-      - GF_AUTH_PROXY_WHITELIST=127.0.0.1,172.16.0.0/12
+      - GF_AUTH_PROXY_ENABLED=false
+      - GF_AUTH_JWT_ENABLED=true
+      - GF_AUTH_JWT_HEADER_NAME=Cf-Access-Jwt-Assertion
+      - GF_AUTH_JWT_EMAIL_CLAIM=email
+      - GF_AUTH_JWT_USERNAME_CLAIM=email
+      - GF_AUTH_JWT_JWK_SET_URL=https://wanbrain.cloudflareaccess.com/cdn-cgi/access/certs
+      - GF_AUTH_JWT_EXPECT_CLAIMS={"aud":"8c644c58373633322838aab86cd8c32b37a1342564a14da054d16312174c6e89","iss":"https://wanbrain.cloudflareaccess.com"}
+      # Grafana fetches Cloudflare's keys again only when this cache expires, so
+      # after a key rotation sign-in fails for up to this long.
+      - GF_AUTH_JWT_CACHE_TTL=5m
+      - GF_AUTH_JWT_AUTO_SIGN_UP=true
+      # Roles live in Grafana. With role sync on, Grafana refuses to change the
+      # role of a JWT user, and an Access token carries no role to sync.
+      - GF_AUTH_JWT_SKIP_ORG_ROLE_SYNC=true
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_USERS_AUTO_ASSIGN_ORG_ROLE=Admin
+      - GF_USERS_AUTO_ASSIGN_ORG_ROLE=Viewer
       # Default landing dashboard after login
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/Overview/overview-all.json
       # --- Disable anonymous + snapshots ---

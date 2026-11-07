@@ -349,6 +349,7 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PW}
       - GF_SERVER_ROOT_URL=https://grafana.wanbrain.com
       # Auth via Cloudflare Access + auth.proxy — see §13.1
+      # 已被取代（2026-11-07，P2-16）：現行設定是 docker-compose.yml 的 GF_AUTH_JWT_*，不要照抄下面幾行
       - GF_AUTH_DISABLE_LOGIN_FORM=true
       - GF_AUTH_BASIC_ENABLED=false
       - GF_AUTH_PROXY_ENABLED=true
@@ -1011,7 +1012,7 @@ Lifecycle 規則 30 天 expire（與 Prometheus in-place retention 對齊）。
 | # | 項目 | 決策 |
 |---|------|------|
 | 1 | Repo 名稱 | **`SkyEye`**（本 repo） |
-| 2 | Grafana 入口 | **Cloudflare Access 前置 + `auth.proxy` trust header**（見 §13.1） |
+| 2 | Grafana 入口 | **Cloudflare Access 前置 + `auth.proxy` trust header**（見 §13.1；2026-11-07 改為驗證 Access JWT） |
 | 3 | Prometheus snapshot → S3 | **要做**（每日 03:00 cron） |
 | 4 | Retention | **Prometheus 30 天 / Loki 30 天 / Snapshot 30 天**（三個對齊） |
 | 5 | SMTP | **Gmail SMTP**（先上，見 §13.2 風險，量大再遷 SES） |
@@ -1020,6 +1021,8 @@ Lifecycle 規則 30 天 expire（與 Prometheus in-place retention 對齊）。
 ---
 
 ### 13.1 Grafana 入口：Cloudflare Access 前置 vs. 直接 Google OAuth
+
+> **2026-11-07 更新（P2-16）**：下方的 `auth.proxy` 設定已被取代。它會信任任何來自 `127.0.0.1` 或 `172.16.0.0/12` 的 email header，主機上的任何程序或任何同主機 container 都能冒用任何人，包括 Admin。現在 Grafana 改用 JWT auth 驗證 Access 簽發的 `Cf-Access-Jwt-Assertion`（簽章、AUD、issuer），新使用者預設 Viewer。現行設定以 `docker-compose.yml` 為準，維運步驟見 `docs/operations.md` 的「Grafana sign-in」。Cloudflare Access 前置的決策不變。
 
 | 面向 | A. Grafana 自身 Google OAuth | B. **Cloudflare Access 前置（採用）** |
 |------|-----------------------------|--------------------------------------|
