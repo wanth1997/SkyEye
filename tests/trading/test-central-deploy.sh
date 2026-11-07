@@ -895,6 +895,31 @@ done
 expect_applied 'short-lived dashboard gone'
 restore
 
+# Review R1 C3. Run 1 publishes content B under the same uid, Grafana loads it,
+# the run fails on Loki. The next commit puts content A back. Its first deploy
+# fails before Grafana loads A, and the rerun starts with HEAD at the target:
+# neither net diff names the file, so only the history shows that Grafana may
+# still serve B.
+printf 'case: a dashboard changed and changed back since the last apply must match its file\n'
+cp "$SEED/$FLEET" "$WORK/fleet-content-a.json"
+change_dashboard "$FLEET" content-b
+change_rule
+publish 'dashboard content B with a rule change'
+rm -rf "$WORK/grafana-content-b"
+cp -R "$SEED/grafana/dashboards" "$WORK/grafana-content-b"
+FAKE_GRAFANA_ROOT="$WORK/grafana-content-b" FAKE_LOKI_STALE="$LOKI_BASE" \
+  expect_not_loaded 'content B published' 'loaded rules differ'
+cp "$WORK/fleet-content-a.json" "$SEED/$FLEET"
+publish 'dashboard back to content A'
+[[ -z "$(git -C "$SEED" diff --name-only "$base" HEAD -- grafana/dashboards)" ]] || \
+  fail "fixture expected no net dashboard change"
+for attempt in first rerun; do
+  FAKE_GRAFANA_ROOT="$WORK/grafana-content-b" expect_not_loaded "content A not loaded, $attempt" \
+    'trading-strategy-fleet still serves other content than Trading/trading-strategy-fleet.json'
+done
+expect_applied 'content A loaded'
+restore
+
 printf 'case: a UI edit to a dashboard that did not change does not block a deploy\n'
 change_dashboard "$FLEET" changed
 publish 'dashboard content change'

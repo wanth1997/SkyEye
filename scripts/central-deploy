@@ -461,28 +461,31 @@ def published_versions(target, applied, head):
     # HEAD and can publish a version that the next commit removes again, so
     # only the history since the last apply sees it, not HEAD or the net diff.
     # With no record nothing bounds what was published: take all of history.
+    # Also returns every dashboard path a commit in that history touched.
     log = ["log", "--full-history", "--topo-order", "-m", "--raw", "--no-renames",
            "--no-abbrev", "--format=%H", target]
     bases = [head]
     if applied:
         log += ["--not", applied]
         bases.append(applied)
-    versions, commit = [], None
+    versions, touched, commit = [], set(), None
     for line in git_output(log + ["--", DASHBOARD_DIR]).decode().splitlines():
         if re.fullmatch(r"[0-9a-f]{40}", line):
             commit = line
         elif line.startswith(":"):
             fields, _, path = line.partition("\t")
             blob = fields.split()[3]
-            if path.endswith(".json") and blob.strip("0"):
-                versions.append((commit, path, blob))
+            if path.endswith(".json"):
+                touched.add(path)
+                if blob.strip("0"):
+                    versions.append((commit, path, blob))
     for base in bases:
         listing = git_output(["ls-tree", "-r", "--full-tree", base, "--", DASHBOARD_DIR])
         for line in listing.decode().splitlines():
             fields, _, path = line.partition("\t")
             if fields.split()[1] == "blob" and path.endswith(".json"):
                 versions.append((base, path, fields.split()[2]))
-    return versions
+    return versions, touched
 
 
 def read_blobs(blobs):
@@ -496,9 +499,8 @@ def read_blobs(blobs):
     return contents
 
 
-def published_uids(target, applied, head):
+def published_uids(versions):
     # Maps each uid to the newest commit and path it was seen in.
-    versions = published_versions(target, applied, head)
     contents = read_blobs(list(dict.fromkeys(blob for _, _, blob in versions)))
     seen = {}
     for commit, path, blob in versions:
@@ -538,7 +540,12 @@ def dashboards_validate(root, output, unrecorded, rest):
     if errors:
         sys.exit("\n".join("invalid dashboard " + error for error in errors))
 
-    changed_files = {os.path.relpath(path, DASHBOARD_DIR) for path in changed}
+    versions, touched = published_versions(target, applied, head)
+    # A file whose content changed and changed back since the last apply has
+    # no net diff, but a failed run may have left Grafana serving a version in
+    # between under the same uid, so it is held to its file like a changed one.
+    # A dashboard no commit touched since the last apply keeps any UI edit.
+    changed_files = {os.path.relpath(path, DASHBOARD_DIR) for path in list(changed) + sorted(touched)}
     expected = {}
     for relative, dashboard in dashboards.items():
         # Without a record nothing tells a UI edit from a load that never
@@ -547,7 +554,7 @@ def dashboards_validate(root, output, unrecorded, rest):
             expected[dashboard["uid"]] = {"path": relative, "body": comparable(dashboard)}
     # Grafana may still serve any uid published since the last apply, so every
     # one the target no longer holds has to be gone.
-    absent = {uid: where for uid, where in published_uids(target, applied, head).items()
+    absent = {uid: where for uid, where in published_uids(versions).items()
               if uid not in uids}
     manifest = {"expected": expected, "absent": absent}
     with open(output, "w", encoding="utf-8") as handle:
