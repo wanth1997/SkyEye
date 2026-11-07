@@ -6,6 +6,7 @@ set -euo pipefail
 # Run on monitoring-prod from the SkyEye checkout (/home/ubuntu/SkyEye):
 #   scripts/central-deploy --dry-run   # fetch + validate the target commit only
 #   scripts/central-deploy             # validate, fast-forward, reload, confirm
+#   scripts/central-deploy --expect SHA  # the same, only if origin/master is SHA
 #   scripts/central-deploy --status    # show reload health and live inventory
 #
 # Validation runs on a temporary worktree of the target commit BEFORE the live
@@ -44,6 +45,7 @@ REMOTE=origin
 BRANCH=master
 MODE=deploy
 MANUAL_APPLIED=""
+EXPECT=""
 DOCKER_BIN="${SKYEYE_DOCKER:-docker}"
 CURL_BIN="${SKYEYE_CURL:-curl}"
 PROM_URL="${SKYEYE_PROM_URL:-http://127.0.0.1:9090}"
@@ -58,7 +60,7 @@ ACCEPT_INTERVAL="${SKYEYE_ACCEPT_INTERVAL:-5}"
 usage() {
   printf '%s\n' \
     'Usage: scripts/central-deploy [--dry-run | --status] [--remote NAME] [--branch NAME]' \
-    '                              [--manual-applied SHA]' \
+    '                              [--expect SHA] [--manual-applied SHA]' \
     '' \
     'Validates REMOTE/BRANCH in a temporary worktree (promtool check config,' \
     'promtool test rules, the derived Trading inventory test, every dashboard,' \
@@ -73,6 +75,9 @@ usage() {
     'A dashboard change needs a Grafana Viewer service account token, mode 0600' \
     'and outside the checkout, at SKYEYE_GRAFANA_TOKEN_FILE (default' \
     "$GRAFANA_TOKEN_FILE)." \
+    '' \
+    '--expect SHA deploys (or dry-runs) only when REMOTE/BRANCH is exactly SHA after' \
+    'the fetch, so a commit merged after your review is never deployed with it.' \
     '' \
     '--manual-applied SHA states that the recreate-only changes up to SHA were' \
     'applied by hand (docker compose up -d <service>); SHA must be the target' \
@@ -99,10 +104,15 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "--manual-applied requires the target commit applied by hand"
       [[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || die "--manual-applied takes a commit hash, got: $2"
       MANUAL_APPLIED="$2"; shift 2 ;;
+    --expect)
+      [[ $# -ge 2 ]] || die "--expect requires the commit you reviewed"
+      [[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || die "--expect takes a commit hash, got: $2"
+      EXPECT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+[[ -z "$EXPECT" || "$MODE" != "status" ]] || die "--expect does not apply to --status"
 
 [[ "$ACCEPT_TIMEOUT" =~ ^[0-9]+$ ]] || die "SKYEYE_ACCEPT_TIMEOUT must be whole seconds, got: $ACCEPT_TIMEOUT"
 
@@ -246,6 +256,13 @@ git fetch --quiet "$REMOTE" "$BRANCH"
 head_sha="$(git rev-parse HEAD)"
 target_sha="$(git rev-parse "refs/remotes/$REMOTE/$BRANCH")"
 applied_sha="$(read_applied)"
+# Checked before anything else, so a mismatch always fails, never a no-op.
+if [[ -n "$EXPECT" ]]; then
+  expect_sha="$(git rev-parse --verify --quiet "$EXPECT^{commit}" 2>/dev/null)" || \
+    die "--expect: $EXPECT is not a known commit, or the prefix is ambiguous; nothing moved"
+  [[ "$expect_sha" == "$target_sha" ]] || \
+    die "--expect names ${expect_sha:0:12}, but $REMOTE/$BRANCH is ${target_sha:0:12}; nothing moved. Review what differs (git log --oneline ${expect_sha:0:12}...${target_sha:0:12}) and rerun with the commit you approved"
+fi
 manual_sha=""
 if [[ -n "$MANUAL_APPLIED" ]]; then
   manual_sha="$(git rev-parse --verify --quiet "$MANUAL_APPLIED^{commit}")" || \

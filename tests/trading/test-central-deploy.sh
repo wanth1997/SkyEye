@@ -244,6 +244,36 @@ fi
   fail "dry run left its validation worktree registered"
 }
 
+printf 'case: --expect deploys only the commit that was reviewed\n'
+target="$(git -C "$SEED" rev-parse HEAD)"
+for mode in --dry-run deploy; do
+  arguments=(--expect "$before")
+  [[ "$mode" == deploy ]] || arguments=(--dry-run "${arguments[@]}")
+  reset_logs
+  if output="$(deploy "${arguments[@]}" 2>&1)"; then
+    fail "$mode accepted --expect naming a commit that is not origin/master"
+  fi
+  [[ "$output" == *"--expect names ${before:0:12}, but origin/master is ${target:0:12}"* ]] || \
+    fail "$mode did not name both commits: $output"
+  [[ "$(live_head)" == "$before" ]] || fail "$mode with a wrong --expect moved the checkout"
+  [[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "$mode with a wrong --expect validated or reloaded"
+done
+for wrong in 0123456789abcdef0123456789abcdef01234567 0123456; do
+  if output="$(deploy --dry-run --expect "$wrong" 2>&1)"; then
+    fail "an unknown --expect commit was accepted"
+  fi
+  [[ "$output" == *'is not a known commit'* ]] || fail "unknown --expect was not reported: $output"
+done
+for bad in "--expect" "--expect master" "--expect HEAD" "--status --expect $target"; do
+  # shellcheck disable=SC2086
+  if deploy $bad >/dev/null 2>&1; then
+    fail "deploy accepted: $bad"
+  fi
+done
+[[ "$(live_head)" == "$before" ]] || fail "refused --expect forms moved the checkout"
+deploy --dry-run --expect "${target:0:12}" >/dev/null || fail "dry run refused a matching short --expect"
+deploy --dry-run --expect "$target" >/dev/null || fail "dry run refused a matching full --expect"
+
 printf 'case: failed validation leaves the checkout untouched\n'
 reset_logs
 if FAKE_DOCKER_STATUS=1 deploy >/dev/null 2>&1; then
@@ -292,6 +322,12 @@ if rg -q -- '9093/-/reload' "$CURL_LOG"; then
 fi
 [[ "$output" == *"server_id=trading02 strategy=deploy-lane-btc"* ]] || \
   fail "deploy did not print the live inventory: $output"
+if output="$(deploy --expect "$before" 2>&1)"; then
+  fail "an applied checkout treated a wrong --expect as a no-op"
+fi
+[[ "$output" == *'--expect names'* ]] || fail "applied checkout did not report the --expect mismatch: $output"
+[[ "$(deploy --expect "$(live_head)")" == Already\ up\ to\ date* ]] || \
+  fail "a matching --expect on an applied checkout was not a no-op"
 
 printf 'case: a failed reload is retried by the next run without a manual reset\n'
 "$SEED/scripts/trading-target" --file "$SEED/prometheus/rules/trading-targets.yml" \
@@ -906,8 +942,10 @@ printf '# recreate needed\n' >>"$SEED/docker-compose.yml"
 publish 'recreate change with a rule change'
 target="$(seed_head)"
 git_q -C "$LIVE" pull --quiet --ff-only origin master
+expect_refused 'manual apply with another --expect' '--expect names' \
+  --manual-applied "${target:0:12}" --expect "$base"
 FAKE_LOKI_STALE="$LOKI_BASE" expect_not_loaded 'manual apply, stale ruler' 'loaded rules differ' \
-  --manual-applied "${target:0:12}"
+  --manual-applied "${target:0:12}" --expect "$target"
 expect_applied 'manual apply, loaded' --manual-applied "${target:0:12}"
 restore
 
