@@ -315,7 +315,7 @@ On a rebuilt host the same steps apply: `docker compose up -d` has already start
 
 1. Provision new EC2 (arm64, Ubuntu 24.04, 30 GB gp3, same VPC subnet). The current root disk is 30 GB.
 2. Update `infra/iam/bootstrap.sh` with new instance ID; re-run (it's idempotent, will attach the existing role to the new instance).
-3. `bash scripts/bootstrap-monitoring-ec2.sh` — installs Docker + AWS CLI.
+3. `bash scripts/bootstrap-monitoring-ec2.sh` — installs Docker + AWS CLI. The AWS CLI is a pinned release (2.39.3) and is installed only if the download matches the sha256 in the script; a mismatch stops the script before anything is unpacked. The comment above the pin says how to move it.
 4. `git clone` this repo, populate `alertmanager/secrets/` and `cloudflared/credentials.json` from 1Password.
 5. `docker compose up -d`
 6. `cloudflared tunnel route dns skyeye-monitoring-prod <hostnames>` — re-point DNS (if tunnel UUID is the same, DNS may still be valid — skip if so).
