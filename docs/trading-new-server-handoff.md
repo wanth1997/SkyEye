@@ -13,7 +13,7 @@ This is the self-contained, non-secret contract for production Trading hosts. Th
 | launch mode | `scripts/tq live run --human <config>` inside operator tmux |
 | auto-restart | disabled |
 | primary PNL | latest `stable=true` `real_pnl_usdt` |
-| Alloy version | the development-accepted version; record exact output |
+| Alloy version | a macOS version listed in `agents/alloy/alloy-versions.env` (currently 1.18.1); record exact output |
 
 The macOS host's `server_id` is `macmini-m2` since the 2026-10-31 rename (decision D14). Pre-rename data and the host cutover procedure are described in `docs/trading-serverid-cutover-macmini-m2.md`.
 
@@ -44,6 +44,8 @@ ls -ld "$(dirname "$TQ_RAW_LOG_GLOB")" "$(dirname "$TQ_RUN_MANIFEST")"
 ```
 
 Also report the config `instance_id`, sidecar tmux session name, sidecar identity-file path and loopback health URL. Do not print `.env`.
+
+If `alloy --version` is not a version listed in `agents/alloy/alloy-versions.env` for the host's platform, stop and report it; the installers refuse it, and `SKYEYE_ALLOY_UNTESTED_VERSION` is not for production hosts. Check `alloy --version | head -1` read-only the same way before every later re-run of an installer.
 
 ## Host deployment env
 
@@ -82,7 +84,7 @@ alloy validate "$render_dir/config.alloy"
 agents/alloy/trading/setup-macos.sh --no-start
 ```
 
-After the SkyEye operator approves the report and access policy, run the installer without `--no-start`. It starts only Alloy and the read-only probe.
+`--no-start` is only for this first install, while Alloy and both SkyEye launchd jobs are stopped; once anything runs it refuses. After the SkyEye operator approves the report and access policy, run the installer without `--no-start`. It starts only Alloy and the read-only probe and PNL-history jobs. Later re-runs apply only what changed: a `config.alloy` change is a reload, a `config.env` or `extra-args.txt` change is a restart, and a failure restores the previous files and services; see [What a Mac install or re-run does](../agents/alloy/trading/README.md#what-a-mac-install-or-re-run-does). The first re-run with this installer version restarts Alloy once, because no record of the installed `config.env` exists yet.
 
 Verify within 30 seconds:
 
@@ -108,13 +110,14 @@ Central acceptance requires logs, probe metrics, stable Real PNL equality, corre
 
 Trading01 already runs Alloy for ZenIncome. Do not run the generic Linux installer that overwrites `/etc/alloy/config.alloy`, and do not define another central remote-write or Loki sink. Copy the strategy's `deployment-linux-*.env.example` to a private mode-`0600` path, verify its dedicated executable/config/log/manifest bindings, then follow [Add or remove a Trading target](../agents/alloy/trading/README.md#add-or-remove-a-trading-target): one `setup-linux.sh add` on the host, one `scripts/trading-target add` PR, and one `scripts/central-deploy` on monitoring-prod.
 
-`add` validates the combined `/etc/alloy` directory, installs the per-strategy env and Loki fragment plus the shared textfile collector and read-only `skyeye-trading-probe@STRATEGY` templates, reloads Alloy and enables only that probe, with an exact rollback record. The textfile directory is setgid `ubuntu:alloy` mode `2770`, each strategy output is `0640`, and Alloy receives only the ACL permissions needed to discover/read each exact raw-log glob. Mainnet begins with `TQ_POC_RUN_EXPECTED=0`; monitoring it does not start the strategy. (The 2026-09 singleton migration used the flag form with `--migrate-singleton --no-start`; new targets do not need it.)
+`add` validates the combined `/etc/alloy` directory, installs the per-strategy env and Loki fragment plus the shared textfile collector and read-only `skyeye-trading-probe@STRATEGY` templates, reloads Alloy and enables only that probe, with an exact rollback record. Re-running `add` for an installed strategy keeps its probe timer state, so a disabled Mainnet probe stays disabled; only `--enable-probe` enables it. The textfile directory is setgid `ubuntu:alloy` mode `2770`, each strategy output is `0640`, and Alloy receives only the ACL permissions needed to discover/read each exact raw-log glob. Mainnet begins with `TQ_POC_RUN_EXPECTED=0`; monitoring it does not start the strategy. (The 2026-09 singleton migration used the flag form with `--migrate-singleton --no-start`; new targets do not need it.)
 
 Before and after installation record:
 
 ```bash
 pgrep -af '/home/ubuntu/tnauqquant/(bin/[^/]+/)?quant([[:space:]]|$)' || true
 tmux list-panes -a -F '#{session_name} #{pane_pid} #{pane_current_command}'
+alloy --version | head -1
 systemctl is-active alloy
 systemctl is-active \
   skyeye-trading-probe@lighter-robinhood-btc-canary.timer \
