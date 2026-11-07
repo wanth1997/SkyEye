@@ -5,7 +5,11 @@ set -euo pipefail
 # history scripts and their launchd jobs. Every file is staged next to its
 # destination and validated before any live file is replaced. Only what
 # changed is applied, and a failure puts files, Alloy and both launchd jobs
-# back the way this run found them. macOS may run this with /bin/bash 3.2.
+# back the way this run found them. The exception is config.env and
+# extra-args.txt: the operator owns them, Alloy reads them only when it starts,
+# and this script never copies them (config.env holds the service token). If
+# Alloy was restarted on edited ones and the install fails, it says so and
+# exits 3 instead of claiming a rollback. macOS may run this with /bin/bash 3.2.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="$SCRIPT_DIR/config-macos.alloy.tmpl"
@@ -34,9 +38,12 @@ usage() {
     'Validates every file before it replaces a live one and applies only what' \
     'changed. A config.alloy change reloads Alloy; a changed config.env or' \
     'extra-args.txt, or --restart-alloy, restarts it, because Alloy reads those only' \
-    'when it starts. A failure restores the printed rollback record. --no-start' \
-    'installs files without starting anything, and only runs while Alloy and both' \
-    'launchd jobs are stopped. Alloy must be a version listed in' \
+    'when it starts. A failure restores the printed rollback record (exit 1).' \
+    'config.env and extra-args.txt are yours and are never copied or restored: if' \
+    'Alloy was restarted on edited ones (or with no record of them) and the install' \
+    'fails, it exits 3 with rollback_incomplete and the steps to recover by hand.' \
+    '--no-start installs files without starting anything, and only runs while Alloy' \
+    'and both launchd jobs are stopped. Alloy must be a version listed in' \
     'agents/alloy/alloy-versions.env.'
 }
 
@@ -328,6 +335,12 @@ ALLOY_ACTION=none
 ALLOY_TOUCHED=0
 PROBE_TOUCHED=0
 HISTORY_TOUCHED=0
+START_INPUTS=same
+# Set by rollback when Alloy had to be restarted on start inputs this run
+# cannot put back (see START_INPUTS).
+ROLLBACK_INPUTS_LIVE=0
+ROLLBACK_READY_AFTER=0
+ROLLBACK_FILES_FAILED=0
 
 for index in $INDEXES; do
   dest="${DESTS[$index]}"
@@ -359,11 +372,11 @@ rollback() {
   local failed=0 target
   while IFS= read -r target; do
     [[ -n "$target" ]] || continue
-    rm -f -- "$target" || failed=1
+    rm -f -- "$target" || { failed=1; ROLLBACK_FILES_FAILED=1; }
   done <"$TRANSACTION_BACKUP/absent.list"
   while IFS= read -r target; do
     [[ -n "$target" ]] || continue
-    cp -p "$TRANSACTION_BACKUP/previous/${target#/}" "$target" || failed=1
+    cp -p "$TRANSACTION_BACKUP/previous/${target#/}" "$target" || { failed=1; ROLLBACK_FILES_FAILED=1; }
   done <"$TRANSACTION_BACKUP/present.list"
   if [[ "$ALLOY_TOUCHED" -eq 1 ]]; then
     case "$ALLOY_ACTION" in
@@ -372,7 +385,17 @@ rollback() {
         ;;
       restart)
         brew services restart "$ALLOY_FORMULA" >/dev/null 2>&1 || failed=1
-        if [[ "$ALLOY_WAS_READY" -eq 1 ]]; then
+        if [[ "$START_INPUTS" != same ]]; then
+          # Alloy now runs on the edited (or never recorded) config.env and
+          # extra-args.txt. This script keeps no copy of either, so it cannot
+          # put back what Alloy ran with before, nor check the old address:
+          # always incomplete. The record no longer says what Alloy started
+          # with, so the next run must restart it.
+          ROLLBACK_INPUTS_LIVE=1
+          if wait_ready; then ROLLBACK_READY_AFTER=1; fi
+          rm -f "$ENV_RECORD"
+          failed=1
+        elif [[ "$ALLOY_WAS_READY" -eq 1 ]]; then
           wait_ready || failed=1
         fi
         ;;
@@ -384,6 +407,34 @@ rollback() {
   restore_job "$PROBE_LABEL" "$LAUNCH_AGENT" "$PROBE_TOUCHED" "$PROBE_WAS_LOADED" || failed=1
   restore_job "$HISTORY_LABEL" "$HISTORY_LAUNCH_AGENT" "$HISTORY_TOUCHED" "$HISTORY_WAS_LOADED" || failed=1
   return "$failed"
+}
+
+report_inputs_live() {
+  local why answered="does NOT answer"
+  if [[ "$START_INPUTS" == unknown ]]; then
+    why="there is no record of the config.env and extra-args.txt it last started with"
+  else
+    why="config.env or extra-args.txt changed since it last started from this installer"
+  fi
+  [[ "$ROLLBACK_READY_AFTER" -eq 0 ]] || answered="answers"
+  printf '%s\n' \
+    "CRITICAL: rollback_incomplete: this run restarted Alloy because $why, and the install failed." \
+    "          Alloy is NOT back to its state before this run. The files this installer writes were put back" \
+    "          from $TRANSACTION_BACKUP/previous and Alloy was restarted once more." \
+    "          Alloy still reads the current $ALLOY_ENV and $ALLOY_EXTRA_ARGS." \
+    "          This installer never copies those two, so it cannot restore them," \
+    "          and it cannot check the address Alloy listened on before." \
+    "          After that restart Alloy $answered at $ALLOY_URL/-/ready (the address in the current extra-args.txt)." \
+    "          Recover by hand:" \
+    "            1. Put $ALLOY_ENV and $ALLOY_EXTRA_ARGS back the way Alloy last ran with them, or fix them." \
+    "            2. brew services restart $ALLOY_FORMULA" \
+    "            3. curl -fsS http://<--server.http.listen-addr from extra-args.txt, default 127.0.0.1:12345>/-/ready" \
+    "            4. launchctl print $domain/$PROBE_LABEL; launchctl print $domain/$HISTORY_LABEL" \
+    "          $ENV_RECORD was removed, so the next run of this installer restarts Alloy."
+  if [[ "$ROLLBACK_FILES_FAILED" -eq 1 ]]; then
+    printf '%s\n' \
+      "          Some files could not be put back: copy them from $TRANSACTION_BACKUP/previous (present.list) and delete those in absent.list."
+  fi
 }
 
 on_exit() {
@@ -400,10 +451,14 @@ on_exit() {
     else
       status=3
       record_status rollback_incomplete
-      printf '%s\n' \
-        "CRITICAL: rollback did not finish. The files from before this run are in $TRANSACTION_BACKUP/previous (see present.list and absent.list)." \
-        "          Check by hand: brew services info $ALLOY_FORMULA; curl -fsS $ALLOY_URL/-/ready" \
-        "          launchctl print $domain/$PROBE_LABEL; launchctl print $domain/$HISTORY_LABEL" >&2
+      if [[ "$ROLLBACK_INPUTS_LIVE" -eq 1 ]]; then
+        report_inputs_live >&2
+      else
+        printf '%s\n' \
+          "CRITICAL: rollback_incomplete: rollback did not finish. The files from before this run are in $TRANSACTION_BACKUP/previous (see present.list and absent.list)." \
+          "          Check by hand: brew services info $ALLOY_FORMULA; curl -fsS $ALLOY_URL/-/ready" \
+          "          launchctl print $domain/$PROBE_LABEL; launchctl print $domain/$HISTORY_LABEL" >&2
+      fi
     fi
   fi
   for index in $INDEXES; do
@@ -476,6 +531,14 @@ START_SHA="$(start_inputs_sha)"
 RECORDED_SHA=""
 if [[ -f "$ENV_RECORD" ]]; then
   RECORDED_SHA="$(sed -n 1p "$ENV_RECORD")"
+fi
+# Whether config.env and extra-args.txt are what Alloy last started with from
+# this installer. Only when they are can a restart during rollback bring back
+# the Alloy this run found, at the address ALLOY_URL was read from.
+if [[ -z "$RECORDED_SHA" ]]; then
+  START_INPUTS=unknown
+elif [[ "$RECORDED_SHA" != "$START_SHA" ]]; then
+  START_INPUTS=changed
 fi
 
 PROBE_BOOTSTRAP=0
@@ -556,6 +619,7 @@ done
   printf 'alloy_was_ready=%s\n' "$ALLOY_WAS_READY"
   printf 'probe_was_loaded=%s\n' "$PROBE_WAS_LOADED"
   printf 'history_was_loaded=%s\n' "$HISTORY_WAS_LOADED"
+  printf 'start_inputs=%s\n' "$START_INPUTS"
 } >"$TRANSACTION_BACKUP/transaction.meta"
 
 # Signals wait for the renames, so SWAPPED always matches what is on disk.

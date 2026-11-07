@@ -86,6 +86,9 @@ state="$BOX/state"
 calls="$BOX/log/calls.log"
 config="$BOX/brew/etc/alloy/config.alloy"
 
+envfile="$BOX/brew/etc/alloy/config.env"
+extra_args="$BOX/brew/etc/alloy/extra-args.txt"
+
 # Which config.alloy a reload or restart would load right now.
 config_state() {
   if [ ! -e "$config" ]; then
@@ -95,6 +98,17 @@ config_state() {
   else
     echo new
   fi
+}
+
+# The port a (re)started Alloy listens on: extra-args.txt, as the brew wrapper
+# passes it, or Alloy's default.
+listen_port() {
+  listen=""
+  if [ -f "$extra_args" ]; then
+    listen="$(tr '\n' ' ' <"$extra_args" | sed -n 's/.*--server[.]http[.]listen-addr[= ]\([^ ]*\).*/\1/p')"
+  fi
+  [ -n "$listen" ] || listen=127.0.0.1:12345
+  echo "${listen##*:}"
 }
 EOF
 
@@ -126,15 +140,22 @@ case "$1" in
         echo "brew services restart sees=$seen" >>"$calls"
         [ ! -e "$ctl/restart-fails" ] || exit 1
         touch "$state/loaded_homebrew.mxcl.alloy"
-        if [ -e "$ctl/unready-on-new" ] && [ "$seen" = new ]; then
-          rm -f "$state/ready"
+        # Alloy reads config.env and extra-args.txt only here, at start.
+        port="$(listen_port)"
+        if { [ -e "$ctl/unready-on-new" ] && [ "$seen" = new ]; } ||
+          grep -qx 'SKYEYE_FIXTURE_BREAKS_START=1' "$envfile" 2>/dev/null ||
+          [ -e "$ctl/port-unusable-$port" ]; then
+          rm -f "$state/ready" "$state/port"
+          echo "alloy start port=$port failed" >>"$calls"
         else
           touch "$state/ready"
+          echo "$port" >"$state/port"
+          echo "alloy start port=$port ready" >>"$calls"
         fi
         ;;
       stop)
         echo "brew services stop" >>"$calls"
-        rm -f "$state/loaded_homebrew.mxcl.alloy" "$state/ready"
+        rm -f "$state/loaded_homebrew.mxcl.alloy" "$state/ready" "$state/port"
         ;;
       *)
         echo "unexpected brew $*" >>"$calls"
@@ -193,7 +214,13 @@ done
 echo "curl $method $url" >>"$calls"
 case "$url" in
   */-/ready)
+    port="${url#http://}"
+    port="${port%%/*}"
+    port="${port##*:}"
+    # Something else still answering on a port, such as the old address.
+    ! grep -qx "$port" "$ctl/other-ready-ports" 2>/dev/null || exit 0
     [ -e "$state/ready" ] || exit 7
+    [ "$port" = "$(cat "$state/port" 2>/dev/null || echo 12345)" ] || exit 7
     ;;
   */-/reload)
     seen="$(config_state)"
@@ -588,15 +615,18 @@ check 'never restarted' count_is '^brew services restart' 0
 check "Alloy's error shown" logged out 'fixture rejects this config'
 check 'record marked rolled back' record_status_is rolled_back
 check 'record path printed' logged out 'Record: '
+check 'reported as back to the state before' logged out 'are back to their state before this run'
+check 'not reported incomplete' not_logged out 'rollback_incomplete'
 check 'no staged file left behind' no_staged_files
 
-new_box restart-not-ready-rolls-back
+# config.env and extra-args.txt are what Alloy last started with, so a restart
+# on the old config brings back the Alloy this run found.
+new_box restart-flag-not-ready-rolls-back
 install_host
 cp "$STATE_DIR/installed-env.sha256" "$BOX/old-env-record"
-change_env
 change_template
 touch "$BOX/ctl/unready-on-new"
-run_setup
+run_setup -- --restart-alloy
 check 'exit code 1' rc_is 1
 check 'old config restored' cmp -s "$LIVE_CONFIG" "$BOX/old-config"
 check 'restarted on the new config' logged calls.log '^brew services restart sees=new$'
@@ -604,6 +634,92 @@ check 'restarted again on the old config' logged calls.log '^brew services resta
 check 'alloy ready again' alloy_ready_state
 check 'environment record unchanged' cmp -s "$STATE_DIR/installed-env.sha256" "$BOX/old-env-record"
 check 'record marked rolled back' record_status_is rolled_back
+check 'record says the inputs were the same' grep -qx 'start_inputs=same' "$(latest_record)/transaction.meta"
+check 'not reported incomplete' not_logged out 'rollback_incomplete'
+
+# ── An edited config.env or extra-args.txt cannot be rolled back ────────────
+# The operator owns both files and the installer keeps no copy of them, so a
+# failed restart on edited ones always ends in rollback_incomplete (exit 3).
+
+assert_inputs_incomplete() {
+  check 'exit code 3' rc_is 3
+  check 'rollback_incomplete printed' logged out 'CRITICAL: rollback_incomplete'
+  check 'says Alloy is not back' logged out 'Alloy is NOT back to its state before this run'
+  check 'never claims a full rollback' not_logged out 'are back to their state before this run'
+  check 'names config.env' logged out "Alloy still reads the current $ENV_FILE and "
+  check 'manual step: put the two files back' logged out 'Put .*config.env and .*extra-args.txt back'
+  check 'manual step: restart' logged out 'brew services restart grafana/grafana/alloy'
+  check 'manual step: check readiness' logged out 'curl -fsS http://<--server.http.listen-addr'
+  check 'record marked incomplete' record_status_is rollback_incomplete
+  check 'environment record removed' absent "$STATE_DIR/installed-env.sha256"
+  check 'config.env is the operator file, untouched' cmp -s "$ENV_FILE" "$BOX/operator-env"
+  check 'no copy of config.env kept' file_lacks_tree "$STATE_DIR" sandbox-secret-value
+}
+file_lacks_tree() { ! grep -rq -- "$2" "$1"; }
+
+new_box env-change-start-fails-is-incomplete
+install_host
+change_template
+printf 'SKYEYE_FIXTURE_BREAKS_START=1\n' >>"$ENV_FILE"
+cp -p "$ENV_FILE" "$BOX/operator-env"
+run_setup
+assert_inputs_incomplete
+check 'record says the inputs changed' grep -qx 'start_inputs=changed' "$(latest_record)/transaction.meta"
+check 'installer config restored byte for byte' cmp -s "$LIVE_CONFIG" "$BOX/old-config"
+check 'restarted on the new config' logged calls.log '^brew services restart sees=new$'
+check 'restarted once more on the old config' logged calls.log '^brew services restart sees=old$'
+check 'both starts failed' count_is '^alloy start port=12345 failed$' 2
+check 'says Alloy does not answer' logged out 'Alloy does NOT answer at http://127.0.0.1:12345/-/ready'
+check 'alloy is down, as reported' test ! -e "$BOX/state/ready"
+
+new_box extra-args-port-change-start-fails-is-incomplete
+install_host
+printf -- '--server.http.listen-addr=127.0.0.1:23456\n' >"$BOX/brew/etc/alloy/extra-args.txt"
+touch "$BOX/ctl/port-unusable-23456"
+echo 12345 >"$BOX/ctl/other-ready-ports"
+cp -p "$ENV_FILE" "$BOX/operator-env"
+run_setup
+assert_inputs_incomplete
+check 'restarted twice' count_is '^brew services restart' 2
+check 'both starts failed on the new port' count_is '^alloy start port=23456 failed$' 2
+check 'readiness checked at the new address' logged calls.log '^curl GET http://127.0.0.1:23456/-/ready$'
+check 'the old, still healthy port is never taken as proof' not_logged calls.log '127.0.0.1:12345'
+check 'says the old address cannot be checked' logged out 'cannot check the address Alloy listened on before'
+check 'says Alloy does not answer at the new address' logged out 'Alloy does NOT answer at http://127.0.0.1:23456/-/ready'
+
+# Alloy came up on the edited env, then a launchd job failed: the restored
+# Alloy still runs on that env, and the next run must not trust the old record.
+new_box env-change-then-job-fails-is-incomplete
+install_host
+cp -p "$ENV_FILE" "$BOX/original-env"
+change_env
+change_probe_plist_template
+touch "$BOX/ctl/bootstrap-fails-once-$PROBE_LABEL"
+cp -p "$ENV_FILE" "$BOX/operator-env"
+run_setup
+assert_inputs_incomplete
+check 'says Alloy answers after the restart' logged out 'Alloy answers at http://127.0.0.1:12345/-/ready'
+check 'old plist restored' cmp -s "$LIVE_PROBE_PLIST" "$BOX/old-probe-plist"
+check 'probe job loaded again' loaded "$PROBE_LABEL"
+cp -p "$BOX/original-env" "$ENV_FILE"
+: >"$BOX/log/calls.log"
+run_setup
+check 'the run after the operator restores config.env succeeds' rc_is 0
+check 'the run after restarts Alloy instead of trusting the old record' count_is '^brew services restart' 1
+
+new_box no-record-restart-fails-is-incomplete
+install_host
+rm -f "$STATE_DIR/installed-env.sha256"
+change_template
+touch "$BOX/ctl/unready-on-new"
+cp -p "$ENV_FILE" "$BOX/operator-env"
+run_setup
+assert_inputs_incomplete
+check 'says why' logged out 'there is no record of the config.env and extra-args.txt it last started with'
+check 'record says the inputs are unknown' grep -qx 'start_inputs=unknown' "$(latest_record)/transaction.meta"
+check 'installer config restored' cmp -s "$LIVE_CONFIG" "$BOX/old-config"
+check 'restarted once more on the old config' logged calls.log '^brew services restart sees=old$'
+check 'says Alloy answers after the restart' logged out 'Alloy answers at http://127.0.0.1:12345/-/ready'
 
 new_box first-start-fails-stops-alloy
 touch "$BOX/ctl/unready-on-new"
@@ -636,7 +752,7 @@ cp "$BOX/old-config" "$BOX/keep-old-config"
 rm -f "$BOX/old-config"
 run_setup
 check 'exit code 3' rc_is 3
-check 'operator told to act' logged out 'CRITICAL: rollback did not finish'
+check 'operator told to act' logged out 'CRITICAL: rollback_incomplete: rollback did not finish'
 check 'files still restored' cmp -s "$LIVE_CONFIG" "$BOX/keep-old-config"
 check 'record marked incomplete' record_status_is rollback_incomplete
 
