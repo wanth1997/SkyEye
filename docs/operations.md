@@ -416,11 +416,11 @@ Cloudflare Access signs a JWT for every request it lets through to `grafana.wanb
 
 #### Deploying the switch from the header proxy
 
-`central-deploy` refuses `docker-compose.yml`, so this is done by hand, with Wan at a browser. Only the Grafana UI stops, for as long as a recreate takes: 1-2 s on a local Docker, not measured on monitoring-prod. Prometheus, Loki, Alertmanager, Telegram and ingestion keep running, and `cloudflared` is not recreated.
+`central-deploy` refuses `docker-compose.yml`, so this is done by hand, with Wan at a browser. Only the Grafana UI stops, from `stop` in step 1 until the health check in step 3 passes: the database copy, the merge and the recreate. With a 1.8 MB database on a local Docker that took 1.5 s. It has not been measured on monitoring-prod, and the copy takes longer as the database grows. Prometheus, Loki, Alertmanager, Telegram and ingestion keep running, and `cloudflared` is not recreated.
 
 **Never send `Cf-Access-Authenticated-User-Email` to monitoring-prod, not even to see a 401.** If the old configuration is still running, that request creates an Admin account.
 
-Before step 2, Wan writes down the users and service accounts (Administration → Users and access), including their own user id.
+Before step 1, Wan writes down the users and service accounts (Administration → Users and access), including their own user id.
 
 ```bash
 cd /home/ubuntu/SkyEye
@@ -433,28 +433,45 @@ BEFORE=$(git rev-parse HEAD)                      # for a rollback
 grep -c '^GF_ADMIN_PW=' .env                      # 1; checks the key only, never print the value
 sudo docker compose exec grafana curl -fsS -o /dev/null -w '%{http_code}\n' \
   https://wanbrain.cloudflareaccess.com/cdn-cgi/access/certs   # 200: Grafana reaches the keys
+
+# 1. Copy the database while Grafana is stopped. The UI is down from here until step 3.
+sudo docker compose stop grafana
 sudo docker compose cp grafana:/var/lib/grafana/grafana.db /home/ubuntu/grafana.db.pre-jwt
 sudo chmod 600 /home/ubuntu/grafana.db.pre-jwt    # holds token hashes; delete it once settled
+sudo sqlite3 -readonly /home/ubuntu/grafana.db.pre-jwt 'PRAGMA integrity_check'   # ok
 
-# 1. Move the checkout first. Compose reads this file.
+# 2. Move the checkout. Compose reads this file.
 git merge --ff-only "$TARGET"
 
-# 2. Recreate Grafana only
+# 3. Recreate Grafana only
 sudo docker compose up -d --no-deps grafana
 until curl -fsS -o /dev/null http://127.0.0.1:3000/api/health; do sleep 1; done
 
-# 3. Checks
+# 4. Sign-in checks
 sudo docker compose exec grafana env | grep -E 'GF_AUTH_(PROXY|JWT)_ENABLED'   # PROXY=false, JWT=true
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/user       # 401
 curl -s -o /dev/null -w '%{http_code}\n' -H 'Cf-Access-Jwt-Assertion: not-a-jwt' \
   http://127.0.0.1:3000/api/user                                               # 401
 
-# 4. Validate, then reload and record. This also reads dashboards with the Viewer token.
+# 5. The Viewer service account still reads dashboards. The token goes to curl on
+#    stdin, so it never reaches a command line or the output.
+gv() {
+  printf 'header = "Authorization: Bearer %s"\n' "$(cat /home/ubuntu/.config/skyeye/grafana-viewer-token)" |
+    curl --config - -fsS -w '%{stderr}HTTP %{http_code}\n' "http://127.0.0.1:3000$1"
+}
+gv '/api/search?type=dash-db' | jq -e 'length > 0'                       # HTTP 200, then true
+gv /api/dashboards/uid/overview-all | jq -er .meta.provisionedExternalId   # HTTP 200, then Overview/overview-all.json
+
+# 6. Validate and record
 scripts/central-deploy --dry-run --manual-applied "$TARGET"
 scripts/central-deploy --manual-applied "$TARGET"
 ```
 
-After step 3, Wan opens https://grafana.wanbrain.com in a new tab. It must open without a Grafana login page, Profile must show the same user id, the org role must be Admin and the starred dashboards must be there. `sudo docker compose logs --since 10m grafana | grep 'Failed to authenticate request'` then shows nothing new.
+If sqlite3 is not installed, `sudo` answers `command not found`: skip that check and do not install a package for it. If any other part of step 1 fails, or the check prints anything but `ok`, run `sudo docker compose start grafana` and stop there. The checkout has not moved, and `start` brings back the same container.
+
+`central-deploy` reads Grafana only for a dashboard change or on a first run with no deploy record. This change touches no dashboard, so step 5 is what checks the service account token. The token file is the one from [the one-time setup](../README.md#one-time-setup-for-scriptscentral-deploy). If a line fails, do not run step 6. `HTTP 401` means Grafana does not accept that token: replace it as in the setup and repeat step 5.
+
+After step 4, Wan opens https://grafana.wanbrain.com in a new tab. It must open without a Grafana login page, Profile must show the same user id, the org role must be Admin and the starred dashboards must be there. `sudo docker compose logs --since 10m grafana | grep 'Failed to authenticate request'` then shows nothing new.
 
 Every account the old proxy created is still Admin, and so is every service account made through it. The switch changes neither; reviewing them is a separate decision.
 
