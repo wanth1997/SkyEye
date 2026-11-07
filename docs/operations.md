@@ -403,6 +403,109 @@ git merge --ff-only "$TARGET"
 scripts/central-deploy --manual-applied "$TARGET"
 ```
 
+### Grafana sign-in (Cloudflare Access JWT)
+
+Cloudflare Access signs a JWT for every request it lets through to `grafana.wanbrain.com` and sends it in `Cf-Access-Jwt-Assertion`. Grafana checks the signature against the team keys at `https://wanbrain.cloudflareaccess.com/cdn-cgi/access/certs` and accepts only the AUD tag of the `SkyEye Grafana` application and the team issuer (`GF_AUTH_JWT_*` in `docker-compose.yml`). It ignores `Cf-Access-Authenticated-User-Email`. Grafana used to trust that header from 127.0.0.1 and 172.16.0.0/12, so any process on the host or any container could sign in as anyone, an Admin included (P2-16).
+
+- A new account is Viewer. Raise roles in Grafana (Administration → Users and access → Users). The token carries no role, and Grafana does not overwrite a role.
+- An existing account is matched by email, in any case, on its first token sign-in and keeps its id, role, stars and preferences. From then on Grafana links it to the token's `sub`.
+- Grafana fetches the keys when a token arrives, not at startup, and keeps them in its database for 5 minutes (`GF_AUTH_JWT_CACHE_TTL`). Once that runs out with the key URL unreachable, every browser sign-in gets 401 until the URL answers again; no restart is needed. Service account tokens, so `central-deploy`, and alerting do not depend on it. After Cloudflare rotates its signing key, sign-in can fail for up to those 5 minutes.
+- Recreating the Access application, or adding a path-specific application for this hostname, gives tokens a different AUD and locks everyone out. Change `docker-compose.yml` first.
+- Grafana Live (websocket) through Access is not verified. SkyEye panels do not depend on Live.
+- `tests/grafana/test-access-jwt.sh` runs this configuration on the pinned image.
+
+#### Deploying the switch from the header proxy
+
+`central-deploy` refuses `docker-compose.yml`, so this is done by hand, with Wan at a browser. Only the Grafana UI stops, for as long as a recreate takes: 1-2 s on a local Docker, not measured on monitoring-prod. Prometheus, Loki, Alertmanager, Telegram and ingestion keep running, and `cloudflared` is not recreated.
+
+**Never send `Cf-Access-Authenticated-User-Email` to monitoring-prod, not even to see a 401.** If the old configuration is still running, that request creates an Admin account.
+
+Before step 2, Wan writes down the users and service accounts (Administration → Users and access), including their own user id.
+
+```bash
+cd /home/ubuntu/SkyEye
+
+# 0. Checks
+git status --short ; git fetch origin master
+git diff --name-only HEAD origin/master           # docker-compose.yml must be the only recreate path
+TARGET=$(git rev-parse origin/master)             # must be the newest commit
+BEFORE=$(git rev-parse HEAD)                      # for a rollback
+grep -c '^GF_ADMIN_PW=' .env                      # 1; checks the key only, never print the value
+sudo docker compose exec grafana curl -fsS -o /dev/null -w '%{http_code}\n' \
+  https://wanbrain.cloudflareaccess.com/cdn-cgi/access/certs   # 200: Grafana reaches the keys
+sudo docker compose cp grafana:/var/lib/grafana/grafana.db /home/ubuntu/grafana.db.pre-jwt
+sudo chmod 600 /home/ubuntu/grafana.db.pre-jwt    # holds token hashes; delete it once settled
+
+# 1. Move the checkout first. Compose reads this file.
+git merge --ff-only "$TARGET"
+
+# 2. Recreate Grafana only
+sudo docker compose up -d --no-deps grafana
+until curl -fsS -o /dev/null http://127.0.0.1:3000/api/health; do sleep 1; done
+
+# 3. Checks
+sudo docker compose exec grafana env | grep -E 'GF_AUTH_(PROXY|JWT)_ENABLED'   # PROXY=false, JWT=true
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/user       # 401
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Cf-Access-Jwt-Assertion: not-a-jwt' \
+  http://127.0.0.1:3000/api/user                                               # 401
+
+# 4. Validate, then reload and record. This also reads dashboards with the Viewer token.
+scripts/central-deploy --dry-run --manual-applied "$TARGET"
+scripts/central-deploy --manual-applied "$TARGET"
+```
+
+After step 3, Wan opens https://grafana.wanbrain.com in a new tab. It must open without a Grafana login page, Profile must show the same user id, the org role must be Admin and the starred dashboards must be there. `sudo docker compose logs --since 10m grafana | grep 'Failed to authenticate request'` then shows nothing new.
+
+Every account the old proxy created is still Admin, and so is every service account made through it. The switch changes neither; reviewing them is a separate decision.
+
+#### Rollback
+
+This brings the old configuration back, header hole included, so use it only to let people in again. Accounts, roles and stars stay as they are; this was checked on a local copy, not on monitoring-prod. `BEFORE` is from step 0; in a new shell, use the parent of the switch commit.
+
+```bash
+cd /home/ubuntu/SkyEye
+PROJECT=$(sudo docker inspect "$(sudo docker compose ps -q grafana)" \
+  --format '{{index .Config.Labels "com.docker.compose.project"}}')
+git show "$BEFORE:docker-compose.yml" >/tmp/docker-compose.pre-jwt.yml
+sudo docker compose -p "$PROJECT" --project-directory /home/ubuntu/SkyEye \
+  -f /tmp/docker-compose.pre-jwt.yml up -d --no-deps grafana
+```
+
+Open a revert PR right away. `central-deploy` compares Git, not containers, and will not notice that Grafana runs something else.
+
+#### Locked out
+
+Read the reason first: `sudo docker compose logs --since 10m grafana | grep 'Failed to authenticate request' | tail -5`.
+
+| The log says | Cause | Fix |
+|---|---|---|
+| `invalid audience claim (aud)` | The AUD in `docker-compose.yml` is not the application's | Roll back, then fix the value in a PR |
+| `invalid issuer claim (iss)` | The team domain is wrong | Roll back, then fix the value in a PR |
+| `error in cryptographic primitive` | The key URL belongs to another team | Roll back, then fix the value in a PR |
+| `no such host`, a timeout or a refused connection | Grafana cannot reach the key URL | Fix DNS or egress; sign-in comes back by itself. Roll back if it lasts |
+| `token is expired (exp)` | The browser's Access session ran out | Sign in to Access again |
+
+If Wan gets in but as a new Viewer account (another user id in Profile), or without Admin, set the role with the built-in admin over SSH. This turns on password login for a few minutes on the port that listens on 127.0.0.1 only; it does not bring the header back. The password lives in a 0600 file and never appears on a command line.
+
+```bash
+cd /home/ubuntu/SkyEye
+install -d -m 700 /home/ubuntu/.config/skyeye
+PW=/home/ubuntu/.config/skyeye/grafana-admin-pw CFG=/home/ubuntu/.config/skyeye/grafana-admin.curl
+(umask 077 && python3 -c 'import secrets; print(secrets.token_urlsafe(24))' >"$PW")
+(umask 077 && printf 'user = "admin:%s"\n' "$(cat "$PW")" >"$CFG")
+printf 'services:\n  grafana:\n    environment:\n      - GF_AUTH_BASIC_ENABLED=true\n' >/tmp/grafana-breakglass.yml
+sudo docker compose -f docker-compose.yml -f /tmp/grafana-breakglass.yml up -d --no-deps grafana
+sudo docker compose exec -T grafana grafana cli admin reset-admin-password --password-from-stdin <"$PW"
+G=http://127.0.0.1:3000
+curl --config "$CFG" -fsS "$G/api/users/lookup?loginOrEmail=<Wan's Access email>" | jq .id
+curl --config "$CFG" -fsS -X PATCH -H 'Content-Type: application/json' -d '{"role":"Admin"}' \
+  "$G/api/org/users/<that id>"
+sudo docker compose up -d --no-deps grafana       # password login off again
+rm "$CFG"
+```
+
+The reset replaces the built-in admin password: save the new one to 1Password, then remove `$PW`. If the built-in admin's login is no longer `admin`, put its email in the curl file instead (`admin@localhost` by default).
+
 ---
 
 ## Rotating secrets
@@ -447,7 +550,7 @@ OR openssl rand -base64 48 | tr -d '+/=' | head -c 32
 
 Update `.env` on monitoring-prod, `docker compose up -d --force-recreate grafana`. Save to 1Password.
 
-Note: `auth.proxy` + CF Access is the primary path; admin password is only used for emergency API/CLI access.
+Note: browsers sign in through Cloudflare Access (see [Grafana sign-in](#grafana-sign-in-cloudflare-access-jwt)); the admin password is only for the emergency steps there. Grafana reads `GF_ADMIN_PW` only when it creates its database, so changing `.env` alone does not change an existing password; `grafana cli admin reset-admin-password --password-from-stdin` does, as in those steps.
 
 ---
 
