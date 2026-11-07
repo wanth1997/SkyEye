@@ -28,9 +28,13 @@ mkdir -p "$FAKE_BIN"
 
 LOKI_IMAGE="$(awk '$1 == "image:" && index($2, "grafana/loki:") == 1 { print $2; exit }' \
   "$REPO_ROOT/docker-compose.yml")"
+PROM_IMAGE="$(awk '$1 == "image:" && index($2, "prom/prometheus:") == 1 { print $2; exit }' \
+  "$REPO_ROOT/docker-compose.yml")"
 REAL_DOCKER="$(command -v docker)" || fail "the Loki rule cases need a real docker CLI"
 "$REAL_DOCKER" image inspect "$LOKI_IMAGE" >/dev/null 2>&1 || \
   fail "the Loki rule cases need the pinned image: docker pull $LOKI_IMAGE"
+"$REAL_DOCKER" image inspect "$PROM_IMAGE" >/dev/null 2>&1 || \
+  fail "the reload-state case needs the pinned image: docker pull $PROM_IMAGE"
 
 cat >"$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -64,9 +68,19 @@ cat >"$FAKE_BIN/curl" <<'EOF'
 printf '%s\n' "$*" >>"$CURL_LOG"
 case "$*" in
   *-/reload*) exit "${FAKE_RELOAD_STATUS:-0}" ;;
+  # Prometheus's own gauges, as of now unless FAKE_RELOAD_AT says otherwise.
+  *9090/metrics*)
+    [[ -z "${FAKE_METRICS_DOWN:-}" ]] || { printf 'curl: (7) Failed to connect\n' >&2; exit 7; }
+    [[ -z "${FAKE_METRICS_FILE:-}" ]] || exec cat "$FAKE_METRICS_FILE"
+    printf '# HELP prometheus_config_last_reload_successful Whether the last configuration reload attempt was successful.\n'
+    printf '# TYPE prometheus_config_last_reload_successful gauge\n'
+    printf 'prometheus_config_last_reload_successful %s\n' "${FAKE_RELOAD_OK:-1}"
+    # Exponent form, as the real exposition writes it.
+    printf 'prometheus_config_last_reload_success_timestamp_seconds %.15e\n' "${FAKE_RELOAD_AT:-$(date +%s)}" ;;
+  # The scraped sample is always the stale failure from before the reload, so a
+  # check that queries it instead of /metrics fails every case.
   *query=prometheus_config_last_reload_successful*)
-    printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%s"]}]}}\n' \
-      "${FAKE_RELOAD_OK:-1}" ;;
+    printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"0"]}]}}\n' ;;
   */prometheus/api/v1/rules*)
     if [[ -n "${FAKE_LOKI_DOWN:-}" ]]; then
       printf 'curl: (7) Failed to connect\n' >&2
@@ -297,8 +311,22 @@ fi
 rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || \
   fail "a rerun at the already-merged target did not retry the reload"
 reset_logs
+if output="$(FAKE_RELOAD_AT=1000000000 deploy 2>&1)"; then
+  fail "deploy accepted a good reload older than its own reload"
+fi
+[[ "$output" == *"before this run's reload"* ]] || fail "an old reload was not reported as such: $output"
+if output="$(FAKE_METRICS_DOWN=1 deploy 2>&1)"; then
+  fail "deploy accepted a reload it could not confirm"
+fi
+[[ "$output" == *'cannot read http://127.0.0.1:9090/metrics'* ]] || \
+  fail "an unreadable /metrics was not reported: $output"
+reset_logs
 output="$(deploy)"
 [[ "$output" != Already\ up\ to\ date* ]] || fail "retry treated the pending reload as done: $output"
+# The scraped sample still says 0 here; only the live gauge says the reload worked.
+rg -q -- '9090/metrics' "$CURL_LOG" || fail "retry did not read the reload state from /metrics"
+[[ "$output" == *'Prometheus last reload successful: 1 (last good reload at '* ]] || \
+  fail "retry did not show the live reload state: $output"
 rg -q 'test rules /tmp/trading-derived.test.yml' "$DOCKER_LOG" || \
   fail "retry did not revalidate the checkout before reloading"
 rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || fail "retry did not reload Prometheus"
@@ -306,6 +334,33 @@ rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || fail "retry did
 reset_logs
 output="$(deploy)"
 [[ "$output" == Already\ up\ to\ date* ]] || fail "successful retry was not recorded as applied: $output"
+
+printf 'case: the reload state is read from the pinned Prometheus'"'"'s real /metrics\n'
+# One networkless container: a good reload, then a failed one, each followed by
+# its /metrics. The fake curl replays them, so the parser sees the real format.
+"$REAL_DOCKER" run --rm --pull=never --network none --entrypoint /bin/sh "$PROM_IMAGE" -c '
+printf "global:\n  scrape_interval: 15s\n" >/tmp/p.yml
+/bin/prometheus --config.file=/tmp/p.yml --storage.tsdb.path=/tmp/data --web.enable-lifecycle \
+  >/tmp/prometheus.log 2>&1 &
+tries=0
+until wget -q -O /dev/null http://127.0.0.1:9090/-/ready 2>/dev/null; do
+  tries=$((tries + 1)); [ "$tries" -lt 120 ] || exit 1; sleep 0.25
+done
+wget -q -O /dev/null --post-data= http://127.0.0.1:9090/-/reload || exit 1
+wget -q -O /tmp/good http://127.0.0.1:9090/metrics || exit 1
+printf "bogus: [\n" >>/tmp/p.yml
+! wget -q -O /dev/null --post-data= http://127.0.0.1:9090/-/reload 2>/dev/null || exit 1
+wget -q -O /tmp/bad http://127.0.0.1:9090/metrics || exit 1
+cat /tmp/good; echo @@failed-reload@@; cat /tmp/bad' >"$WORK/real-metrics" || \
+  fail "the pinned Prometheus did not produce a good and a failed reload"
+awk '/^@@failed-reload@@$/ { exit } { print }' "$WORK/real-metrics" >"$WORK/real-metrics-good"
+awk 'found { print } /^@@failed-reload@@$/ { found = 1 }' "$WORK/real-metrics" >"$WORK/real-metrics-bad"
+output="$(FAKE_METRICS_FILE="$WORK/real-metrics-good" deploy --status)" || fail "status failed on real /metrics: $output"
+[[ "$output" == *'Prometheus last reload successful: 1 (last good reload at 20'* ]] || \
+  fail "real /metrics after a good reload was not read as successful: $output"
+output="$(FAKE_METRICS_FILE="$WORK/real-metrics-bad" deploy --status)" || fail "status failed on real /metrics: $output"
+[[ "$output" == *'Prometheus last reload successful: 0 (unsuccessful config reload'* ]] || \
+  fail "real /metrics after a failed reload was not read as failed: $output"
 
 printf 'case: Alertmanager changes are checked with amtool and reloaded\n'
 reset_logs

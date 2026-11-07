@@ -149,11 +149,56 @@ for sample in payload["data"]["result"]:
 '
 }
 
+# Reads the reload state Prometheus holds now from its own /metrics. A query
+# would return the last scraped sample, which can predate a reload by a whole
+# scrape interval and so report a reload that just succeeded as failed.
+# /-/reload answers only after the gauges are set, so no wait is needed.
+IFS= read -r -d '' PROM_RELOAD_PY <<'PY' || true
+import sys
+import time
+
+since = sys.argv[1]
+values = {}
+for line in sys.stdin:
+    name, _, rest = line.partition(" ")
+    if name in ("prometheus_config_last_reload_successful",
+                "prometheus_config_last_reload_success_timestamp_seconds"):
+        try:
+            values[name] = float(rest.split()[0])
+        except (IndexError, ValueError):
+            sys.exit("Prometheus /metrics has an unreadable %s line" % name)
+ok = values.get("prometheus_config_last_reload_successful")
+at = values.get("prometheus_config_last_reload_success_timestamp_seconds")
+if ok is None or at is None:
+    sys.exit("Prometheus /metrics does not report its reload state")
+when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at))
+if ok != 1:
+    sys.exit("unsuccessful config reload (last good reload at %s)" % when)
+if since and at < float(since):
+    sys.exit("the last good reload is from %s, before this run's reload" % when)
+print("1 (last good reload at %s)" % when)
+PY
+
+# Prints the reload state; with SINCE (epoch seconds) it also fails unless the
+# last good reload happened at or after it. Returns 2 if /metrics is unreadable.
+prom_reload_state() {
+  local since="${1:-}" metrics
+  if ! metrics="$("$CURL_BIN" -fsS --max-time 10 "$PROM_URL/metrics" 2>&1)"; then
+    printf 'cannot read %s/metrics: %s\n' "$PROM_URL" "${metrics##*$'\n'}"
+    return 2
+  fi
+  python3 -I -c "$PROM_RELOAD_PY" "$since" <<<"$metrics"
+}
+
 show_status() {
-  local reload_ok
-  reload_ok="$(prom_query 'prometheus_config_last_reload_successful')" || \
-    die "cannot query Prometheus at $PROM_URL"
-  printf 'Prometheus last reload successful: %s\n' "${reload_ok#value=}"
+  local reload_state status=0
+  reload_state="$(prom_reload_state 2>&1)" || status=$?
+  [[ "$status" -ne 2 ]] || die "$reload_state"
+  if [[ "$status" -eq 0 ]]; then
+    printf 'Prometheus last reload successful: %s\n' "$reload_state"
+  else
+    printf 'Prometheus last reload successful: 0 (%s)\n' "$reload_state"
+  fi
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local applied
     applied="$(read_applied)"
@@ -739,6 +784,7 @@ fi
 undo_sha="${applied_sha:-$head_sha}"
 rollback_hint="rerun scripts/central-deploy after fixing the cause to retry; to return to the previous config instead: git reset --hard $undo_sha && curl -fsS -X POST $PROM_URL/-/reload"
 if [[ "$prom_reload" -eq 1 ]]; then
+  reload_started="$(date +%s)"
   "$CURL_BIN" -fsS -X POST "$PROM_URL/-/reload" >/dev/null || \
     die "Prometheus rejected the reload; $rollback_hint"
   printf 'Prometheus reloaded\n'
@@ -750,9 +796,9 @@ if [[ "$am_reload" -eq 1 ]]; then
 fi
 
 if [[ "$prom_reload" -eq 1 ]]; then
+  reload_state="$(prom_reload_state "$reload_started" 2>&1)" || \
+    die "Prometheus did not confirm this reload: $reload_state; $rollback_hint"
   show_status
-  [[ "$(prom_query 'prometheus_config_last_reload_successful')" == "value=1" ]] || \
-    die "Prometheus reports an unsuccessful config reload; $rollback_hint"
 fi
 confirm_services
 applied_path="$(applied_file)"

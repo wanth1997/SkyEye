@@ -135,6 +135,8 @@ Before the checkout moves, in a dry run too, it checks the target commit:
 
 The rule check does not catch a valid rule that means the wrong thing: a label typo that never matches, a log query used as an alert (it loads and only fails when evaluated), query limits, or Alertmanager routing and shadow/canary policy. Dashboards are not checked past the fields above; panels, queries and datasources are not.
 
+After a Prometheus reload it reads `prometheus_config_last_reload_successful` and the success timestamp from Prometheus's own `/metrics`: the value must be 1 and the timestamp no older than this run's reload. It does not query them, because the scraped sample can be a whole scrape interval old and still show the failure from before a reload that just succeeded. `--status` reads the same live values.
+
 After the checkout moves, a changed rule or dashboard must be seen loaded before the commit is recorded in `.git/skyeye-central-deploy.applied`:
 
 - **Loki:** the rules the ruler reports at `/prometheus/api/v1/rules` must equal the rules from the throwaway ruler in everything except evaluation state, a group's `limit` included. `loki_ruler_config_last_reload_successful` stays 1 when a file is rejected, so it proves nothing. Loki 3.1.1 accepts `keep_firing_for` but drops it on load, so that field has no effect and is not confirmed.
