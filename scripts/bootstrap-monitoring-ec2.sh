@@ -50,21 +50,43 @@ else
 fi
 
 # ---------- AWS CLI v2 ----------
+# A fixed release, installed only if the download matches the sha256 below.
+# These hashes are of zips whose .sig verified against the AWS CLI Team key
+# (fingerprint FB5D B77F D5C1 18B8 0511  ADA8 A631 0ACC 4672 475C, as printed
+# in the AWS CLI install guide) on 2026-11-07; 2.39.3 was released 2026-10-30.
+# To move the pin: pick a v2 release at least 7 days old, download both
+# awscli-exe-linux-{x86_64,aarch64}-VERSION.zip and .zip.sig, check the key
+# fingerprint against the install guide, gpg --verify both, then replace the
+# version and both hashes together.
+AWSCLI_VERSION=2.39.3
+AWSCLI_SHA256_X86_64=14cb35809ad7547dd3c69fa9899a3975fbd850b6a6791f3fe264856490cd9a63
+AWSCLI_SHA256_AARCH64=f6eb845fbacb11bee87de3f5fbe8043773cbe89d0414607b44b71e216eb9226b
+
 if command -v aws >/dev/null 2>&1; then
   echo "==> AWS CLI already installed: $(aws --version)"
 else
-  echo "==> Installing AWS CLI v2 for $ARCH"
-  TMPDIR=$(mktemp -d)
-  pushd "$TMPDIR" >/dev/null
+  echo "==> Installing AWS CLI v2 $AWSCLI_VERSION for $ARCH"
   if [[ "$ARCH" == "aarch64" ]]; then
-    curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip
+    awscli_sha256="$AWSCLI_SHA256_AARCH64"
   else
-    curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+    awscli_sha256="$AWSCLI_SHA256_X86_64"
   fi
-  unzip -q awscliv2.zip
-  sudo ./aws/install
-  popd >/dev/null
-  rm -rf "$TMPDIR"
+  awscli_url="https://awscli.amazonaws.com/awscli-exe-linux-$ARCH-$AWSCLI_VERSION.zip"
+  awscli_dir=$(mktemp -d)
+  trap 'rm -rf "$awscli_dir"' EXIT
+  curl -fsSL --proto '=https' "$awscli_url" -o "$awscli_dir/awscliv2.zip"
+  awscli_actual=$(sha256sum "$awscli_dir/awscliv2.zip" | cut -d' ' -f1)
+  if [[ "$awscli_actual" != "$awscli_sha256" ]]; then
+    echo "AWS CLI download does not match the pinned sha256; nothing was installed."
+    echo "  url:      $awscli_url"
+    echo "  expected: $awscli_sha256"
+    echo "  got:      $awscli_actual"
+    exit 1
+  fi
+  unzip -q "$awscli_dir/awscliv2.zip" -d "$awscli_dir"
+  sudo "$awscli_dir/aws/install"
+  rm -rf "$awscli_dir"
+  trap - EXIT
 fi
 
 # ---------- Sanity ----------

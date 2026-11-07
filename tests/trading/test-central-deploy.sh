@@ -28,9 +28,13 @@ mkdir -p "$FAKE_BIN"
 
 LOKI_IMAGE="$(awk '$1 == "image:" && index($2, "grafana/loki:") == 1 { print $2; exit }' \
   "$REPO_ROOT/docker-compose.yml")"
+PROM_IMAGE="$(awk '$1 == "image:" && index($2, "prom/prometheus:") == 1 { print $2; exit }' \
+  "$REPO_ROOT/docker-compose.yml")"
 REAL_DOCKER="$(command -v docker)" || fail "the Loki rule cases need a real docker CLI"
 "$REAL_DOCKER" image inspect "$LOKI_IMAGE" >/dev/null 2>&1 || \
   fail "the Loki rule cases need the pinned image: docker pull $LOKI_IMAGE"
+"$REAL_DOCKER" image inspect "$PROM_IMAGE" >/dev/null 2>&1 || \
+  fail "the reload-state case needs the pinned image: docker pull $PROM_IMAGE"
 
 cat >"$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -64,9 +68,19 @@ cat >"$FAKE_BIN/curl" <<'EOF'
 printf '%s\n' "$*" >>"$CURL_LOG"
 case "$*" in
   *-/reload*) exit "${FAKE_RELOAD_STATUS:-0}" ;;
+  # Prometheus's own gauges, as of now unless FAKE_RELOAD_AT says otherwise.
+  *9090/metrics*)
+    [[ -z "${FAKE_METRICS_DOWN:-}" ]] || { printf 'curl: (7) Failed to connect\n' >&2; exit 7; }
+    [[ -z "${FAKE_METRICS_FILE:-}" ]] || exec cat "$FAKE_METRICS_FILE"
+    printf '# HELP prometheus_config_last_reload_successful Whether the last configuration reload attempt was successful.\n'
+    printf '# TYPE prometheus_config_last_reload_successful gauge\n'
+    printf 'prometheus_config_last_reload_successful %s\n' "${FAKE_RELOAD_OK:-1}"
+    # Exponent form, as the real exposition writes it.
+    printf 'prometheus_config_last_reload_success_timestamp_seconds %.15e\n' "${FAKE_RELOAD_AT:-$(date +%s)}" ;;
+  # The scraped sample is always the stale failure from before the reload, so a
+  # check that queries it instead of /metrics fails every case.
   *query=prometheus_config_last_reload_successful*)
-    printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%s"]}]}}\n' \
-      "${FAKE_RELOAD_OK:-1}" ;;
+    printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"0"]}]}}\n' ;;
   */prometheus/api/v1/rules*)
     if [[ -n "${FAKE_LOKI_DOWN:-}" ]]; then
       printf 'curl: (7) Failed to connect\n' >&2
@@ -204,6 +218,28 @@ output="$(deploy)"
 [[ "$output" == Already\ up\ to\ date* ]] || fail "applied checkout did not report a no-op: $output"
 [[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "applied checkout validated or reloaded"
 
+printf 'case: a second central-deploy on the same checkout stops before reading anything\n'
+live_git="$(git -C "$LIVE" rev-parse --absolute-git-dir)"
+touch -t 200001010000 "$live_git/FETCH_HEAD"
+# Held on this shell's own descriptor, the way a running deploy holds it.
+exec 8>>"$live_git/skyeye-central-deploy.lock"
+python3 -I -c 'import fcntl; fcntl.flock(8, fcntl.LOCK_EX | fcntl.LOCK_NB)'
+for mode in deploy --dry-run; do
+  arguments=()
+  [[ "$mode" == deploy ]] || arguments=("$mode")
+  reset_logs
+  if output="$(deploy ${arguments[@]+"${arguments[@]}"} 2>&1)"; then
+    fail "$mode ran while another central-deploy held the checkout"
+  fi
+  [[ "$output" == *'another central-deploy is running on this checkout'* ]] || \
+    fail "$mode did not report the running deploy: $output"
+  [[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "$mode validated or reloaded while locked"
+  [[ -z "$(find "$live_git/FETCH_HEAD" -newermt '2001-01-01')" ]] || fail "$mode fetched while locked"
+done
+deploy --status >/dev/null || fail "--status waited on the deploy lock"
+exec 8>&-
+[[ "$(deploy)" == Already\ up\ to\ date* ]] || fail "deploy did not run once the lock was released"
+
 "$SEED/scripts/trading-target" --file "$SEED/prometheus/rules/trading-targets.yml" \
   add --server trading02 --strategy deploy-lane-btc >/dev/null
 publish 'add deploy-lane-btc'
@@ -229,6 +265,36 @@ fi
   git -C "$LIVE" worktree list >&2
   fail "dry run left its validation worktree registered"
 }
+
+printf 'case: --expect deploys only the commit that was reviewed\n'
+target="$(git -C "$SEED" rev-parse HEAD)"
+for mode in --dry-run deploy; do
+  arguments=(--expect "$before")
+  [[ "$mode" == deploy ]] || arguments=(--dry-run "${arguments[@]}")
+  reset_logs
+  if output="$(deploy "${arguments[@]}" 2>&1)"; then
+    fail "$mode accepted --expect naming a commit that is not origin/master"
+  fi
+  [[ "$output" == *"--expect names ${before:0:12}, but origin/master is ${target:0:12}"* ]] || \
+    fail "$mode did not name both commits: $output"
+  [[ "$(live_head)" == "$before" ]] || fail "$mode with a wrong --expect moved the checkout"
+  [[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "$mode with a wrong --expect validated or reloaded"
+done
+for wrong in 0123456789abcdef0123456789abcdef01234567 0123456; do
+  if output="$(deploy --dry-run --expect "$wrong" 2>&1)"; then
+    fail "an unknown --expect commit was accepted"
+  fi
+  [[ "$output" == *'is not a known commit'* ]] || fail "unknown --expect was not reported: $output"
+done
+for bad in "--expect" "--expect master" "--expect HEAD" "--status --expect $target"; do
+  # shellcheck disable=SC2086
+  if deploy $bad >/dev/null 2>&1; then
+    fail "deploy accepted: $bad"
+  fi
+done
+[[ "$(live_head)" == "$before" ]] || fail "refused --expect forms moved the checkout"
+deploy --dry-run --expect "${target:0:12}" >/dev/null || fail "dry run refused a matching short --expect"
+deploy --dry-run --expect "$target" >/dev/null || fail "dry run refused a matching full --expect"
 
 printf 'case: failed validation leaves the checkout untouched\n'
 reset_logs
@@ -278,6 +344,12 @@ if rg -q -- '9093/-/reload' "$CURL_LOG"; then
 fi
 [[ "$output" == *"server_id=trading02 strategy=deploy-lane-btc"* ]] || \
   fail "deploy did not print the live inventory: $output"
+if output="$(deploy --expect "$before" 2>&1)"; then
+  fail "an applied checkout treated a wrong --expect as a no-op"
+fi
+[[ "$output" == *'--expect names'* ]] || fail "applied checkout did not report the --expect mismatch: $output"
+[[ "$(deploy --expect "$(live_head)")" == Already\ up\ to\ date* ]] || \
+  fail "a matching --expect on an applied checkout was not a no-op"
 
 printf 'case: a failed reload is retried by the next run without a manual reset\n'
 "$SEED/scripts/trading-target" --file "$SEED/prometheus/rules/trading-targets.yml" \
@@ -297,8 +369,22 @@ fi
 rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || \
   fail "a rerun at the already-merged target did not retry the reload"
 reset_logs
+if output="$(FAKE_RELOAD_AT=1000000000 deploy 2>&1)"; then
+  fail "deploy accepted a good reload older than its own reload"
+fi
+[[ "$output" == *"before this run's reload"* ]] || fail "an old reload was not reported as such: $output"
+if output="$(FAKE_METRICS_DOWN=1 deploy 2>&1)"; then
+  fail "deploy accepted a reload it could not confirm"
+fi
+[[ "$output" == *'cannot read http://127.0.0.1:9090/metrics'* ]] || \
+  fail "an unreadable /metrics was not reported: $output"
+reset_logs
 output="$(deploy)"
 [[ "$output" != Already\ up\ to\ date* ]] || fail "retry treated the pending reload as done: $output"
+# The scraped sample still says 0 here; only the live gauge says the reload worked.
+rg -q -- '9090/metrics' "$CURL_LOG" || fail "retry did not read the reload state from /metrics"
+[[ "$output" == *'Prometheus last reload successful: 1 (last good reload at '* ]] || \
+  fail "retry did not show the live reload state: $output"
 rg -q 'test rules /tmp/trading-derived.test.yml' "$DOCKER_LOG" || \
   fail "retry did not revalidate the checkout before reloading"
 rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || fail "retry did not reload Prometheus"
@@ -306,6 +392,33 @@ rg -q -- '-X POST http://127.0.0.1:9090/-/reload' "$CURL_LOG" || fail "retry did
 reset_logs
 output="$(deploy)"
 [[ "$output" == Already\ up\ to\ date* ]] || fail "successful retry was not recorded as applied: $output"
+
+printf 'case: the reload state is read from the pinned Prometheus'"'"'s real /metrics\n'
+# One networkless container: a good reload, then a failed one, each followed by
+# its /metrics. The fake curl replays them, so the parser sees the real format.
+"$REAL_DOCKER" run --rm --pull=never --network none --entrypoint /bin/sh "$PROM_IMAGE" -c '
+printf "global:\n  scrape_interval: 15s\n" >/tmp/p.yml
+/bin/prometheus --config.file=/tmp/p.yml --storage.tsdb.path=/tmp/data --web.enable-lifecycle \
+  >/tmp/prometheus.log 2>&1 &
+tries=0
+until wget -q -O /dev/null http://127.0.0.1:9090/-/ready 2>/dev/null; do
+  tries=$((tries + 1)); [ "$tries" -lt 120 ] || exit 1; sleep 0.25
+done
+wget -q -O /dev/null --post-data= http://127.0.0.1:9090/-/reload || exit 1
+wget -q -O /tmp/good http://127.0.0.1:9090/metrics || exit 1
+printf "bogus: [\n" >>/tmp/p.yml
+! wget -q -O /dev/null --post-data= http://127.0.0.1:9090/-/reload 2>/dev/null || exit 1
+wget -q -O /tmp/bad http://127.0.0.1:9090/metrics || exit 1
+cat /tmp/good; echo @@failed-reload@@; cat /tmp/bad' >"$WORK/real-metrics" || \
+  fail "the pinned Prometheus did not produce a good and a failed reload"
+awk '/^@@failed-reload@@$/ { exit } { print }' "$WORK/real-metrics" >"$WORK/real-metrics-good"
+awk 'found { print } /^@@failed-reload@@$/ { found = 1 }' "$WORK/real-metrics" >"$WORK/real-metrics-bad"
+output="$(FAKE_METRICS_FILE="$WORK/real-metrics-good" deploy --status)" || fail "status failed on real /metrics: $output"
+[[ "$output" == *'Prometheus last reload successful: 1 (last good reload at 20'* ]] || \
+  fail "real /metrics after a good reload was not read as successful: $output"
+output="$(FAKE_METRICS_FILE="$WORK/real-metrics-bad" deploy --status)" || fail "status failed on real /metrics: $output"
+[[ "$output" == *'Prometheus last reload successful: 0 (unsuccessful config reload'* ]] || \
+  fail "real /metrics after a failed reload was not read as failed: $output"
 
 printf 'case: Alertmanager changes are checked with amtool and reloaded\n'
 reset_logs
@@ -397,6 +510,19 @@ restore() {
 }
 recorded() {
   cat "$applied_record" 2>/dev/null || true
+}
+# Commits the seed's working tree on a new branch NAME started at START (default
+# master) and merges it into master with a merge commit, as a GitHub merge
+# does, so master's tip stays the merge's first parent. Then pushes master.
+merge_branch() {
+  local name="$1" message="$2" start="${3:-master}"
+  git_q -C "$SEED" checkout --quiet -b "$name" "$start"
+  git_q -C "$SEED" add -A
+  git_q -C "$SEED" commit --quiet -m "$message"
+  git_q -C "$SEED" checkout --quiet master
+  git_q -C "$SEED" merge --quiet --no-ff -m "merge $name" "$name"
+  git_q -C "$SEED" branch --quiet -D "$name"
+  git_q -C "$SEED" push --quiet origin master
 }
 seed_head() {
   git -C "$SEED" rev-parse HEAD
@@ -733,6 +859,128 @@ FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded 'applied uid still served' \
 expect_applied 'both uids gone'
 restore
 
+# DEPLOY-VALIDATE C5. Run 1 publishes uid B, Grafana loads it, the run fails on
+# Loki. The next commit deletes the file. HEAD then holds no B and applied never
+# did, so only the history between them shows that B may still be served.
+for record in recorded unrecorded; do
+  printf 'case: a uid a failed run published stays checked once its file is gone (%s)\n' "$record"
+  [[ "$record" == recorded ]] || rm -f "$applied_record"
+  set_dashboard "$FLEET" uid '"fleet-intermediate"'
+  change_rule
+  publish 'uid change with a rule change'
+  intermediate="$(seed_head)"
+  rm -rf "$WORK/grafana-intermediate"
+  cp -R "$SEED/grafana/dashboards" "$WORK/grafana-intermediate"
+  FAKE_GRAFANA_ROOT="$WORK/grafana-intermediate" FAKE_LOKI_STALE="$LOKI_BASE" \
+    expect_not_loaded "$record: intermediate uid published" 'loaded rules differ'
+  git_q -C "$SEED" rm --quiet "$FLEET"
+  publish 'remove the dashboard'
+  for attempt in first rerun; do
+    FAKE_GRAFANA_ROOT="$WORK/grafana-intermediate" expect_not_loaded "$record: $attempt" \
+      'fleet-intermediate was removed but is still served'
+    [[ "$output" == *"(last in Trading/trading-strategy-fleet.json at commit ${intermediate:0:12})"* ]] || \
+      fail "$record $attempt: the message did not name where the uid was last: $output"
+    [[ "$output" == *'check in Grafana (/d/<uid>) whether each is still there'* ]] || \
+      fail "$record $attempt: the message did not say what to check: $output"
+  done
+  expect_applied "$record: intermediate uid gone"
+  restore
+done
+
+printf 'case: a dashboard added and removed since the last apply must not be served\n'
+mkdir -p "$(dirname "$SEED/$NEW_DASHBOARD")"
+printf '{"uid":"short-lived","title":"Short lived"}\n' >"$SEED/$NEW_DASHBOARD"
+change_rule
+publish 'short-lived dashboard with a rule change'
+rm -rf "$WORK/grafana-short-lived"
+cp -R "$SEED/grafana/dashboards" "$WORK/grafana-short-lived"
+FAKE_GRAFANA_ROOT="$WORK/grafana-short-lived" FAKE_LOKI_STALE="$LOKI_BASE" \
+  expect_not_loaded 'short-lived dashboard published' 'loaded rules differ'
+git_q -C "$SEED" rm --quiet "$NEW_DASHBOARD"
+publish 'remove the short-lived dashboard'
+# Its net diff since the last apply is empty: only the rule changed.
+[[ -z "$(git -C "$SEED" diff --name-only "$base" HEAD -- grafana/dashboards)" ]] || \
+  fail "fixture expected no net dashboard change"
+for attempt in first rerun; do
+  FAKE_GRAFANA_ROOT="$WORK/grafana-short-lived" expect_not_loaded "short-lived, $attempt" \
+    'short-lived was removed but is still served (last in Utilities/new.json'
+done
+expect_applied 'short-lived dashboard gone'
+restore
+
+# Review R1 C3. Run 1 publishes content B under the same uid, Grafana loads it,
+# the run fails on Loki. The next commit puts content A back. Its first deploy
+# fails before Grafana loads A, and the rerun starts with HEAD at the target:
+# neither net diff names the file, so only the history shows that Grafana may
+# still serve B.
+printf 'case: a dashboard changed and changed back since the last apply must match its file\n'
+cp "$SEED/$FLEET" "$WORK/fleet-content-a.json"
+change_dashboard "$FLEET" content-b
+change_rule
+publish 'dashboard content B with a rule change'
+rm -rf "$WORK/grafana-content-b"
+cp -R "$SEED/grafana/dashboards" "$WORK/grafana-content-b"
+FAKE_GRAFANA_ROOT="$WORK/grafana-content-b" FAKE_LOKI_STALE="$LOKI_BASE" \
+  expect_not_loaded 'content B published' 'loaded rules differ'
+cp "$WORK/fleet-content-a.json" "$SEED/$FLEET"
+publish 'dashboard back to content A'
+[[ -z "$(git -C "$SEED" diff --name-only "$base" HEAD -- grafana/dashboards)" ]] || \
+  fail "fixture expected no net dashboard change"
+for attempt in first rerun; do
+  FAKE_GRAFANA_ROOT="$WORK/grafana-content-b" expect_not_loaded "content A not loaded, $attempt" \
+    'trading-strategy-fleet still serves other content than Trading/trading-strategy-fleet.json'
+done
+expect_applied 'content A loaded'
+restore
+
+# The same change and change back, each merged with a merge commit: on the
+# rerun only the merges' diffs against their first parent name the file.
+printf 'case: a dashboard merged branches changed and changed back must match its file\n'
+cp "$SEED/$FLEET" "$WORK/fleet-content-a.json"
+change_dashboard "$FLEET" merged-content-b
+change_rule
+merge_branch content-b 'dashboard content B with a rule change'
+rm -rf "$WORK/grafana-merged-b"
+cp -R "$SEED/grafana/dashboards" "$WORK/grafana-merged-b"
+FAKE_GRAFANA_ROOT="$WORK/grafana-merged-b" FAKE_LOKI_STALE="$LOKI_BASE" \
+  expect_not_loaded 'merged content B published' 'loaded rules differ'
+cp "$WORK/fleet-content-a.json" "$SEED/$FLEET"
+merge_branch content-a 'dashboard back to content A'
+[[ -z "$(git -C "$SEED" diff --name-only "$base" HEAD -- grafana/dashboards)" ]] || \
+  fail "fixture expected no net dashboard change"
+for attempt in first rerun; do
+  FAKE_GRAFANA_ROOT="$WORK/grafana-merged-b" expect_not_loaded "merged content A not loaded, $attempt" \
+    'trading-strategy-fleet still serves other content than Trading/trading-strategy-fleet.json'
+done
+expect_applied 'merged content A loaded'
+restore
+
+# Review R2 C4. The last apply already holds a dashboard change. A branch forked
+# before that change, which never touches the dashboard, is then merged: the
+# merge differs from its second parent in that file, but master never changed
+# it after the last apply, so a UI edit made to it since must still be kept.
+printf 'case: merging a branch forked before the last apply keeps a UI edit to a dashboard it did not touch\n'
+forked="$(seed_head)"
+change_dashboard "$FLEET" applied-before-the-merge
+publish 'dashboard change'
+expect_applied 'dashboard change before the merge'
+rm -rf "$WORK/grafana-ui-edit"
+cp -R "$LIVE/grafana/dashboards" "$WORK/grafana-ui-edit"
+change_dashboard "$FLEET" 'edited in the UI after the last apply'
+cp "$SEED/$FLEET" "$WORK/grafana-ui-edit/Trading/trading-strategy-fleet.json"
+git_q -C "$SEED" checkout --quiet -- "$FLEET"
+mkdir -p "$SEED/docs"
+printf 'note\n' >"$SEED/docs/forked-before-apply.md"
+merge_branch forked-before-apply 'docs change on a branch forked before the last apply' "$forked"
+[[ -n "$(git -C "$SEED" diff --name-only HEAD^2 HEAD -- "$FLEET")" ]] || \
+  fail "fixture expected the merge to differ from its second parent in $FLEET"
+[[ -z "$(git -C "$SEED" diff --name-only "$(recorded)" HEAD -- grafana/dashboards)" ]] || \
+  fail "fixture expected no dashboard change since the last apply"
+FAKE_GRAFANA_ROOT="$WORK/grafana-ui-edit" expect_applied 'older branch merged after a UI edit'
+[[ "$output" == *'Grafana loaded '*': 0 confirmed, 0 removed'* ]] || \
+  fail "older branch merged: Grafana was not checked, or held a dashboard to its file: $output"
+restore
+
 printf 'case: a UI edit to a dashboard that did not change does not block a deploy\n'
 change_dashboard "$FLEET" changed
 publish 'dashboard content change'
@@ -851,8 +1099,10 @@ printf '# recreate needed\n' >>"$SEED/docker-compose.yml"
 publish 'recreate change with a rule change'
 target="$(seed_head)"
 git_q -C "$LIVE" pull --quiet --ff-only origin master
+expect_refused 'manual apply with another --expect' '--expect names' \
+  --manual-applied "${target:0:12}" --expect "$base"
 FAKE_LOKI_STALE="$LOKI_BASE" expect_not_loaded 'manual apply, stale ruler' 'loaded rules differ' \
-  --manual-applied "${target:0:12}"
+  --manual-applied "${target:0:12}" --expect "$target"
 expect_applied 'manual apply, loaded' --manual-applied "${target:0:12}"
 restore
 

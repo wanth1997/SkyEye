@@ -24,9 +24,13 @@ Neither component starts, stops, signals, or attaches to the trading process.
 | `deployment.env.example` | Complete host-specific deployment contract without real secrets |
 | `probe.sh` | Read-only process/manifest/marker/log probe |
 | `pnl-history.sh` | Incremental, cross-run accumulated Real P&L history builder |
-| `setup-macos.sh` | Render, validate, install and optionally start Alloy + launchd |
+| `setup-macos.sh` | Render, validate and install Alloy + launchd, applying only what changed, with rollback |
 | `com.wanbrain.skyeye-trading-probe.plist.tmpl` | 15-second user launchd job |
 | `com.wanbrain.skyeye-trading-pnl-history.plist.tmpl` | Independent 60-second history job |
+
+The installers also need `../install-common.sh` and `../alloy-versions.env`, so copy the whole `agents/alloy` directory to a host. Both installers refuse an Alloy version that `alloy-versions.env` does not list (macOS: 1.18.1; Linux: 1.16.3, 1.18.1), and only one SkyEye install, retire or uninstall runs at a time on a host; see [Alloy versions](../README.md#alloy-versions) and [One run at a time](../README.md#one-run-at-a-time).
+
+**Before re-running any installer on a host, check its Alloy version read-only** with `alloy --version | head -1`. If the version is not listed, stop and report it instead of re-running; do not use `SKYEYE_ALLOY_UNTESTED_VERSION` on a production host. The operator confirms each host's version before a rollout.
 
 ## Production Mac install
 
@@ -61,6 +65,29 @@ Neither component starts, stops, signals, or attaches to the trading process.
    launchctl print "gui/$(id -u)/com.wanbrain.skyeye-trading-pnl-history"
    ```
 
+### What a Mac install or re-run does
+
+`setup-macos.sh` stages every file next to its destination (`.NAME.staged.XXXXXX`, a name neither Alloy nor launchd loads), then checks the staged files: `bash -n` for both scripts, `plutil -lint` for both plists, and `alloy validate` on the staged `config.alloy` together with every other `*.alloy` in `$(brew --prefix)/etc/alloy`, because the brew service loads that whole directory. If any check fails, no live file or service is touched.
+
+It then replaces only the files whose content or mode changed, and applies only what that needs:
+
+| What changed | What it does to Alloy and launchd |
+|---|---|
+| Nothing | Prints `Already installed and running` and touches nothing |
+| `config.alloy` only | `POST /-/reload`; Alloy keeps running and its environment |
+| `config.env` or `extra-args.txt` since the last install, no record of them (the first run of this version of the script), or `--restart-alloy` | `brew services restart` |
+| Alloy's brew service not loaded | Starts it |
+| A plist, or a job that is not loaded | `bootout` (if loaded), `bootstrap`, `enable` for that job only |
+| `probe.sh` or `pnl-history.sh` only | Nothing: the next run of the job executes the new file |
+
+After a reload or (re)start it waits up to 60 seconds for `/-/ready` (at the `--server.http.listen-addr` in the current `extra-args.txt`, `127.0.0.1:12345` by default). If the reload is rejected, Alloy is not ready, or a job does not load, every replaced file is restored byte for byte and Alloy and the jobs are put back as they were (reload again, restart again, or stop). The exit code is then 1. If that rollback cannot finish, the exit code is 3 and a `CRITICAL: rollback_incomplete` message lists what to check.
+
+`config.env` and `extra-args.txt` are yours: the installer never writes them and never keeps a copy, because `config.env` holds the service token. So when a run restarted Alloy because one of them changed, or because there is no record of them, and the install then fails, it cannot put Alloy back as it was. It restores its own files, restarts Alloy once more, and always exits 3 with `CRITICAL: rollback_incomplete`. The message says whether Alloy answers at the new address. It cannot check the old address. It also removes `installed-env.sha256`, so the next run restarts Alloy. To recover by hand, put `config.env` and `extra-args.txt` back the way Alloy last ran with them (or fix them), then run `brew services restart grafana/grafana/alloy` and check `curl -fsS http://<listen-addr>/-/ready`.
+
+Every run that changes something prints `Rollback record: $(brew --prefix)/var/skyeye-trading/install-backup/<UTC>-<pid>/`, which holds the replaced files under `previous/`, with `present.list`, `absent.list` and `transaction.meta`. None of them holds a credential. A successful (re)start also records a hash of `config.env` and `extra-args.txt` in `$(brew --prefix)/var/skyeye-trading/installed-env.sha256`, so the next run knows whether a reload is enough.
+
+`--no-start` installs files without applying them, so it runs only while Alloy and both launchd jobs are stopped, as on a new host. Anywhere else it refuses, because the files would go live at the next restart without anyone watching. Re-run without it instead; a config-only change is then a reload.
+
 ## Linux install alongside an existing Alloy config
 
 The Linux path does not replace the base config or define another remote-write
@@ -80,7 +107,9 @@ full shadow → canary process.
 **Add** (host first, then central):
 
 1. Host, from a SkyEye checkout, with a mode-`0600` env copied from a
-   `deployment-linux-*.env.example` and edited for the strategy:
+   `deployment-linux-*.env.example` and edited for the strategy. Check
+   `alloy --version | head -1` first (see above); `add` refuses an unlisted
+   version before it touches anything:
 
    ~~~bash
    sudo agents/alloy/trading/setup-linux.sh add --env-file /root/STRATEGY.env
@@ -94,6 +123,16 @@ full shadow → canary process.
    (first switch to directory mode, reload unsupported, or Alloy stopped) it
    refuses and names the pipelines a restart interrupts; re-run with
    `--restart-alloy` once that is acceptable. `--no-start` stages files only.
+   An instance that is already installed keeps both facts about its probe
+   timer, whether it is enabled at boot and whether it is running, while
+   `add` updates its env or fragment, and the output says so. A timer someone
+   disabled (for example a Mainnet probe) stays disabled. A timer that was
+   enabled but stopped (`systemctl stop`) is enabled again without `--now`,
+   and the probe does not run. A timer that was started but not enabled at
+   boot is started again and stays not enabled. Only `--enable-probe` (not
+   with `--no-start`) enables and starts a stopped or disabled instance, for
+   example after an `add --no-start`. A new instance is always enabled and
+   run once.
    Identity and path values (`TQ_STRATEGY`, `TQ_INSTANCE_ID`, the executable,
    config, log, manifest and textfile settings) must be literal `NAME=value`,
    `NAME="value"` or `NAME='value'` assignments with no `$`, backquote or

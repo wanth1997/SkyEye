@@ -20,11 +20,14 @@ Standard library only; no third-party packages.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -274,6 +277,37 @@ def load(path: Path) -> tuple[Inventory, str]:
     return parse_inventory(text, str(path)), text
 
 
+@contextlib.contextmanager
+def inventory_lock(path: Path, timeout: float):
+    """Serialises add and remove on one inventory.
+
+    Both read, modify and replace the file, so two concurrent runs would each
+    drop the other's row. flock(2) on the directory leaves no lock file next to
+    the rules, is not lost when os.replace swaps the file's inode, and goes
+    away with the process, so a killed run leaves nothing behind.
+    """
+    try:
+        handle = os.open(path.parent, os.O_RDONLY)
+    except FileNotFoundError:
+        raise InventoryError(f"inventory not found: {path}") from None
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise InventoryError(
+                        f"another trading-target add or remove is updating {path.parent} "
+                        f"(waited {timeout:g}s); retry when it has finished"
+                    ) from None
+                time.sleep(0.05)
+        yield
+    finally:
+        os.close(handle)
+
+
 def write_atomic(path: Path, text: str) -> None:
     mode = path.stat().st_mode & 0o777
     handle, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
@@ -297,6 +331,11 @@ def describe(row: Row) -> str:
 
 def cmd_add(args: argparse.Namespace) -> int:
     path = Path(args.file)
+    with inventory_lock(path, args.lock_timeout):
+        return add_locked(args, path)
+
+
+def add_locked(args: argparse.Namespace, path: Path) -> int:
     inventory, original = load(path)
     labels = {
         "product": args.product,
@@ -333,6 +372,11 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 def cmd_remove(args: argparse.Namespace) -> int:
     path = Path(args.file)
+    with inventory_lock(path, args.lock_timeout):
+        return remove_locked(args, path)
+
+
+def remove_locked(args: argparse.Namespace, path: Path) -> int:
     inventory, original = load(path)
     identity = (args.server, args.strategy)
     removed = [row for row in inventory.rows if row.identity == identity]
@@ -581,6 +625,16 @@ def cmd_render_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def lock_timeout(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = -1.0
+    if not 0 <= seconds <= 3600:
+        raise argparse.ArgumentTypeError(f"must be between 0 and 3600 seconds, got {value}")
+    return seconds
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scripts/trading-target",
@@ -595,6 +649,9 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--strategy", required=True, help="strategy label")
         command.add_argument("--dry-run", action="store_true",
                              help="print the resulting inventory instead of writing it")
+        command.add_argument("--lock-timeout", type=lock_timeout, default=30.0, metavar="SECONDS",
+                             help="how long to wait for another add or remove on the same "
+                                  "inventory (default 30)")
 
     add = sub.add_parser("add", help="add one shadow-only target row")
     identity(add)

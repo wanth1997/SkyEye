@@ -15,6 +15,26 @@
 ---
 -->
 
+## 2026-11-07 22:30 — 安裝與部署強化（Codex review v2 剩餘項）
+
+**改動摘要：** `central-deploy` 改讀 Prometheus 的即時值確認 reload，新增 `--expect`，dashboard UID 檢查改看 applied 之後的歷史，並加上並行鎖。主機 installer 只接受測過的 Alloy 版本、加上互斥鎖，Linux `add` 保留 probe timer 原本的狀態，macOS installer 改成先驗證再替換、失敗時還原。重建主機用的 AWS CLI 鎖定版本並在安裝前比對 sha256。這次只 merge，未部署，也未在任何主機重跑 installer。
+
+**修改的檔案：**
+- `scripts/central-deploy`：reload 結果改讀 `/metrics`，要求成功 timestamp 不早於這次 reload；新增 `--expect <sha>`；absent UID 從 applied 之後的歷史推導，touched dashboard 沿 first-parent 收集；deploy 與 `--dry-run` 取非阻塞鎖。
+- `scripts/trading-target`：`add`／`remove` 對 inventory 目錄取鎖，`--lock-timeout` 預設 30 秒。
+- `agents/alloy/alloy-versions.env`、`agents/alloy/install-common.sh`：新增。測過的版本是 Linux `1.16.3 1.18.1`、macOS `1.18.1`，apt pin 是 `1.18.1-1`。共用的版本 gate 與 perl flock 都在這裡。
+- `agents/alloy/setup.sh`、`agents/alloy/uninstall.sh`：版本 gate 與 `/run/skyeye-alloy.lock`；新主機安裝後 `apt-mark hold alloy`；uninstall 先 unhold。
+- `agents/alloy/trading/setup-linux.sh`、`agents/alloy/trading/retire-linux.sh`：版本 gate 與鎖。已安裝 instance 的 enabled 與 active 狀態分開保留，新增 `--enable-probe`。
+- `agents/alloy/trading/setup-macos.sh`：檔案先 stage 並驗證；只替換有變更的檔案；只改 config 時 reload，改 env 時 restart；失敗時還原。`config.env`／`extra-args.txt` 被改過導致無法還原時，以 rc=3 回報 `rollback_incomplete`。
+- `scripts/bootstrap-monitoring-ec2.sh`：AWS CLI 鎖定 2.39.3，用 `curl -fsSL --proto '=https'` 下載，sha256 相符才安裝。
+- `scripts/verify-all`：`REQUIRED_TOOLS` 加入 `perl`。
+- `tests/alloy/test-alloy-versions.sh`、`tests/trading/test-macos-setup.sh`、`tests/bootstrap/test-bootstrap-awscli.sh`：新增；另擴充 `test-central-deploy`、`test-trading-target`、`test-setup-atomic`、`test-linux-setup`。
+- `README.md`、`agents/alloy/README.md`、`agents/alloy/trading/README.md`、`docs/trading-new-server-handoff.md`、`docs/trading-serverid-cutover-macmini-m2.md`、`docs/operations.md`：版本檢查、重跑方式、`--expect` 與 AWS CLI pin 的說明。
+
+**原因/備註：** Trading01 與 PROD02 的確切 Alloy 版本未知，重跑任何 installer 前要先在主機唯讀跑 `alloy --version`，版本不在清單內就停下回報。Mac mini 第一次跑新版 `setup-macos.sh` 會重啟 Alloy 一次，因為還沒有 env 記錄。真實的 launchd、brew services、systemd 與 Alloy reload 都沒有實跑，第一次上線要有人看著。AWS CLI 簽章公鑰 2027-07-01 到期。Linux 鎖改放 `/run`，不放 `/run/lock`，因為 `/run/lock` 是 1777，任何使用者都能搶先建立鎖檔。
+
+---
+
 ## 2026-11-07 20:10 — Grafana 改驗 Cloudflare Access JWT（P2-16）
 
 **改動摘要：** Grafana 不再相信 `Cf-Access-Authenticated-User-Email` header，改成驗證 Cloudflare Access 簽發的 `Cf-Access-Jwt-Assertion`。新使用者預設 Viewer。這次只 merge，未部署。

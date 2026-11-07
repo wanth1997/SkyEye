@@ -9,6 +9,7 @@ TIMER_TEMPLATE="$SCRIPT_DIR/skyeye-trading-probe@.timer.tmpl"
 SOURCE_PROBE="$SCRIPT_DIR/probe.sh"
 SOURCE_ACCESS="$SCRIPT_DIR/ensure-log-access.sh"
 COMMON_LIB="$SCRIPT_DIR/linux-common.sh"
+INSTALL_COMMON="$SCRIPT_DIR/../install-common.sh"
 ENV_FILE=""
 RENDER_ONLY_DIR=""
 NO_START=0
@@ -16,24 +17,32 @@ MIGRATE_SINGLETON=0
 COMPONENT_ID=""
 SUBCOMMAND=""
 RESTART_ALLOY=0
+ENABLE_PROBE=0
 
 usage() {
   printf '%s\n' \
-    'Usage: setup-linux.sh add --env-file PATH [--restart-alloy | --no-start] [--migrate-singleton]' \
+    'Usage: setup-linux.sh add --env-file PATH [--restart-alloy] [--no-start | --enable-probe] [--migrate-singleton]' \
     '       setup-linux.sh retire --strategy NAME [--restart-alloy]' \
     '       setup-linux.sh --env-file PATH [--render-only DIR] [--no-start] [--migrate-singleton]' \
     '' \
     'add      validate, install, reload Alloy and enable this strategy probe in one step.' \
-    '         Idempotent; an installed instance with a changed env is updated in place.' \
-    '         Reloads Alloy by default; a restart (which interrupts every Alloy' \
-    '         pipeline) needs --restart-alloy. --no-start stages files only.' \
+    '         Idempotent; an installed instance with a changed env is updated in place' \
+    '         and its probe timer stays as enabled-at-boot and as running as it was:' \
+    '         a stopped or disabled timer stays so until --enable-probe, which enables' \
+    '         and starts it. Reloads Alloy by default; a restart' \
+    '         (which interrupts every Alloy pipeline) needs --restart-alloy.' \
+    '         --no-start stages files only.' \
     'retire   disable this strategy probe, archive its env, fragment and metrics' \
     '         under /etc/skyeye-trading/retired/, and reload Alloy (see retire-linux.sh).' \
     '' \
     'Without a subcommand the original installer behaviour is unchanged: it restarts' \
     'Alloy unless --no-start is given. The base configuration must define' \
     'prometheus.remote_write.central and loki.write.central. Neither form starts,' \
-    'stops or signals a trading process.'
+    'stops or signals a trading process.' \
+    '' \
+    'Except for --render-only, both forms refuse an Alloy version that is not listed' \
+    'in agents/alloy/alloy-versions.env, and refuse to run while another SkyEye' \
+    'Alloy install, retire or uninstall holds /run/skyeye-alloy.lock.'
 }
 
 die() {
@@ -49,6 +58,9 @@ require_env() {
 [[ -f "$COMMON_LIB" ]] || die "missing shared helper library: $COMMON_LIB"
 # shellcheck source=agents/alloy/trading/linux-common.sh
 source "$COMMON_LIB"
+[[ -f "$INSTALL_COMMON" ]] || die "missing shared helper library: $INSTALL_COMMON"
+# shellcheck source=agents/alloy/install-common.sh
+source "$INSTALL_COMMON"
 
 escape_sed_replacement() {
   printf '%s' "$1" | sed 's/[&|]/\\&/g'
@@ -167,6 +179,11 @@ while [[ $# -gt 0 ]]; do
       NO_START=1
       shift
       ;;
+    --enable-probe)
+      [[ "$SUBCOMMAND" == "add" ]] || die "--enable-probe is only valid with the add subcommand"
+      ENABLE_PROBE=1
+      shift
+      ;;
     --migrate-singleton)
       MIGRATE_SINGLETON=1
       shift
@@ -186,6 +203,8 @@ if [[ "$SUBCOMMAND" == "add" ]]; then
   [[ -z "$RENDER_ONLY_DIR" ]] || die "add does not take --render-only; use the flag form to render"
   [[ "$RESTART_ALLOY" -eq 0 || "$NO_START" -eq 0 ]] || \
     die "--restart-alloy and --no-start are mutually exclusive"
+  [[ "$ENABLE_PROBE" -eq 0 || "$NO_START" -eq 0 ]] || \
+    die "--enable-probe and --no-start are mutually exclusive"
 fi
 [[ -f "$INSTANCE_TEMPLATE" ]] || die "missing Alloy instance template: $INSTANCE_TEMPLATE"
 [[ -f "$METRICS_TEMPLATE" ]] || die "missing Alloy metrics template: $METRICS_TEMPLATE"
@@ -302,7 +321,7 @@ fi
 
 init_system_root "$ENV_FILE" "$TQ_REPO_ROOT" "$TQ_TEXTFILE_DIR"
 
-for command_name in alloy awk cmp cp date find getent getfacl grep install runuser sed setfacl systemctl tail
+for command_name in alloy awk cmp cp date find getent getfacl grep install perl runuser sed setfacl systemctl tail
 do
   command -v "$command_name" >/dev/null 2>&1 || die "missing required command: $command_name"
 done
@@ -313,6 +332,13 @@ if [[ -z "$TEST_SYSTEM_ROOT" ]]; then
   getent group "$TQ_PROBE_GROUP" >/dev/null || die "probe group not found: $TQ_PROBE_GROUP"
   getent group "$TQ_ALLOY_GROUP" >/dev/null || die "Alloy group not found: $TQ_ALLOY_GROUP"
 fi
+
+skyeye_alloy_version_gate linux || die "$SKYEYE_INSTALL_ERROR. Nothing was changed"
+# Shared with setup.sh, retire-linux.sh and uninstall.sh, and held until this
+# script exits. Taken before anything below reads the host.
+HOST_LOCK="$(system_path /run/skyeye-alloy.lock)"
+mkdir -p "$(dirname "$HOST_LOCK")"
+skyeye_take_host_lock "$HOST_LOCK" || die "$SKYEYE_INSTALL_ERROR"
 
 ALLOY_CONFIG_DIR="$(system_path /etc/alloy)"
 ALLOY_ENV_FILE="$(system_path /etc/default/alloy)"
@@ -583,6 +609,31 @@ elif "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_SERVICE" >/dev/null 2>&1 || \
   "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1; then
   die "target probe instance must be inactive and disabled before installation: $TQ_STRATEGY"
 fi
+
+# The state this run leaves the target timer in, as two separate facts:
+# enabled at boot, and running now. A new instance, the flag form and
+# --enable-probe end enabled and running, because that is the operator's
+# instruction to start monitoring it. An installed instance keeps both facts as
+# it had them, so updating the env of a probe someone stopped or disabled (a
+# Mainnet strategy, for example) does not quietly start it again.
+TARGET_TIMER_FINAL_ENABLED=1
+TARGET_TIMER_FINAL_ACTIVE=1
+if [[ "$SUBCOMMAND" == "add" && "$NO_START" -eq 0 && "$ENABLE_PROBE" -eq 0 && -f "$INSTALL_ENV" ]]; then
+  TARGET_TIMER_FINAL_ENABLED="$TARGET_TIMER_WAS_ENABLED"
+  TARGET_TIMER_FINAL_ACTIVE="$TARGET_TIMER_WAS_ACTIVE"
+fi
+case "$TARGET_TIMER_FINAL_ENABLED$TARGET_TIMER_FINAL_ACTIVE" in
+  11) TARGET_TIMER_FINAL=enabled ;;
+  10) TARGET_TIMER_FINAL=enabled-stopped ;;
+  01) TARGET_TIMER_FINAL=active ;;
+  *) TARGET_TIMER_FINAL=disabled ;;
+esac
+target_timer_converged=0
+if [[ "$TARGET_TIMER_WAS_ENABLED" -eq "$TARGET_TIMER_FINAL_ENABLED" &&
+      "$TARGET_TIMER_WAS_ACTIVE" -eq "$TARGET_TIMER_FINAL_ACTIVE" ]]; then
+  target_timer_converged=1
+fi
+
 for custom_instance_path in \
   "$SYSTEMD_DIR/$INSTANCE_SERVICE" \
   "$SYSTEMD_DIR/$INSTANCE_TIMER"
@@ -609,11 +660,23 @@ if [[ "$SUBCOMMAND" == "add" ]]; then
   fi
   if [[ "$NO_START" -eq 0 && "$shared_changed" -eq 0 && "$legacy_present" -eq 0 &&
         "$alloy_env_current" -eq 1 && "$ALLOY_WAS_ACTIVE" -eq 1 &&
-        "$TARGET_TIMER_WAS_ENABLED" -eq 1 && "$TARGET_TIMER_WAS_ACTIVE" -eq 1 ]] && \
+        "$target_timer_converged" -eq 1 ]] && \
     [[ -f "$INSTALL_ENV" && -f "$ALLOY_INSTANCE_FRAGMENT" ]] && \
     cmp -s "$ENV_FILE" "$INSTALL_ENV" && \
     cmp -s "$RENDER_ROOT/trading-$TQ_STRATEGY.alloy" "$ALLOY_INSTANCE_FRAGMENT"; then
-    printf 'Already installed and running: %s (no changes; Alloy untouched)\n' "$TQ_STRATEGY"
+    case "$TARGET_TIMER_FINAL" in
+      disabled)
+        printf 'Already installed: %s (no changes; Alloy untouched; probe timer stays disabled, add --enable-probe to start it)\n' \
+          "$TQ_STRATEGY"
+        ;;
+      enabled-stopped)
+        printf 'Already installed: %s (no changes; Alloy untouched; probe timer stays enabled at boot but not running, add --enable-probe to start it)\n' \
+          "$TQ_STRATEGY"
+        ;;
+      *)
+        printf 'Already installed and running: %s (no changes; Alloy untouched)\n' "$TQ_STRATEGY"
+        ;;
+    esac
     exit 0
   fi
   alloy_fragments="$(list_alloy_fragments "$ALLOY_CONFIG_DIR")"
@@ -673,6 +736,9 @@ done
     printf 'subcommand=add\n'
     printf 'target_timer_was_enabled=%s\n' "$TARGET_TIMER_WAS_ENABLED"
     printf 'target_timer_was_active=%s\n' "$TARGET_TIMER_WAS_ACTIVE"
+    printf 'target_timer_final=%s\n' "$TARGET_TIMER_FINAL"
+    printf 'target_timer_final_enabled=%s\n' "$TARGET_TIMER_FINAL_ENABLED"
+    printf 'target_timer_final_active=%s\n' "$TARGET_TIMER_FINAL_ACTIVE"
     printf 'alloy_action=%s\n' "$ALLOY_ACTION"
   fi
 } >"$TRANSACTION_BACKUP/transaction.meta"
@@ -767,10 +833,31 @@ elif ! "$SYSTEMCTL_BIN" restart alloy; then
   die "Alloy restart failed"
 fi
 
-"$SYSTEMCTL_BIN" enable --now "$INSTANCE_TIMER"
-"$SYSTEMCTL_BIN" start "$INSTANCE_SERVICE"
+# Only a running timer gets a first probe run now; an enabled but stopped one
+# is enabled for the next boot and nothing is started.
+case "$TARGET_TIMER_FINAL" in
+  enabled)
+    "$SYSTEMCTL_BIN" enable --now "$INSTANCE_TIMER"
+    "$SYSTEMCTL_BIN" start "$INSTANCE_SERVICE"
+    ;;
+  enabled-stopped)
+    "$SYSTEMCTL_BIN" enable "$INSTANCE_TIMER"
+    ;;
+  active)
+    "$SYSTEMCTL_BIN" start "$INSTANCE_TIMER"
+    "$SYSTEMCTL_BIN" start "$INSTANCE_SERVICE"
+    ;;
+esac
 "$SYSTEMCTL_BIN" is-active --quiet alloy || die "Alloy is not active after installation"
-"$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" || die "trading probe timer is not active"
+if [[ "$TARGET_TIMER_FINAL_ACTIVE" -eq 1 ]]; then
+  "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" || die "trading probe timer is not active"
+else
+  ! "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 || \
+    die "trading probe timer is running, but it was not running before this run"
+fi
+if [[ "$TARGET_TIMER_FINAL_ENABLED" -eq 1 ]]; then
+  "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" || die "trading probe timer is not enabled"
+fi
 
 first_log="$(find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print -quit)"
 if [[ -n "$first_log" ]]; then
@@ -783,7 +870,27 @@ printf 'Installed Linux trading monitoring fragment: %s\n' "$ALLOY_INSTANCE_FRAG
 printf 'Rollback record: %s\n' "$TRANSACTION_BACKUP"
 printf 'Probe metrics: %s/%s\n' "$TQ_TEXTFILE_DIR" "$TQ_TEXTFILE_NAME"
 if [[ "$SUBCOMMAND" == "add" ]]; then
-  printf 'Alloy %s done; probe timer enabled: %s\n' "$ALLOY_ACTION" "$INSTANCE_TIMER"
+  case "$TARGET_TIMER_FINAL" in
+    enabled)
+      printf 'Alloy %s done; probe timer enabled: %s\n' "$ALLOY_ACTION" "$INSTANCE_TIMER"
+      ;;
+    active)
+      printf 'Alloy %s done; probe timer started but not enabled at boot, as before this run: %s\n' \
+        "$ALLOY_ACTION" "$INSTANCE_TIMER"
+      ;;
+    enabled-stopped)
+      printf 'Alloy %s done; probe timer left enabled at boot but not running, as before this run: %s\n' \
+        "$ALLOY_ACTION" "$INSTANCE_TIMER"
+      printf 'Start it with: sudo %s/setup-linux.sh add --env-file %s --enable-probe\n' \
+        "$SCRIPT_DIR" "$ENV_FILE"
+      ;;
+    disabled)
+      printf 'Alloy %s done; probe timer left disabled, as before this run: %s\n' \
+        "$ALLOY_ACTION" "$INSTANCE_TIMER"
+      printf 'Start it with: sudo %s/setup-linux.sh add --env-file %s --enable-probe\n' \
+        "$SCRIPT_DIR" "$ENV_FILE"
+      ;;
+  esac
   printf 'Next: add the central inventory row (scripts/trading-target add --server %s --strategy %s), merge, then run scripts/central-deploy on monitoring-prod\n' \
     "$TQ_SERVER_ID" "$TQ_STRATEGY"
 fi
