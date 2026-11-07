@@ -200,4 +200,49 @@ derived_remove="$("$TOOL" --file "$WORK/dry-remove.yml" render-test)"
   fail "derived test still expects the removed row"
 render_and_run "$WORK/dry-remove.yml" remove
 
+printf 'case: add and remove wait for the inventory lock and give up without writing\n'
+LOCK_DIR="$WORK/locked"
+mkdir -p "$LOCK_DIR"
+cp "$ORIGINAL" "$LOCK_DIR/trading-targets.yml"
+cp "$ORIGINAL" "$LOCK_DIR/before.yml"
+# Held on this shell's own descriptor, the way another add would hold it.
+exec 8<"$LOCK_DIR"
+python3 -I -c 'import fcntl; fcntl.flock(8, fcntl.LOCK_EX | fcntl.LOCK_NB)'
+for command in add remove; do
+  started="$SECONDS"
+  if output="$("$TOOL" --file "$LOCK_DIR/trading-targets.yml" "$command" --server trading02 \
+    --strategy locked-btc --lock-timeout 1 2>&1)"; then
+    fail "$command ran while another add or remove held the inventory"
+  fi
+  [[ "$output" == *"another trading-target add or remove is updating "*"/locked (waited 1s)"* ]] || \
+    fail "$command did not report the held lock: $output"
+  [[ "$((SECONDS - started))" -ge 1 ]] || fail "$command gave up without waiting"
+  cmp -s "$LOCK_DIR/before.yml" "$LOCK_DIR/trading-targets.yml" || fail "$command wrote while locked"
+done
+"$TOOL" --file "$LOCK_DIR/trading-targets.yml" list >/dev/null || fail "list waited on the writers' lock"
+exec 8<&-
+for bad in -1 abc 3601; do
+  if "$TOOL" --file "$LOCK_DIR/trading-targets.yml" add --server trading02 --strategy locked-btc \
+    --lock-timeout "$bad" >/dev/null 2>&1; then
+    fail "add accepted --lock-timeout $bad"
+  fi
+done
+
+printf 'case: concurrent adds keep every row\n'
+pids=()
+for lane in 1 2 3 4 5 6 7 8; do
+  "$TOOL" --file "$LOCK_DIR/trading-targets.yml" add --server trading02 \
+    --strategy "parallel-$lane-btc" >/dev/null &
+  pids+=("$!")
+done
+for pid in "${pids[@]}"; do
+  wait "$pid" || fail "a concurrent add failed"
+done
+for lane in 1 2 3 4 5 6 7 8; do
+  "$TOOL" --file "$LOCK_DIR/trading-targets.yml" list | rg -q "parallel-$lane-btc" || \
+    fail "a concurrent add lost the row for parallel-$lane-btc"
+done
+"$TOOL" check "$LOCK_DIR/trading-targets.yml" >/dev/null || fail "concurrent adds left a non-canonical inventory"
+[[ -z "$(find "$LOCK_DIR" -name '.trading-targets.yml.*')" ]] || fail "concurrent adds left temporary files"
+
 printf 'PASS: scripts/trading-target inventory management\n'

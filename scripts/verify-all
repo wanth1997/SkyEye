@@ -43,7 +43,7 @@ cd "$REPO_ROOT" || exit 1
 REQUIRED_TOOLS=(
   alloy awk basename bash brew cat cc chmod cmp comm cp cut date dd diff dirname
   docker envsubst find git grep head id install ioreg jq ln lokitool lsof mkdir
-  mktemp mv openssl plutil ps python3 readlink rg rm rmdir sed sha256sum shasum sleep sort
+  mktemp mv openssl perl plutil ps python3 readlink rg rm rmdir sed sha256sum shasum sleep sort
   stat tail tar timeout tmux touch tr uniq wc
 )
 SKIP_LINE='^[^[:alnum:]]*[Ss][Kk][Ii][Pp]([Pp][Ee][Dd]|[Pp][Ii][Nn][Gg])?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])SKIP(PED)?([^[:alnum:]_]|$)'

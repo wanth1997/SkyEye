@@ -6,6 +6,7 @@ set -euo pipefail
 # Run on monitoring-prod from the SkyEye checkout (/home/ubuntu/SkyEye):
 #   scripts/central-deploy --dry-run   # fetch + validate the target commit only
 #   scripts/central-deploy             # validate, fast-forward, reload, confirm
+#   scripts/central-deploy --expect SHA  # the same, only if origin/master is SHA
 #   scripts/central-deploy --status    # show reload health and live inventory
 #
 # Validation runs on a temporary worktree of the target commit BEFORE the live
@@ -44,6 +45,7 @@ REMOTE=origin
 BRANCH=master
 MODE=deploy
 MANUAL_APPLIED=""
+EXPECT=""
 DOCKER_BIN="${SKYEYE_DOCKER:-docker}"
 CURL_BIN="${SKYEYE_CURL:-curl}"
 PROM_URL="${SKYEYE_PROM_URL:-http://127.0.0.1:9090}"
@@ -58,7 +60,7 @@ ACCEPT_INTERVAL="${SKYEYE_ACCEPT_INTERVAL:-5}"
 usage() {
   printf '%s\n' \
     'Usage: scripts/central-deploy [--dry-run | --status] [--remote NAME] [--branch NAME]' \
-    '                              [--manual-applied SHA]' \
+    '                              [--expect SHA] [--manual-applied SHA]' \
     '' \
     'Validates REMOTE/BRANCH in a temporary worktree (promtool check config,' \
     'promtool test rules, the derived Trading inventory test, every dashboard,' \
@@ -73,6 +75,9 @@ usage() {
     'A dashboard change needs a Grafana Viewer service account token, mode 0600' \
     'and outside the checkout, at SKYEYE_GRAFANA_TOKEN_FILE (default' \
     "$GRAFANA_TOKEN_FILE)." \
+    '' \
+    '--expect SHA deploys (or dry-runs) only when REMOTE/BRANCH is exactly SHA after' \
+    'the fetch, so a commit merged after your review is never deployed with it.' \
     '' \
     '--manual-applied SHA states that the recreate-only changes up to SHA were' \
     'applied by hand (docker compose up -d <service>); SHA must be the target' \
@@ -99,10 +104,15 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || die "--manual-applied requires the target commit applied by hand"
       [[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || die "--manual-applied takes a commit hash, got: $2"
       MANUAL_APPLIED="$2"; shift 2 ;;
+    --expect)
+      [[ $# -ge 2 ]] || die "--expect requires the commit you reviewed"
+      [[ "$2" =~ ^[0-9a-f]{7,40}$ ]] || die "--expect takes a commit hash, got: $2"
+      EXPECT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
+[[ -z "$EXPECT" || "$MODE" != "status" ]] || die "--expect does not apply to --status"
 
 [[ "$ACCEPT_TIMEOUT" =~ ^[0-9]+$ ]] || die "SKYEYE_ACCEPT_TIMEOUT must be whole seconds, got: $ACCEPT_TIMEOUT"
 
@@ -149,11 +159,56 @@ for sample in payload["data"]["result"]:
 '
 }
 
+# Reads the reload state Prometheus holds now from its own /metrics. A query
+# would return the last scraped sample, which can predate a reload by a whole
+# scrape interval and so report a reload that just succeeded as failed.
+# /-/reload answers only after the gauges are set, so no wait is needed.
+IFS= read -r -d '' PROM_RELOAD_PY <<'PY' || true
+import sys
+import time
+
+since = sys.argv[1]
+values = {}
+for line in sys.stdin:
+    name, _, rest = line.partition(" ")
+    if name in ("prometheus_config_last_reload_successful",
+                "prometheus_config_last_reload_success_timestamp_seconds"):
+        try:
+            values[name] = float(rest.split()[0])
+        except (IndexError, ValueError):
+            sys.exit("Prometheus /metrics has an unreadable %s line" % name)
+ok = values.get("prometheus_config_last_reload_successful")
+at = values.get("prometheus_config_last_reload_success_timestamp_seconds")
+if ok is None or at is None:
+    sys.exit("Prometheus /metrics does not report its reload state")
+when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at))
+if ok != 1:
+    sys.exit("unsuccessful config reload (last good reload at %s)" % when)
+if since and at < float(since):
+    sys.exit("the last good reload is from %s, before this run's reload" % when)
+print("1 (last good reload at %s)" % when)
+PY
+
+# Prints the reload state; with SINCE (epoch seconds) it also fails unless the
+# last good reload happened at or after it. Returns 2 if /metrics is unreadable.
+prom_reload_state() {
+  local since="${1:-}" metrics
+  if ! metrics="$("$CURL_BIN" -fsS --max-time 10 "$PROM_URL/metrics" 2>&1)"; then
+    printf 'cannot read %s/metrics: %s\n' "$PROM_URL" "${metrics##*$'\n'}"
+    return 2
+  fi
+  python3 -I -c "$PROM_RELOAD_PY" "$since" <<<"$metrics"
+}
+
 show_status() {
-  local reload_ok
-  reload_ok="$(prom_query 'prometheus_config_last_reload_successful')" || \
-    die "cannot query Prometheus at $PROM_URL"
-  printf 'Prometheus last reload successful: %s\n' "${reload_ok#value=}"
+  local reload_state status=0
+  reload_state="$(prom_reload_state 2>&1)" || status=$?
+  [[ "$status" -ne 2 ]] || die "$reload_state"
+  if [[ "$status" -eq 0 ]]; then
+    printf 'Prometheus last reload successful: %s\n' "$reload_state"
+  else
+    printf 'Prometheus last reload successful: 0 (%s)\n' "$reload_state"
+  fi
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local applied
     applied="$(read_applied)"
@@ -170,6 +225,23 @@ if [[ "$MODE" == "status" ]]; then
 fi
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git checkout: $REPO_ROOT"
+
+# One run at a time per checkout, dry runs included: two runs would race on
+# the checkout, the reloads and the applied record. flock(2) on fd 9 lasts as
+# long as this process (and any child still running), so a killed run leaves
+# nothing to clean up. Taken before any state is read.
+DEPLOY_LOCK="$(git rev-parse --absolute-git-dir)/skyeye-central-deploy.lock"
+exec 9>>"$DEPLOY_LOCK" || die "cannot open the deploy lock $DEPLOY_LOCK"
+python3 -I -c '
+import fcntl, sys
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(1)
+except OSError as error:
+    sys.exit("cannot lock: %s" % error)
+' || die "another central-deploy is running on this checkout (lock $DEPLOY_LOCK); nothing was fetched, moved or reloaded"
+
 current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
 [[ "$current_branch" == "$BRANCH" ]] || \
   die "checkout is on '${current_branch:-detached HEAD}', expected $BRANCH"
@@ -201,6 +273,13 @@ git fetch --quiet "$REMOTE" "$BRANCH"
 head_sha="$(git rev-parse HEAD)"
 target_sha="$(git rev-parse "refs/remotes/$REMOTE/$BRANCH")"
 applied_sha="$(read_applied)"
+# Checked before anything else, so a mismatch always fails, never a no-op.
+if [[ -n "$EXPECT" ]]; then
+  expect_sha="$(git rev-parse --verify --quiet "$EXPECT^{commit}" 2>/dev/null)" || \
+    die "--expect: $EXPECT is not a known commit, or the prefix is ambiguous; nothing moved"
+  [[ "$expect_sha" == "$target_sha" ]] || \
+    die "--expect names ${expect_sha:0:12}, but $REMOTE/$BRANCH is ${target_sha:0:12}; nothing moved. Review what differs (git log --oneline ${expect_sha:0:12}...${target_sha:0:12}) and rerun with the commit you approved"
+fi
 manual_sha=""
 if [[ -n "$MANUAL_APPLIED" ]]; then
   manual_sha="$(git rev-parse --verify --quiet "$MANUAL_APPLIED^{commit}")" || \
@@ -271,6 +350,14 @@ for change_base in "${change_bases[@]}"; do
   done <<<"$changed_paths"
 done
 
+# A dashboard version that came and went since the last apply leaves no net
+# diff, but a failed run may have published it and Grafana may still serve it,
+# so Grafana is checked for it. (Without a record every dashboard is checked.)
+if [[ "$dashboards" -eq 0 && -n "$applied_sha" ]] && [[ -n "$(git log -n 1 --full-history \
+  --format=%H "$target_sha" --not "$applied_sha" -- grafana/dashboards)" ]]; then
+  dashboards=1
+fi
+
 if [[ "${#manual_paths[@]}" -gt 0 ]]; then
   if [[ -n "$applied_sha" ]]; then
     printf 'These paths changed since the last central-deploy apply (%s) and need a service recreate or a manual decision:\n' \
@@ -314,6 +401,7 @@ import re
 import subprocess
 import sys
 
+DASHBOARD_DIR = "grafana/dashboards"
 # Everything else the ruler reports has to match, so a setting that a later Loki
 # adds is compared rather than skipped.
 LOKI_EVALUATION_FIELDS = ("alerts", "evaluationTime", "health", "lastError", "lastEvaluation", "state")
@@ -359,26 +447,98 @@ def comparable(dashboard):
     return {key: value for key, value in dashboard.items() if key not in ("id", "version")}
 
 
-def old_uids(bases, path):
-    found = set()
+def git_output(arguments, stdin=None):
+    done = subprocess.run(["git"] + arguments, input=stdin, capture_output=True)
+    if done.returncode != 0:
+        sys.exit("git %s failed: %s" % (arguments[0], done.stderr.decode(errors="replace").strip()))
+    return done.stdout
+
+
+def published_versions(target, applied, head):
+    # (commit, path, blob) of every dashboard version Grafana may still serve,
+    # newest first: every version committed after the last apply up to the
+    # target, then the trees at HEAD and at the last apply. A failed run moves
+    # HEAD and can publish a version that the next commit removes again, so
+    # only the history since the last apply sees it, not HEAD or the net diff.
+    # With no record nothing bounds what was published: take all of history.
+    log = ["log", "--full-history", "--topo-order", "-m", "--raw", "--no-renames",
+           "--no-abbrev", "--format=%H", target]
+    bases = [head]
+    if applied:
+        log += ["--not", applied]
+        bases.append(applied)
+    versions, commit = [], None
+    for line in git_output(log + ["--", DASHBOARD_DIR]).decode().splitlines():
+        if re.fullmatch(r"[0-9a-f]{40}", line):
+            commit = line
+        elif line.startswith(":"):
+            fields, _, path = line.partition("\t")
+            blob = fields.split()[3]
+            if path.endswith(".json") and blob.strip("0"):
+                versions.append((commit, path, blob))
     for base in bases:
-        shown = subprocess.run(["git", "show", "%s:%s" % (base, path)], capture_output=True)
-        if shown.returncode != 0:
-            continue
+        listing = git_output(["ls-tree", "-r", "--full-tree", base, "--", DASHBOARD_DIR])
+        for line in listing.decode().splitlines():
+            fields, _, path = line.partition("\t")
+            if fields.split()[1] == "blob" and path.endswith(".json"):
+                versions.append((base, path, fields.split()[2]))
+    return versions
+
+
+def touched_paths(target, applied):
+    # Every dashboard path that changed on the deployed line since the last
+    # apply. A failed run publishes an earlier tip of the branch, and merge
+    # commits, squashes and direct pushes keep every earlier tip on the
+    # target's first-parent line, so each commit there is compared with its
+    # first parent only. Against its other parent, a merge of a branch forked
+    # before the last apply would list every mainline change that the last
+    # apply already holds. Without a record every dashboard is compared anyway.
+    if not applied:
+        return set()
+    log = ["log", "--first-parent", "--diff-merges=first-parent", "--full-history",
+           "--raw", "--no-renames", "--no-abbrev", "--format=%H", target, "--not", applied,
+           "--", DASHBOARD_DIR]
+    touched = set()
+    for line in git_output(log).decode().splitlines():
+        if line.startswith(":"):
+            path = line.partition("\t")[2]
+            if path.endswith(".json"):
+                touched.add(path)
+    return touched
+
+
+def read_blobs(blobs):
+    batch = git_output(["cat-file", "--batch"], "".join(blob + "\n" for blob in blobs).encode())
+    contents, position = {}, 0
+    for blob in blobs:
+        header_end = batch.index(b"\n", position)
+        size = int(batch[position:header_end].split()[2])
+        contents[blob] = batch[header_end + 1:header_end + 1 + size]
+        position = header_end + 1 + size + 1
+    return contents
+
+
+def published_uids(target, applied, head):
+    # Maps each uid to the newest commit and path it was seen in.
+    versions = published_versions(target, applied, head)
+    contents = read_blobs(list(dict.fromkeys(blob for _, _, blob in versions)))
+    seen = {}
+    for commit, path, blob in versions:
         try:
-            old = json.loads(shown.stdout)
+            body = json.loads(contents[blob])
         except ValueError:
             continue
-        if isinstance(old, dict) and isinstance(old.get("uid"), str):
-            found.add(old["uid"].strip())
-    return found
+        if isinstance(body, dict) and isinstance(body.get("uid"), str):
+            seen.setdefault(body["uid"].strip(), {
+                "commit": commit, "path": os.path.relpath(path, DASHBOARD_DIR)})
+    return seen
 
 
 def dashboards_validate(root, output, unrecorded, rest):
     # Grafana drops a file with a clashing title silently, and a clashing uid
     # stops the whole provider from writing, so both are refused up front.
     split = rest.index("--")
-    bases, changed = rest[:split], rest[split + 1:]
+    (target, applied, head), changed = rest[:split], rest[split + 1:]
     dashboards, uids, titles, errors = {}, {}, {}, []
     for directory, _, names in os.walk(root):
         for name in sorted(names):
@@ -400,18 +560,24 @@ def dashboards_validate(root, output, unrecorded, rest):
     if errors:
         sys.exit("\n".join("invalid dashboard " + error for error in errors))
 
-    changed_files = {os.path.relpath(path, "grafana/dashboards") for path in changed}
-    expected, absent = {}, set()
+    # A file whose content changed and changed back since the last apply has
+    # no net diff, but a failed run may have left Grafana serving a version in
+    # between under the same uid, so it is held to its file like a changed one.
+    # A dashboard the deployed line did not touch since the last apply keeps
+    # any UI edit.
+    touched = touched_paths(target, applied)
+    changed_files = {os.path.relpath(path, DASHBOARD_DIR) for path in list(changed) + sorted(touched)}
+    expected = {}
     for relative, dashboard in dashboards.items():
         # Without a record nothing tells a UI edit from a load that never
         # happened, so every dashboard has to match its file.
         if unrecorded == "1" or relative in changed_files:
             expected[dashboard["uid"]] = {"path": relative, "body": comparable(dashboard)}
-    # A failed run can leave one uid applied and another at HEAD, and Grafana may
-    # serve either, so every uid the target no longer holds has to be gone.
-    for path in changed:
-        absent |= old_uids(bases, path) - set(uids)
-    manifest = {"expected": expected, "absent": sorted(absent)}
+    # Grafana may still serve any uid published since the last apply, so every
+    # one the target no longer holds has to be gone.
+    absent = {uid: where for uid, where in published_uids(target, applied, head).items()
+              if uid not in uids}
+    manifest = {"expected": expected, "absent": absent}
     with open(output, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle)
 
@@ -460,7 +626,14 @@ def grafana_confirm(curl, url, token_file, checkout, manifest_path):
         manifest = json.load(handle)
     header = token_header(token_file, checkout)
     served = {item["uid"] for item in grafana_get(curl, url, header, "/api/search?type=dash-db&limit=5000")}
-    problems = ["%s was removed but is still served" % uid for uid in manifest["absent"] if uid in served]
+    problems = [
+        "%s was removed but is still served (last in %s at commit %s)" % (uid, where["path"], where["commit"][:12])
+        for uid, where in sorted(manifest["absent"].items()) if uid in served
+    ]
+    if problems:
+        problems.append(
+            "check in Grafana (/d/<uid>) whether each is still there: delete a leftover of a failed deploy "
+            "in Grafana, or bring its file back in Git if it should stay, then rerun")
     differing = []
     for uid, want in sorted(manifest["expected"].items()):
         if uid not in served:
@@ -601,7 +774,7 @@ SH
 validate_dashboards() {
   printf 'Validating dashboards in %s\n' "${target_sha:0:12}"
   helper dashboards-validate "$TREE/grafana/dashboards" "$WORK_DIR/grafana-expected.json" \
-    "$dashboards_unrecorded" "${change_bases[@]}" -- \
+    "$dashboards_unrecorded" "$target_sha" "$applied_sha" "$head_sha" -- \
     ${dashboard_paths[@]+"${dashboard_paths[@]}"} || \
     die "dashboards in ${target_sha:0:12} are invalid; nothing moved"
 }
@@ -739,6 +912,7 @@ fi
 undo_sha="${applied_sha:-$head_sha}"
 rollback_hint="rerun scripts/central-deploy after fixing the cause to retry; to return to the previous config instead: git reset --hard $undo_sha && curl -fsS -X POST $PROM_URL/-/reload"
 if [[ "$prom_reload" -eq 1 ]]; then
+  reload_started="$(date +%s)"
   "$CURL_BIN" -fsS -X POST "$PROM_URL/-/reload" >/dev/null || \
     die "Prometheus rejected the reload; $rollback_hint"
   printf 'Prometheus reloaded\n'
@@ -750,9 +924,9 @@ if [[ "$am_reload" -eq 1 ]]; then
 fi
 
 if [[ "$prom_reload" -eq 1 ]]; then
+  reload_state="$(prom_reload_state "$reload_started" 2>&1)" || \
+    die "Prometheus did not confirm this reload: $reload_state; $rollback_hint"
   show_status
-  [[ "$(prom_query 'prometheus_config_last_reload_successful')" == "value=1" ]] || \
-    die "Prometheus reports an unsuccessful config reload; $rollback_hint"
 fi
 confirm_services
 applied_path="$(applied_file)"

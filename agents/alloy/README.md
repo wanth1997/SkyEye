@@ -23,7 +23,8 @@ Phase 2A is log-only — no code changes on the host, low risk.
 - Outbound HTTPS to `*.wanbrain.com` (via Cloudflare Tunnel endpoints)
 - root / sudo
 - `envsubst` (Debian/Ubuntu package `gettext-base`)
-- Grafana Alloy v1.9.0 or newer if it is already installed. Older versions have no `alloy validate`, so `setup.sh` stops and asks you to upgrade.
+- `perl` (package `perl-base`, always installed on Debian/Ubuntu) for the host lock
+- If Alloy is already installed, a version listed in `alloy-versions.env`; see [Alloy versions](#alloy-versions).
 
 ## Phase 2A install — log collection only
 
@@ -101,8 +102,9 @@ You should see lines where `'Email': '<address>'` has been replaced by `'Email':
 
 | What went wrong | What happens | Exit |
 |---|---|---|
-| Bad input, or a missing template or `envsubst` | Nothing is written and apt does not run | 2 |
-| Not root, config is a symlink, or an earlier run did not finish | Nothing is written | 1 |
+| Bad input, or a missing template, `install-common.sh` or `envsubst` | Nothing is written and apt does not run | 2 |
+| Not root, another run holds the lock, config is a symlink, or an earlier run did not finish | Nothing is written | 1 |
+| Installed Alloy is not a [tested version](#alloy-versions) | Nothing is written | 1 |
 | Render or `alloy validate` fails, or Alloy has no `validate` | The live config is not touched and Alloy is not restarted | 1 |
 | Restart or health check fails, and Alloy was running | Old config restored, Alloy restarted and checked again | 1 |
 | Restart or health check fails, and Alloy was stopped | Old config restored, Alloy stopped again | 1 |
@@ -126,6 +128,49 @@ The next successful run overwrites this file, and it holds the credentials of th
 
 **Hand edits are not merged.** `setup.sh` re-renders the whole config from the templates, and `APP_METRICS_TARGET` takes one target. Extra scrape targets added by hand are dropped by a re-run, and because that run succeeds, nothing rolls back. Compare the running config with the render before re-running on a host that was edited by hand.
 
+## Alloy versions
+
+`alloy-versions.env` lists the Alloy versions the agent configs are tested against:
+
+| Installer | Tested versions |
+|---|---|
+| `setup.sh`, `trading/setup-linux.sh` | 1.16.3, 1.18.1 |
+| `trading/setup-macos.sh` | 1.18.1 (1.16.3 rejects the macOS template) |
+
+Every installer reads `alloy --version` before it changes anything and stops on any other version, including a different patch release such as 1.16.0. `tests/alloy/test-alloy-versions.sh` validates every template against every listed version, using digest-pinned images, as part of `scripts/verify-all`. `trading/setup-linux.sh retire` and `uninstall.sh` work with any version.
+
+On a host without Alloy, `setup.sh` installs the pinned package (`alloy=1.18.1-1`) and runs `apt-mark hold alloy`, so `apt upgrade` and unattended upgrades leave it alone. An Alloy that was already installed is checked but never upgraded or held.
+
+**Before re-running any installer on a host**, check the version read-only:
+
+```bash
+alloy --version | head -1
+```
+
+If it is not in the table, stop and report the version instead of running the installer. `SKYEYE_ALLOY_UNTESTED_VERSION=<exact version>` lets an installer continue on an unlisted version with a warning; it exists for development and must name exactly the installed version, so a value left over from another host cannot let a different version through. Do not use it on a production host.
+
+**To move a host to another Alloy version:** first add the version in the repository. Pull its image by digest, add it to `SKYEYE_ALLOY_TEST_IMAGES` and the platform list in `alloy-versions.env`, and merge once `scripts/verify-all` passes. Then on the host:
+
+```bash
+sudo apt-mark unhold alloy
+sudo apt-get install alloy=<version>-1
+sudo apt-mark hold alloy
+alloy --version | head -1
+```
+
+On macOS, `brew upgrade grafana/grafana/alloy` installs the tap's current version. `setup-macos.sh` refuses to install Alloy when the tap's version is not listed.
+
+## One run at a time
+
+`setup.sh`, `trading/setup-linux.sh` (`add` and the flag form), `trading/setup-linux.sh retire` and `uninstall.sh` share `/run/skyeye-alloy.lock`. While one of them runs, the others stop before reading or changing anything and name the lock file. Nothing needs cleaning up after a crash: the kernel releases the lock when the run's last process exits. A child process the run started that is still running keeps the lock until it exits. To see whether a run holds the lock:
+
+```bash
+sudo sh -c 'test ! -e /run/skyeye-alloy.lock || flock -n /run/skyeye-alloy.lock true' \
+  && echo free || echo "held by another run"
+```
+
+`trading/setup-macos.sh` uses `$(brew --prefix)/var/skyeye-trading/setup.lock` the same way.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -142,11 +187,11 @@ The next successful run overwrites this file, and it holds the credentials of th
 sudo bash agents/alloy/uninstall.sh
 ```
 
-Removes package, config, and apt repo. Does NOT remove previously-pushed logs from central Loki (they age out per retention policy, 30 days).
+Unholds and removes the package, then removes the config and the apt repo. Does NOT remove previously-pushed logs from central Loki (they age out per retention policy, 30 days).
 
 ## Phase 2B — node metrics (CPU / RAM / disk / net)
 
-Add the `PROM_PUSH_URL` env var to enable node_exporter collection and push to the central Prometheus. Re-run `setup.sh` — it re-renders the config, appends the metrics section, and restarts alloy.
+Add the `PROM_PUSH_URL` env var to enable node_exporter collection and push to the central Prometheus. Re-run `setup.sh` — it re-renders the config, appends the metrics section, and restarts alloy. Check the host's Alloy version against [Alloy versions](#alloy-versions) first.
 
 ```bash
 cd /home/ubuntu/skyeye-agent

@@ -267,6 +267,16 @@ touch \
 cat >"$FAKE_BIN/alloy" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+# The version gate is not counted, so ALLOY_FAIL_ON_CALL still numbers the
+# validate calls only.
+if [[ "${1:-}" == "--version" ]]; then
+  if [[ -n "${FAKE_ALLOY_VERSION_OUTPUT:-}" ]]; then
+    printf '%s\n' "$FAKE_ALLOY_VERSION_OUTPUT"
+  else
+    printf 'alloy, version v%s (branch: HEAD, revision: fixture)\n' "${FAKE_ALLOY_VERSION:-1.16.3}"
+  fi
+  exit 0
+fi
 count=0
 [[ ! -f "$ALLOY_CALL_COUNT" ]] || count="$(cat "$ALLOY_CALL_COUNT")"
 count=$((count + 1))
@@ -617,6 +627,105 @@ if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   exit 1
 fi
 
+printf 'case: add and the flag form refuse an untested Alloy before touching the host\n'
+mainnet_before_sha="$(sha_of "$MAINNET_INSTALLED_ENV")"
+for refused_version in 1.21.3 1.16.0; do
+  : >"$SYSTEMCTL_LOG"
+  if add_output="$(FAKE_ALLOY_VERSION="$refused_version" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+    "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" 2>&1)"; then
+    printf 'FAIL: add accepted untested Alloy %s\n' "$refused_version" >&2
+    exit 1
+  fi
+  [[ "$add_output" == *"installed Alloy $refused_version is not tested on linux (tested: 1.16.3 1.18.1)"* ]] || {
+    printf 'FAIL: version refusal did not name the versions: %s\n' "$add_output" >&2
+    exit 1
+  }
+  assert_no_mutation "add on Alloy $refused_version"
+  if FAKE_ALLOY_VERSION="$refused_version" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+    "$SETUP" --env-file "$MAINNET_CHANGED_ENV" --no-start >/dev/null 2>&1; then
+    printf 'FAIL: the flag form accepted untested Alloy %s\n' "$refused_version" >&2
+    exit 1
+  fi
+  assert_no_mutation "flag form on Alloy $refused_version"
+done
+: >"$SYSTEMCTL_LOG"
+if add_output="$(FAKE_ALLOY_VERSION_OUTPUT='not an alloy banner' SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" 2>&1)"; then
+  printf 'FAIL: add accepted an unreadable Alloy version\n' >&2
+  exit 1
+fi
+[[ "$add_output" == *'not an alloy banner'* ]] || {
+  printf 'FAIL: unreadable-version refusal did not quote the output: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'add with an unreadable Alloy version'
+if FAKE_ALLOY_VERSION=1.21.3 SKYEYE_ALLOY_UNTESTED_VERSION=1.21 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" >/dev/null 2>&1; then
+  printf 'FAIL: an override that is not the exact version was accepted\n' >&2
+  exit 1
+fi
+assert_no_mutation 'add with a near-miss override'
+[[ "$mainnet_before_sha" == "$(sha_of "$MAINNET_INSTALLED_ENV")" ]] || {
+  printf 'FAIL: a refused version changed the installed env\n' >&2
+  exit 1
+}
+if ! add_output="$(FAKE_ALLOY_VERSION=1.21.3 SKYEYE_ALLOY_UNTESTED_VERSION=1.21.3 \
+  SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_ENV" 2>&1)"; then
+  printf 'FAIL: the exact override was refused: %s\n' "$add_output" >&2
+  exit 1
+fi
+[[ "$add_output" == *'WARNING: installed Alloy 1.21.3 is not tested'* &&
+   "$add_output" == *"Already installed and running: $MAINNET"* ]] || {
+  printf 'FAIL: the exact override did not warn and continue: %s\n' "$add_output" >&2
+  exit 1
+}
+
+printf 'case: add, the flag form and retire refuse while another run holds the host lock\n'
+HOST_LOCK="$SYSTEM_ROOT/run/skyeye-alloy.lock"
+mkdir -p "$SYSTEM_ROOT/run"
+exec 8>>"$HOST_LOCK"
+perl -MFcntl=:flock -e 'open(my $fh, ">>&=", 8) or exit 2; exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1)' || {
+  printf 'FAIL: the test could not take the host lock\n' >&2
+  exit 1
+}
+mainnet_fragment_before_sha="$(sha_of "$MAINNET_FRAGMENT")"
+: >"$SYSTEMCTL_LOG"
+if add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" 2>&1)"; then
+  printf 'FAIL: add ran while the host lock was held\n' >&2
+  exit 1
+fi
+# Test mode resolves the root with pwd -P, so only the tail of the path is stable.
+[[ "$add_output" == *"holds "*"/run/skyeye-alloy.lock"* ]] || {
+  printf 'FAIL: lock refusal did not name the lock file: %s\n' "$add_output" >&2
+  exit 1
+}
+if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" --env-file "$MAINNET_CHANGED_ENV" --no-start >/dev/null 2>&1; then
+  printf 'FAIL: the flag form ran while the host lock was held\n' >&2
+  exit 1
+fi
+if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" retire --strategy "$MAINNET" >/dev/null 2>&1; then
+  printf 'FAIL: retire ran while the host lock was held\n' >&2
+  exit 1
+fi
+exec 8>&-
+assert_no_mutation 'runs refused by the host lock'
+[[ "$mainnet_before_sha" == "$(sha_of "$MAINNET_INSTALLED_ENV")" &&
+   "$mainnet_fragment_before_sha" == "$(sha_of "$MAINNET_FRAGMENT")" ]] || {
+  printf 'FAIL: a run refused by the host lock changed Mainnet files\n' >&2
+  exit 1
+}
+[[ -z "$(find "$SYSTEM_ROOT/etc/skyeye-trading/retired" -maxdepth 1 -name "$MAINNET-*" -print 2>/dev/null)" ]] || {
+  printf 'FAIL: a retire refused by the host lock left a retire record\n' >&2
+  exit 1
+}
+[[ "$(stat -f '%Lp' "$HOST_LOCK" 2>/dev/null || stat -c '%a' "$HOST_LOCK")" == "600" ]] || {
+  printf 'FAIL: the host lock file is not mode 600\n' >&2
+  exit 1
+}
+
 printf 'case: add on a converged instance is a no-op\n'
 : >"$SYSTEMCTL_LOG"
 add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_ENV")"
@@ -702,6 +811,133 @@ cmp -s "$MAINNET_ENV" "$MAINNET_INSTALLED_ENV" || {
   exit 1
 }
 
+MAINNET_TIMER_ENABLED="$SYSTEMCTL_STATE/enabled_skyeye-trading-probe@$MAINNET.timer"
+MAINNET_TIMER_ACTIVE="$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.timer"
+
+printf 'case: add keeps a disabled probe timer disabled while it updates the instance\n'
+rm -f "$MAINNET_TIMER_ENABLED" "$MAINNET_TIMER_ACTIVE"
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_CHANGED_ENV")"
+cmp -s "$MAINNET_CHANGED_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: add did not update the env of a disabled instance\n' >&2
+  exit 1
+}
+assert_contains "$SYSTEMCTL_LOG" '^reload alloy$'
+assert_not_contains "$SYSTEMCTL_LOG" "^(enable|start)( --now)? skyeye-trading-probe@${MAINNET}[.]"
+[[ ! -e "$MAINNET_TIMER_ENABLED" && ! -e "$MAINNET_TIMER_ACTIVE" ]] || {
+  printf 'FAIL: add re-enabled a probe timer the operator had disabled\n' >&2
+  exit 1
+}
+[[ "$add_output" == *'probe timer left disabled'* && "$add_output" == *"--env-file $MAINNET_CHANGED_ENV --enable-probe"* ]] || {
+  printf 'FAIL: add did not say how to start the disabled probe: %s\n' "$add_output" >&2
+  exit 1
+}
+
+printf 'case: add on a converged, disabled instance is a no-op\n'
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_CHANGED_ENV")"
+[[ "$add_output" == *"Already installed: $MAINNET"*'probe timer stays disabled'* ]] || {
+  printf 'FAIL: converged disabled add did not report a no-op: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'converged disabled add'
+
+printf 'case: --enable-probe is add-only and excludes --no-start\n'
+if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" --enable-probe --no-start >/dev/null 2>&1; then
+  printf 'FAIL: add accepted --enable-probe with --no-start\n' >&2
+  exit 1
+fi
+if SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" --env-file "$MAINNET_CHANGED_ENV" --enable-probe >/dev/null 2>&1; then
+  printf 'FAIL: the flag form accepted --enable-probe\n' >&2
+  exit 1
+fi
+assert_no_mutation 'refused --enable-probe'
+
+printf 'case: add --enable-probe starts a disabled instance\n'
+: >"$SYSTEMCTL_LOG"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" --enable-probe >/dev/null
+assert_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_contains "$SYSTEMCTL_LOG" "^start skyeye-trading-probe@${MAINNET}[.]service$"
+[[ -e "$MAINNET_TIMER_ENABLED" && -e "$MAINNET_TIMER_ACTIVE" ]] || {
+  printf 'FAIL: --enable-probe did not enable and start the timer\n' >&2
+  exit 1
+}
+
+printf 'case: add keeps a started but not enabled timer started and not enabled\n'
+rm -f "$MAINNET_TIMER_ENABLED"
+: >"$SYSTEMCTL_LOG"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_ENV" >/dev/null
+cmp -s "$MAINNET_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: add did not update the env of a started instance\n' >&2
+  exit 1
+}
+assert_contains "$SYSTEMCTL_LOG" "^start skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_not_contains "$SYSTEMCTL_LOG" "^enable( --now)? skyeye-trading-probe@${MAINNET}[.]timer$"
+[[ -e "$MAINNET_TIMER_ACTIVE" && ! -e "$MAINNET_TIMER_ENABLED" ]] || {
+  printf 'FAIL: add changed whether a started timer is enabled at boot\n' >&2
+  exit 1
+}
+
+printf 'case: add on a converged, started but not enabled instance is a no-op\n'
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_ENV")"
+[[ "$add_output" == *"Already installed and running: $MAINNET"* ]] || {
+  printf 'FAIL: converged started-but-not-enabled add did not report a no-op: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'converged started-but-not-enabled add'
+
+MAINNET_SERVICE_ACTIVE="$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.service"
+printf 'case: add keeps an enabled but stopped timer enabled and stopped\n'
+touch "$MAINNET_TIMER_ENABLED"
+rm -f "$MAINNET_TIMER_ACTIVE" "$MAINNET_SERVICE_ACTIVE"
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_CHANGED_ENV")"
+cmp -s "$MAINNET_CHANGED_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: add did not update the env of an enabled but stopped instance\n' >&2
+  exit 1
+}
+assert_contains "$SYSTEMCTL_LOG" "^enable skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_not_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]"
+assert_not_contains "$SYSTEMCTL_LOG" "^start skyeye-trading-probe@${MAINNET}[.]"
+[[ -e "$MAINNET_TIMER_ENABLED" && ! -e "$MAINNET_TIMER_ACTIVE" && ! -e "$MAINNET_SERVICE_ACTIVE" ]] || {
+  printf 'FAIL: add started a probe that was enabled at boot but stopped\n' >&2
+  exit 1
+}
+[[ "$add_output" == *'probe timer left enabled at boot but not running'* &&
+   "$add_output" == *"--env-file $MAINNET_CHANGED_ENV --enable-probe"* ]] || {
+  printf 'FAIL: add did not say the enabled probe stays stopped: %s\n' "$add_output" >&2
+  exit 1
+}
+
+printf 'case: add on a converged, enabled but stopped instance is a no-op\n'
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_CHANGED_ENV")"
+[[ "$add_output" == *"Already installed: $MAINNET"*'probe timer stays enabled at boot but not running'* ]] || {
+  printf 'FAIL: converged enabled-but-stopped add did not report a no-op: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'converged enabled-but-stopped add'
+[[ -e "$MAINNET_TIMER_ENABLED" && ! -e "$MAINNET_TIMER_ACTIVE" ]] || {
+  printf 'FAIL: the no-op changed the enabled-but-stopped timer\n' >&2
+  exit 1
+}
+
+printf 'case: add --enable-probe starts an enabled but stopped instance\n'
+: >"$SYSTEMCTL_LOG"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_ENV" --enable-probe >/dev/null
+assert_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_contains "$SYSTEMCTL_LOG" "^start skyeye-trading-probe@${MAINNET}[.]service$"
+# The retire cases below expect the Mainnet probe enabled and running.
+[[ -e "$MAINNET_TIMER_ENABLED" && -e "$MAINNET_TIMER_ACTIVE" ]] || {
+  printf 'FAIL: --enable-probe did not enable and start the stopped timer\n' >&2
+  exit 1
+}
+
 printf 'case: retire archives only the target instance and reloads Alloy\n'
 mainnet_metrics="$TEXTFILE_DIR/tnauqquant-$MAINNET.prom"
 [[ -f "$mainnet_metrics" ]] || {
@@ -725,7 +961,9 @@ for shared_path in "${shared_paths[@]}"; do
   shared_shas+=("$(sha_of "$shared_path")")
 done
 : >"$SYSTEMCTL_LOG"
-retire_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" retire --strategy "$MAINNET")"
+# Retiring must not depend on the Alloy version, so this runs on an untested one.
+retire_output="$(FAKE_ALLOY_VERSION=9.9.9 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" retire --strategy "$MAINNET")"
 assert_contains "$SYSTEMCTL_LOG" "^disable --now skyeye-trading-probe@${MAINNET}[.]timer$"
 assert_contains "$SYSTEMCTL_LOG" '^reload alloy$'
 assert_not_contains "$SYSTEMCTL_LOG" '^restart alloy$'

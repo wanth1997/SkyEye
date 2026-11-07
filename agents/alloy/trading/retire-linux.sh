@@ -9,6 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMON_LIB="$SCRIPT_DIR/linux-common.sh"
+INSTALL_COMMON="$SCRIPT_DIR/../install-common.sh"
 STRATEGY=""
 RESTART_ALLOY=0
 
@@ -19,7 +20,9 @@ usage() {
     'Disables skyeye-trading-probe@NAME, archives its env, Alloy fragment and' \
     'metrics file into /etc/skyeye-trading/retired/NAME-<UTC>/ and reloads Alloy.' \
     'Remove the central inventory row and run central-deploy first, so the' \
-    'retired target cannot raise TradingTelemetryMissing. Idempotent.'
+    'retired target cannot raise TradingTelemetryMissing. Idempotent.' \
+    'Refuses to run while another SkyEye Alloy install, retire or uninstall' \
+    'holds /run/skyeye-alloy.lock. It works with any Alloy version.'
 }
 
 die() {
@@ -30,6 +33,9 @@ die() {
 [[ -f "$COMMON_LIB" ]] || die "missing shared helper library: $COMMON_LIB"
 # shellcheck source=agents/alloy/trading/linux-common.sh
 source "$COMMON_LIB"
+[[ -f "$INSTALL_COMMON" ]] || die "missing shared helper library: $INSTALL_COMMON"
+# shellcheck source=agents/alloy/install-common.sh
+source "$INSTALL_COMMON"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,11 +62,18 @@ done
 valid_label_value "$STRATEGY" || die "invalid strategy name: $STRATEGY"
 
 init_system_root
-for command_name in alloy cp date find grep install mv sed systemctl tail
+for command_name in alloy cp date find grep install mv perl sed systemctl tail
 do
   command -v "$command_name" >/dev/null 2>&1 || die "missing required command: $command_name"
 done
 resolve_systemctl
+
+# No version gate: taking monitoring off a host must work on any Alloy. The
+# lock is shared with setup.sh, setup-linux.sh and uninstall.sh, held until
+# this script exits, and taken before anything below reads the host.
+HOST_LOCK="$(system_path /run/skyeye-alloy.lock)"
+mkdir -p "$(dirname "$HOST_LOCK")"
+skyeye_take_host_lock "$HOST_LOCK" || die "$SKYEYE_INSTALL_ERROR"
 
 ALLOY_CONFIG_DIR="$(system_path /etc/alloy)"
 ALLOY_FRAGMENT="$ALLOY_CONFIG_DIR/trading-$STRATEGY.alloy"

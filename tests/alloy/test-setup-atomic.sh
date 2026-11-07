@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 AGENT_DIR="$REPO_ROOT/agents/alloy"
 SETUP_UNDER_TEST="${SETUP_UNDER_TEST:-$AGENT_DIR/setup.sh}"
+UNINSTALL_UNDER_TEST="${UNINSTALL_UNDER_TEST:-$AGENT_DIR/uninstall.sh}"
 VERBOSE="${VERBOSE:-0}"
 
 SECRET=fake-cf-secret-value
@@ -33,17 +34,25 @@ require_tool() {
     exit 1
   }
 }
-for tool in alloy envsubst cmp; do
+for tool in alloy envsubst cmp perl; do
   require_tool "$tool"
 done
-[[ -f "$SETUP_UNDER_TEST" ]] || {
-  printf 'FAIL: setup script not found: %s\n' "$SETUP_UNDER_TEST" >&2
-  exit 1
-}
+for script in "$SETUP_UNDER_TEST" "$UNINSTALL_UNDER_TEST"; do
+  [[ -f "$script" ]] || {
+    printf 'FAIL: script not found: %s\n' "$script" >&2
+    exit 1
+  }
+done
 
 REAL_ALLOY="$(command -v alloy)"
 REAL_ENVSUBST="$(command -v envsubst)"
 REAL_BASH="$BASH"
+# The apt package version setup.sh must pin; read from the shared matrix.
+APT_PIN="$(. "$AGENT_DIR/alloy-versions.env" && printf '%s' "$SKYEYE_ALLOY_APT_VERSION")"
+[[ -n "$APT_PIN" ]] || {
+  printf 'FAIL: cannot read SKYEYE_ALLOY_APT_VERSION from alloy-versions.env\n' >&2
+  exit 1
+}
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-setup-atomic.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -166,6 +175,10 @@ while [ "$#" -gt 0 ]; do
 done
 EOF
 
+  shim apt-mark <<'EOF'
+printf 'apt-mark %s\n' "$*" >>"$log_dir/apt.log"
+EOF
+
   shim apt-get <<'EOF'
 printf '%s\n' "$*" >>"$log_dir/apt.log"
 case "$*" in
@@ -198,7 +211,11 @@ EOF
   shim alloy <<'EOF'
 case "$1" in
   --version)
-    echo 'alloy, version v1.16.3 (shim)'
+    if [ -e "$ctl/version-output" ]; then
+      cat "$ctl/version-output"
+    else
+      echo 'alloy, version v1.16.3 (branch: HEAD, revision: shim)'
+    fi
     ;;
   fmt)
     exit 0
@@ -282,32 +299,55 @@ new_box() {
   CASE="$1"
   BOX="$WORK/$CASE"
   CONFIG="$BOX/etc/alloy/config.alloy"
-  mkdir -p "$BOX/bin" "$BOX/shims" "$BOX/agents" "$BOX/log" "$BOX/ctl" \
-    "$BOX/etc/alloy" "$BOX/etc/apt/sources.list.d" "$BOX/var/log/journal"
+  LOCK="$BOX/run/skyeye-alloy.lock"
+  mkdir -p "$BOX/bin" "$BOX/shims" "$BOX/agents" "$BOX/log" "$BOX/ctl" "$BOX/run" \
+    "$BOX/etc/alloy" "$BOX/etc/apt/sources.list.d" "$BOX/var/log/journal" "$BOX/var/lib/alloy"
 
-  for tool in cat chmod cmp cp dirname grep head ln mkdir mktemp mv rm stat touch; do
+  for tool in cat chmod cmp cp dirname grep head ln mkdir mktemp mv perl rm stat touch; do
     real="$(command -v "$tool")"
     ln -s "$real" "$BOX/bin/$tool"
   done
   write_shims
   touch "$BOX/ctl/active"
 
-  cp "$AGENT_DIR"/*.tmpl "$BOX/agents/"
+  cp "$AGENT_DIR"/*.tmpl "$AGENT_DIR/install-common.sh" "$AGENT_DIR/alloy-versions.env" "$BOX/agents/"
   sed -e "s#^ALLOY_CONFIG=/etc/alloy/config.alloy\$#ALLOY_CONFIG=$CONFIG#" \
     -e "s#/var/log/journal#$BOX/var/log/journal#g" \
     -e "s#/etc/apt#$BOX/etc/apt#g" \
+    -e "s#^LOCK_FILE=/run/skyeye-alloy.lock\$#LOCK_FILE=$LOCK#" \
     "$SETUP_UNDER_TEST" >"$BOX/agents/setup.sh"
+  sed -e "s#/etc/alloy#$BOX/etc/alloy#g" \
+    -e "s#/var/lib/alloy#$BOX/var/lib/alloy#g" \
+    -e "s#/etc/apt#$BOX/etc/apt#g" \
+    -e "s#^LOCK_FILE=/run/skyeye-alloy.lock\$#LOCK_FILE=$LOCK#" \
+    "$UNINSTALL_UNDER_TEST" >"$BOX/agents/uninstall.sh"
 
   grep -q "^ALLOY_CONFIG=$CONFIG\$" "$BOX/agents/setup.sh" || {
     printf 'FAIL: %s: could not point ALLOY_CONFIG at the sandbox\n' "$CASE" >&2
     exit 1
   }
-  if grep -v "$BOX" "$BOX/agents/setup.sh" | grep -v '^[[:space:]]*#' |
-    grep -qE '(^|[^[:alnum:]])/(etc/(alloy/|apt)|var/log/journal)'; then
-    printf 'FAIL: %s: a system path escaped the sandbox rewrite\n' "$CASE" >&2
-    exit 1
-  fi
+  for script in setup.sh uninstall.sh; do
+    grep -q "^LOCK_FILE=$LOCK\$" "$BOX/agents/$script" || {
+      printf 'FAIL: %s: could not point the %s lock at the sandbox\n' "$CASE" "$script" >&2
+      exit 1
+    }
+    if grep -v "$BOX" "$BOX/agents/$script" | grep -v '^[[:space:]]*#' |
+      grep -qE '(^|[^[:alnum:]])/(etc/(alloy|apt)|var/(log/journal|lib/alloy)|run/)'; then
+      printf 'FAIL: %s: a system path in %s escaped the sandbox rewrite\n' "$CASE" "$script" >&2
+      exit 1
+    fi
+  done
 }
+
+# Holds the sandbox lock from this shell, as a concurrent run would.
+hold_lock() {
+  exec 8>>"$LOCK"
+  perl -MFcntl=:flock -e 'open(my $fh, ">>&=", 8) or exit 2; exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1)' || {
+    printf 'FAIL: %s: the test could not take the sandbox lock\n' "$CASE" >&2
+    exit 1
+  }
+}
+release_lock() { exec 8>&-; }
 
 # Deliberately not valid text or valid Alloy: NUL, high bytes, no final newline.
 seed_old_config() {
@@ -333,6 +373,14 @@ run_setup() {
   RC=$?
 }
 
+run_uninstall() {
+  (
+    cd "$BOX" || exit 99
+    exec env -i PATH="$BOX/bin" BOX="$BOX" "$REAL_BASH" "$BOX/agents/uninstall.sh"
+  ) </dev/null >"$BOX/log/out" 2>&1
+  RC=$?
+}
+
 # ─────────────────────────────── Assertions ─────────────────────────────────
 
 rc_is() { [[ "$RC" -eq "$1" ]]; }
@@ -348,6 +396,20 @@ log_line_count_is() {
   local count
   count="$(grep -c -- "$2" "$BOX/log/$1" 2>/dev/null)"
   [[ "${count:-0}" -eq "$3" ]]
+}
+
+unheld_before_remove() {
+  local unhold_line remove_line
+  unhold_line="$(grep -n '^apt-mark unhold alloy$' "$BOX/log/apt.log" | head -1 | cut -d: -f1)"
+  remove_line="$(grep -n 'remove --purge -y alloy' "$BOX/log/apt.log" | head -1 | cut -d: -f1)"
+  [[ -n "$unhold_line" && -n "$remove_line" && "$unhold_line" -lt "$remove_line" ]]
+}
+
+held_after_install() {
+  local install_line hold_line
+  install_line="$(grep -n "install -y alloy=" "$BOX/log/apt.log" | tail -1 | cut -d: -f1)"
+  hold_line="$(grep -n '^apt-mark hold alloy$' "$BOX/log/apt.log" | tail -1 | cut -d: -f1)"
+  [[ -n "$install_line" && -n "$hold_line" && "$hold_line" -gt "$install_line" ]]
 }
 
 # `enable` must come after the last restart: a failed try must not change boot.
@@ -432,6 +494,84 @@ check 'run failed' rc_failed
 assert_old_config_intact
 assert_no_restart
 
+new_box input-missing-shared-helper
+seed_old_config
+rm -f "$BOX/agents/install-common.sh"
+run_setup
+assert_clean_input_error 2
+check 'apt-get was not run' absent "$BOX/log/apt.log"
+
+# ─────────────────────────────── Alloy version gate ─────────────────────────
+
+assert_version_refused() {
+  check 'exit code 1' rc_is 1
+  assert_old_config_intact
+  assert_no_restart
+  check 'nothing added next to the config' dir_listing_is 'config.alloy '
+  check 'apt-get was not run' absent "$BOX/log/apt.log"
+  check 'live config named as unchanged' logged out 'was not changed'
+}
+
+new_box version-untested
+seed_old_config
+echo 'alloy, version v1.21.3 (branch: HEAD, revision: shim)' >"$BOX/ctl/version-output"
+run_setup
+assert_version_refused
+check 'error names the version and the tested ones' \
+  logged out 'Alloy 1.21.3 is not tested on linux (tested: 1.16.3 1.18.1)'
+
+new_box version-override-must-match-exactly
+seed_old_config
+echo 'alloy, version v1.21.3 (branch: HEAD, revision: shim)' >"$BOX/ctl/version-output"
+run_setup SKYEYE_ALLOY_UNTESTED_VERSION=1.21
+assert_version_refused
+check 'error says the override must match' logged out 'must name that exact version'
+
+new_box version-unreadable
+seed_old_config
+echo 'something else entirely' >"$BOX/ctl/version-output"
+run_setup
+assert_version_refused
+check 'error quotes what alloy printed' logged out 'something else entirely'
+
+new_box version-override-exact
+seed_old_config
+echo 'alloy, version v1.21.3 (branch: HEAD, revision: shim)' >"$BOX/ctl/version-output"
+run_setup SKYEYE_ALLOY_UNTESTED_VERSION=1.21.3
+check 'exit code 0' rc_is 0
+check 'operator warned about the untested version' logged out 'WARNING: installed Alloy 1.21.3 is not tested'
+
+# ─────────────────────────────── One run at a time ──────────────────────────
+
+new_box lock-held-by-another-run
+seed_old_config
+hold_lock
+run_setup
+release_lock
+check 'exit code 1' rc_is 1
+assert_old_config_intact
+assert_no_restart
+check 'nothing added next to the config' dir_listing_is 'config.alloy '
+check 'error names the lock file' logged out "holds $LOCK"
+check 'apt-get was not run' absent "$BOX/log/apt.log"
+
+new_box lock-file-private-and-released
+seed_old_config
+RUN_UMASK=000 run_setup
+check 'exit code 0' rc_is 0
+check 'lock file mode 600' mode_is "$LOCK" 600
+run_setup
+check 'a second run gets the lock' rc_is 0
+
+new_box lock-symlink-refused
+seed_old_config
+ln -s "$BOX/elsewhere" "$LOCK"
+run_setup
+check 'exit code 1' rc_is 1
+assert_old_config_intact
+assert_no_restart
+check 'symlink target not created' absent "$BOX/elsewhere"
+
 # ─────────────────────────────── Render failure ─────────────────────────────
 
 assert_clean_abort() {
@@ -470,10 +610,12 @@ assert_clean_abort
 check 'journald not restarted for a rejected config' \
   not_logged systemctl.log 'restart systemd-journald'
 
+# No tested version lacks validate, so only the override reaches this check.
 new_box validate-unsupported-by-old-alloy
 seed_old_config
 touch "$BOX/ctl/no-validate"
-run_setup
+echo 'alloy, version v1.8.3 (branch: HEAD, revision: shim)' >"$BOX/ctl/version-output"
+run_setup SKYEYE_ALLOY_UNTESTED_VERSION=1.8.3
 assert_clean_abort
 check 'error names the required version' logged out 'v1.9.0'
 
@@ -634,8 +776,17 @@ touch "$BOX/ctl/apt-ships-sample"
 rm -f "$BOX/ctl/active"
 run_setup
 check 'exit code 0' rc_is 0
-check 'apt-get installed alloy' logged apt.log 'install -y alloy'
+check 'apt-get installed the pinned version' logged apt.log "^install -y alloy=$APT_PIN\$"
+check 'apt-get installed nothing unpinned' not_logged apt.log 'install -y alloy$'
+check 'the package is held after the install' held_after_install
 check 'package sample kept as previous' cmp -s "$CONFIG.previous" "$BOX/old-config"
+
+# A host that already has Alloy keeps its package exactly as it was.
+new_box installed-alloy-not-held
+seed_old_config
+run_setup
+check 'exit code 0' rc_is 0
+check 'apt was not touched' absent "$BOX/log/apt.log"
 
 new_box apt-install-restart-fails
 rm -f "$BOX/bin/alloy"
@@ -810,6 +961,26 @@ printf 'not alloy {{{\n' >"$CONFIG.rollback"
 printf 'not alloy {{{\n' >"$CONFIG.staged.Ab12Cd"
 check 'exit code 0' rc_is 0
 check 'real alloy validates the directory' real_alloy_accepts "$BOX/etc/alloy"
+
+# ─────────────────────────────── uninstall.sh ───────────────────────────────
+
+new_box uninstall-waits-for-no-one
+seed_old_config
+hold_lock
+run_uninstall
+release_lock
+check 'exit code 1' rc_is 1
+assert_old_config_intact
+check 'alloy was not stopped' not_logged systemctl.log 'stop alloy'
+check 'apt was not touched' absent "$BOX/log/apt.log"
+check 'error names the lock file' logged out "holds $LOCK"
+
+new_box uninstall-unholds-before-remove
+seed_old_config
+run_uninstall
+check 'exit code 0' rc_is 0
+check 'config removed' absent "$CONFIG"
+check 'package unheld before the purge' unheld_before_remove
 
 # ─────────────────────────────── Summary ────────────────────────────────────
 

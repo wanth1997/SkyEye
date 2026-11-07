@@ -19,7 +19,7 @@
 
 | 名稱 | 說明 |
 |---|---|
-| `MERGE` | 此更名 PR 在 master 的 merge commit 完整 SHA，Step 0 前先設定；Step 4 只在 `origin/master` 仍等於它時才呼叫 central-deploy |
+| `MERGE` | 此更名 PR 在 master 的 merge commit 完整 SHA，Step 0 前先設定；Step 0 與 Step 4 以 `central-deploy --expect "$MERGE"` 確保只在 `origin/master` 仍等於它時才驗證或部署 |
 | `OLD` | Step 0 時 monitoring-prod 已部署的 HEAD（Rollback B 由它還原 inventory 檔案） |
 | `CUT` | monitoring-prod 上保存 cutover 證據的目錄，例如 `$HOME/serverid-cutover-20261031` |
 
@@ -38,12 +38,11 @@ monitoring-prod：
 CUT="$HOME/serverid-cutover-20261031"; mkdir -p "$CUT"
 cd /home/ubuntu/SkyEye
 OLD=$(git rev-parse HEAD); echo "$OLD" | tee "$CUT/old-head"
-git fetch origin
-if [ "$(git rev-parse origin/master)" = "$MERGE" ]; then echo OK-master-is-merge
-else echo "STOP: origin/master is $(git rev-parse --short=12 origin/master), MERGE is ${MERGE:-unset}; do not start Step 1"; fi
 # 只驗證、不移動 checkout、不 reload：在暫時 worktree 跑 promtool check config、全部 rule tests
-# 與衍生的 Trading inventory test，並列出將被部署的 commits（只應是此更名 PR）
-scripts/central-deploy --dry-run 2>&1 | tee "$CUT/central-deploy-dry-run.log"
+# 與衍生的 Trading inventory test，並列出將被部署的 commits（只應是此更名 PR）。
+# --expect：fetch 後 origin/master 不等於 MERGE 就在驗證前結束，印出
+# `--expect names … but origin/master is …`；此時不要開始 Step 1
+scripts/central-deploy --dry-run --expect "${MERGE:?set MERGE first}" 2>&1 | tee "$CUT/central-deploy-dry-run.log"
 scripts/central-deploy --status | tee "$CUT/central-status-pre.log"
 
 # 必須為 []；若舊名有任何 firing 告警，先處理事件、延後 cutover
@@ -60,7 +59,7 @@ q 'count by (__name__) ({__name__=~"trading_strategy_.+",server_id="tnauqquant-p
 
 `expected-targets.json` 必須只把 `tnauqquant-prod-1` 換成 `macmini-m2`，其他 target 原樣保留。
 
-印出 `STOP:` 時不要進入 Step 1。這個區塊其餘命令都是唯讀，照樣執行，用 `--dry-run` 列出的 commits 確認 merge 後多出什麼。核准人同意它們一起上線，才把 `MERGE` 設為新的 `origin/master` 完整 SHA 並重跑 Step 0；否則延後 cutover。
+dry run 印出 `--expect names … but origin/master is …` 時不要進入 Step 1。這個區塊其餘命令都是唯讀，照樣執行，用 `--dry-run` 列出的 commits 確認 merge 後多出什麼。核准人同意它們一起上線，才把 `MERGE` 設為新的 `origin/master` 完整 SHA 並重跑 Step 0；否則延後 cutover。
 
 `--dry-run` 必須以 `Dry run: validation passed` 結束。若它拒絕部署（dirty tree、checkout 不在 master、loaded config paths 內有 untracked 檔案、需要 container recreate 的路徑、dashboard 或 Loki rule 驗證失敗、Grafana token 缺失或無效），先在 cutover 時窗外排除原因，不要改用手動 `git pull`。Grafana token 的建立步驟見 [README](../README.md#one-time-setup-for-scriptscentral-deploy)；monitoring-prod 沒有 applied 紀錄時，這次部署也需要 token。
 
@@ -129,24 +128,18 @@ Step 3 失敗時，中央尚未變更，執行 **Rollback A**。
 
 ## Step 4 — 部署中央 rules（monitoring-prod）
 
-SHA 比對與 `scripts/central-deploy` 在同一個 `if` 裡：`origin/master` 不等於 `MERGE`（或 `MERGE` 未設定）時只印出 `STOP:`，**不會呼叫 central-deploy**。
+`--expect "$MERGE"` 讓 central-deploy 在 fetch 之後先比對：`origin/master` 不等於 `MERGE` 時，在任何驗證、移動 checkout 或 reload 之前就結束（`MERGE` 未設定時 shell 直接拒絕執行）。
 
 ```bash
 cd /home/ubuntu/SkyEye
-git fetch origin
-if [ "$(git rev-parse origin/master)" = "$MERGE" ]; then
-  # central-deploy 先在暫時 worktree 用 --entrypoint /bin/promtool 跑 check config、rule tests
-  # 與衍生的 inventory test；全部通過才 fast-forward 並 reload，任一失敗就不移動 checkout、不 reload
-  scripts/central-deploy 2>&1 | tee "$CUT/central-deploy.log"; echo "rc=${PIPESTATUS[0]}"
-else
-  echo "STOP: origin/master is $(git rev-parse --short=12 origin/master), MERGE is ${MERGE:-unset}; central-deploy NOT run" \
-    | tee "$CUT/central-deploy.log"
-fi
+# central-deploy 先在暫時 worktree 用 --entrypoint /bin/promtool 跑 check config、rule tests
+# 與衍生的 inventory test；全部通過才 fast-forward 並 reload，任一失敗就不移動 checkout、不 reload
+scripts/central-deploy --expect "${MERGE:?set MERGE first}" 2>&1 | tee "$CUT/central-deploy.log"; echo "rc=${PIPESTATUS[0]}"
 ```
 
 依 `central-deploy.log` 判斷結果：
 
-- **`STOP:`**：central-deploy 沒有執行，中央沒有任何變更。用 `git log --oneline "$MERGE..origin/master"` 與 `scripts/central-deploy --dry-run` 重新審閱多出的 commit。核准人同意它們一起上線，才把 `MERGE` 設為新的 `origin/master` 完整 SHA 並重跑這個區塊；不同意，或無法在 Step 1 的 silence 到期前完成審閱，執行 **Rollback A**。
+- **`--expect names … but origin/master is …`**：central-deploy 在驗證前就結束，中央沒有任何變更。用 `git log --oneline "$MERGE..origin/master"` 與 `scripts/central-deploy --dry-run` 重新審閱多出的 commit。核准人同意它們一起上線，才把 `MERGE` 設為新的 `origin/master` 完整 SHA 並重跑這個區塊；不同意，或無法在 Step 1 的 silence 到期前完成審閱，執行 **Rollback A**。
 - **`rc=0` 且最後一行是 `central-deploy: done; applied <12 碼 SHA>`**：成功，接著跑下面的部署後檢查。
 - **在 `Checkout fast-forwarded` 之前失敗**（promtool check、rule test、inventory test、dashboard 或 Loki rule 驗證、Grafana token 或前置檢查失敗）：中央沒有任何變更，Prometheus 仍是舊 inventory。不要重試或手動 reload，執行 **Rollback A**。
 - **在 `Checkout fast-forwarded` 之後失敗**（`Prometheus rejected the reload` 或 `unsuccessful config reload`）：磁碟已是新版，Prometheus 未套用。不要重啟 Prometheus，也不要照 central-deploy 提示的 `git reset --hard`；執行 **Rollback B**，再執行 **Rollback A**。
@@ -166,7 +159,7 @@ jq -S 'map(if .server_id == "tnauqquant-prod-1" then .server_id = "macmini-m2" e
   "$CUT/pre-legacy-targets.json" | diff - "$CUT/post-legacy-targets.json" && echo LEGACY-OK
 ```
 
-沒有印出 `HEAD-IS-MERGE`，表示閘門通過後、central-deploy 自己 fetch 之前，master 又前進了（「執行前必讀」的 merge 凍結就是為了避免這種情況）。多出的 commit 已通過同一套 validation 並上線，改名本身也已生效：用 `git log --oneline "$MERGE..HEAD" | tee "$CUT/extra-commits.log"` 記錄並交核准人審閱，再繼續比對 inventory。
+`--expect` 是在 central-deploy 自己 fetch 之後比對，所以成功時 HEAD 必定是 `MERGE`。沒有印出 `HEAD-IS-MERGE` 表示 checkout 被別人移動過：停下，用 `git log --oneline "$MERGE..HEAD" | tee "$CUT/extra-commits.log"` 記錄並交核准人審閱，再決定是否繼續比對 inventory。
 
 預期的 inventory 等於 **cutover 前的集合，只把 `tnauqquant-prod-1` 換成 `macmini-m2`**，其他 target（包括可能已存在的 `trading01/lighter-mainnet-btc-canary`）都要原樣保留。不要拿固定筆數比對。
 
