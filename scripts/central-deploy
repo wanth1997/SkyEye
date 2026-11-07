@@ -225,6 +225,23 @@ if [[ "$MODE" == "status" ]]; then
 fi
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not a git checkout: $REPO_ROOT"
+
+# One run at a time per checkout, dry runs included: two runs would race on
+# the checkout, the reloads and the applied record. flock(2) on fd 9 lasts as
+# long as this process (and any child still running), so a killed run leaves
+# nothing to clean up. Taken before any state is read.
+DEPLOY_LOCK="$(git rev-parse --absolute-git-dir)/skyeye-central-deploy.lock"
+exec 9>>"$DEPLOY_LOCK" || die "cannot open the deploy lock $DEPLOY_LOCK"
+python3 -I -c '
+import fcntl, sys
+try:
+    fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(1)
+except OSError as error:
+    sys.exit("cannot lock: %s" % error)
+' || die "another central-deploy is running on this checkout (lock $DEPLOY_LOCK); nothing was fetched, moved or reloaded"
+
 current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
 [[ "$current_branch" == "$BRANCH" ]] || \
   die "checkout is on '${current_branch:-detached HEAD}', expected $BRANCH"

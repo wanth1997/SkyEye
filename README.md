@@ -122,7 +122,7 @@ See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest
 
 ## Change workflow
 
-- Everything is in git. Config changes → edit file → `docker compose up -d --force-recreate <service>` (or `curl -X POST localhost:<port>/-/reload` for Prom/AM live reload). For merged rule/dashboard/Alertmanager changes, `scripts/central-deploy` on the central host validates, fast-forwards, reloads and confirms the load in one step. Pass `--expect <merge sha>` (also with `--dry-run`) to deploy only the commit you reviewed: if `origin/master` is anything else after the fetch, it stops before validating and names both commits.
+- Everything is in git. Config changes → edit file → `docker compose up -d --force-recreate <service>` (or `curl -X POST localhost:<port>/-/reload` for Prom/AM live reload). For merged rule/dashboard/Alertmanager changes, `scripts/central-deploy` on the central host validates, fast-forwards, reloads and confirms the load in one step. Pass `--expect <merge sha>` (also with `--dry-run`) to deploy only the commit you reviewed: if `origin/master` is anything else after the fetch, it stops before validating and names both commits. One run at a time per checkout: a second run, dry runs included, stops before fetching (`--status` is not locked). `scripts/trading-target add`/`remove` likewise wait up to 30 s (`--lock-timeout`) for another add or remove on the same inventory instead of overwriting its row.
 - Dashboards: edit JSON in `grafana/dashboards/<folder>/<uid>.json`; Grafana picks up via provisioning within 60 s.
 - Alloy agents: on the target host, `git pull` + `sudo -E bash agents/alloy/setup.sh`.
 

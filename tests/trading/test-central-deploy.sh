@@ -218,6 +218,28 @@ output="$(deploy)"
 [[ "$output" == Already\ up\ to\ date* ]] || fail "applied checkout did not report a no-op: $output"
 [[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "applied checkout validated or reloaded"
 
+printf 'case: a second central-deploy on the same checkout stops before reading anything\n'
+live_git="$(git -C "$LIVE" rev-parse --absolute-git-dir)"
+touch -t 200001010000 "$live_git/FETCH_HEAD"
+# Held on this shell's own descriptor, the way a running deploy holds it.
+exec 8>>"$live_git/skyeye-central-deploy.lock"
+python3 -I -c 'import fcntl; fcntl.flock(8, fcntl.LOCK_EX | fcntl.LOCK_NB)'
+for mode in deploy --dry-run; do
+  arguments=()
+  [[ "$mode" == deploy ]] || arguments=("$mode")
+  reset_logs
+  if output="$(deploy ${arguments[@]+"${arguments[@]}"} 2>&1)"; then
+    fail "$mode ran while another central-deploy held the checkout"
+  fi
+  [[ "$output" == *'another central-deploy is running on this checkout'* ]] || \
+    fail "$mode did not report the running deploy: $output"
+  [[ ! -s "$DOCKER_LOG" && ! -s "$CURL_LOG" ]] || fail "$mode validated or reloaded while locked"
+  [[ -z "$(find "$live_git/FETCH_HEAD" -newermt '2001-01-01')" ]] || fail "$mode fetched while locked"
+done
+deploy --status >/dev/null || fail "--status waited on the deploy lock"
+exec 8>&-
+[[ "$(deploy)" == Already\ up\ to\ date* ]] || fail "deploy did not run once the lock was released"
+
 "$SEED/scripts/trading-target" --file "$SEED/prometheus/rules/trading-targets.yml" \
   add --server trading02 --strategy deploy-lane-btc >/dev/null
 publish 'add deploy-lane-btc'
