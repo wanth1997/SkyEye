@@ -333,6 +333,14 @@ for change_base in "${change_bases[@]}"; do
   done <<<"$changed_paths"
 done
 
+# A dashboard version that came and went since the last apply leaves no net
+# diff, but a failed run may have published it and Grafana may still serve it,
+# so Grafana is checked for it. (Without a record every dashboard is checked.)
+if [[ "$dashboards" -eq 0 && -n "$applied_sha" ]] && [[ -n "$(git log -n 1 --full-history \
+  --format=%H "$target_sha" --not "$applied_sha" -- grafana/dashboards)" ]]; then
+  dashboards=1
+fi
+
 if [[ "${#manual_paths[@]}" -gt 0 ]]; then
   if [[ -n "$applied_sha" ]]; then
     printf 'These paths changed since the last central-deploy apply (%s) and need a service recreate or a manual decision:\n' \
@@ -376,6 +384,7 @@ import re
 import subprocess
 import sys
 
+DASHBOARD_DIR = "grafana/dashboards"
 # Everything else the ruler reports has to match, so a setting that a later Loki
 # adds is compared rather than skipped.
 LOKI_EVALUATION_FIELDS = ("alerts", "evaluationTime", "health", "lastError", "lastEvaluation", "state")
@@ -421,26 +430,76 @@ def comparable(dashboard):
     return {key: value for key, value in dashboard.items() if key not in ("id", "version")}
 
 
-def old_uids(bases, path):
-    found = set()
+def git_output(arguments, stdin=None):
+    done = subprocess.run(["git"] + arguments, input=stdin, capture_output=True)
+    if done.returncode != 0:
+        sys.exit("git %s failed: %s" % (arguments[0], done.stderr.decode(errors="replace").strip()))
+    return done.stdout
+
+
+def published_versions(target, applied, head):
+    # (commit, path, blob) of every dashboard version Grafana may still serve,
+    # newest first: every version committed after the last apply up to the
+    # target, then the trees at HEAD and at the last apply. A failed run moves
+    # HEAD and can publish a version that the next commit removes again, so
+    # only the history since the last apply sees it, not HEAD or the net diff.
+    # With no record nothing bounds what was published: take all of history.
+    log = ["log", "--full-history", "--topo-order", "-m", "--raw", "--no-renames",
+           "--no-abbrev", "--format=%H", target]
+    bases = [head]
+    if applied:
+        log += ["--not", applied]
+        bases.append(applied)
+    versions, commit = [], None
+    for line in git_output(log + ["--", DASHBOARD_DIR]).decode().splitlines():
+        if re.fullmatch(r"[0-9a-f]{40}", line):
+            commit = line
+        elif line.startswith(":"):
+            fields, _, path = line.partition("\t")
+            blob = fields.split()[3]
+            if path.endswith(".json") and blob.strip("0"):
+                versions.append((commit, path, blob))
     for base in bases:
-        shown = subprocess.run(["git", "show", "%s:%s" % (base, path)], capture_output=True)
-        if shown.returncode != 0:
-            continue
+        listing = git_output(["ls-tree", "-r", "--full-tree", base, "--", DASHBOARD_DIR])
+        for line in listing.decode().splitlines():
+            fields, _, path = line.partition("\t")
+            if fields.split()[1] == "blob" and path.endswith(".json"):
+                versions.append((base, path, fields.split()[2]))
+    return versions
+
+
+def read_blobs(blobs):
+    batch = git_output(["cat-file", "--batch"], "".join(blob + "\n" for blob in blobs).encode())
+    contents, position = {}, 0
+    for blob in blobs:
+        header_end = batch.index(b"\n", position)
+        size = int(batch[position:header_end].split()[2])
+        contents[blob] = batch[header_end + 1:header_end + 1 + size]
+        position = header_end + 1 + size + 1
+    return contents
+
+
+def published_uids(target, applied, head):
+    # Maps each uid to the newest commit and path it was seen in.
+    versions = published_versions(target, applied, head)
+    contents = read_blobs(list(dict.fromkeys(blob for _, _, blob in versions)))
+    seen = {}
+    for commit, path, blob in versions:
         try:
-            old = json.loads(shown.stdout)
+            body = json.loads(contents[blob])
         except ValueError:
             continue
-        if isinstance(old, dict) and isinstance(old.get("uid"), str):
-            found.add(old["uid"].strip())
-    return found
+        if isinstance(body, dict) and isinstance(body.get("uid"), str):
+            seen.setdefault(body["uid"].strip(), {
+                "commit": commit, "path": os.path.relpath(path, DASHBOARD_DIR)})
+    return seen
 
 
 def dashboards_validate(root, output, unrecorded, rest):
     # Grafana drops a file with a clashing title silently, and a clashing uid
     # stops the whole provider from writing, so both are refused up front.
     split = rest.index("--")
-    bases, changed = rest[:split], rest[split + 1:]
+    (target, applied, head), changed = rest[:split], rest[split + 1:]
     dashboards, uids, titles, errors = {}, {}, {}, []
     for directory, _, names in os.walk(root):
         for name in sorted(names):
@@ -462,18 +521,18 @@ def dashboards_validate(root, output, unrecorded, rest):
     if errors:
         sys.exit("\n".join("invalid dashboard " + error for error in errors))
 
-    changed_files = {os.path.relpath(path, "grafana/dashboards") for path in changed}
-    expected, absent = {}, set()
+    changed_files = {os.path.relpath(path, DASHBOARD_DIR) for path in changed}
+    expected = {}
     for relative, dashboard in dashboards.items():
         # Without a record nothing tells a UI edit from a load that never
         # happened, so every dashboard has to match its file.
         if unrecorded == "1" or relative in changed_files:
             expected[dashboard["uid"]] = {"path": relative, "body": comparable(dashboard)}
-    # A failed run can leave one uid applied and another at HEAD, and Grafana may
-    # serve either, so every uid the target no longer holds has to be gone.
-    for path in changed:
-        absent |= old_uids(bases, path) - set(uids)
-    manifest = {"expected": expected, "absent": sorted(absent)}
+    # Grafana may still serve any uid published since the last apply, so every
+    # one the target no longer holds has to be gone.
+    absent = {uid: where for uid, where in published_uids(target, applied, head).items()
+              if uid not in uids}
+    manifest = {"expected": expected, "absent": absent}
     with open(output, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle)
 
@@ -522,7 +581,14 @@ def grafana_confirm(curl, url, token_file, checkout, manifest_path):
         manifest = json.load(handle)
     header = token_header(token_file, checkout)
     served = {item["uid"] for item in grafana_get(curl, url, header, "/api/search?type=dash-db&limit=5000")}
-    problems = ["%s was removed but is still served" % uid for uid in manifest["absent"] if uid in served]
+    problems = [
+        "%s was removed but is still served (last in %s at commit %s)" % (uid, where["path"], where["commit"][:12])
+        for uid, where in sorted(manifest["absent"].items()) if uid in served
+    ]
+    if problems:
+        problems.append(
+            "check in Grafana (/d/<uid>) whether each is still there: delete a leftover of a failed deploy "
+            "in Grafana, or bring its file back in Git if it should stay, then rerun")
     differing = []
     for uid, want in sorted(manifest["expected"].items()):
         if uid not in served:
@@ -663,7 +729,7 @@ SH
 validate_dashboards() {
   printf 'Validating dashboards in %s\n' "${target_sha:0:12}"
   helper dashboards-validate "$TREE/grafana/dashboards" "$WORK_DIR/grafana-expected.json" \
-    "$dashboards_unrecorded" "${change_bases[@]}" -- \
+    "$dashboards_unrecorded" "$target_sha" "$applied_sha" "$head_sha" -- \
     ${dashboard_paths[@]+"${dashboard_paths[@]}"} || \
     die "dashboards in ${target_sha:0:12} are invalid; nothing moved"
 }

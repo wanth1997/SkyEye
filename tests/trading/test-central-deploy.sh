@@ -824,6 +824,55 @@ FAKE_GRAFANA_ROOT="$GRAFANA_BASE" expect_not_loaded 'applied uid still served' \
 expect_applied 'both uids gone'
 restore
 
+# DEPLOY-VALIDATE C5. Run 1 publishes uid B, Grafana loads it, the run fails on
+# Loki. The next commit deletes the file. HEAD then holds no B and applied never
+# did, so only the history between them shows that B may still be served.
+for record in recorded unrecorded; do
+  printf 'case: a uid a failed run published stays checked once its file is gone (%s)\n' "$record"
+  [[ "$record" == recorded ]] || rm -f "$applied_record"
+  set_dashboard "$FLEET" uid '"fleet-intermediate"'
+  change_rule
+  publish 'uid change with a rule change'
+  intermediate="$(seed_head)"
+  rm -rf "$WORK/grafana-intermediate"
+  cp -R "$SEED/grafana/dashboards" "$WORK/grafana-intermediate"
+  FAKE_GRAFANA_ROOT="$WORK/grafana-intermediate" FAKE_LOKI_STALE="$LOKI_BASE" \
+    expect_not_loaded "$record: intermediate uid published" 'loaded rules differ'
+  git_q -C "$SEED" rm --quiet "$FLEET"
+  publish 'remove the dashboard'
+  for attempt in first rerun; do
+    FAKE_GRAFANA_ROOT="$WORK/grafana-intermediate" expect_not_loaded "$record: $attempt" \
+      'fleet-intermediate was removed but is still served'
+    [[ "$output" == *"(last in Trading/trading-strategy-fleet.json at commit ${intermediate:0:12})"* ]] || \
+      fail "$record $attempt: the message did not name where the uid was last: $output"
+    [[ "$output" == *'check in Grafana (/d/<uid>) whether each is still there'* ]] || \
+      fail "$record $attempt: the message did not say what to check: $output"
+  done
+  expect_applied "$record: intermediate uid gone"
+  restore
+done
+
+printf 'case: a dashboard added and removed since the last apply must not be served\n'
+mkdir -p "$(dirname "$SEED/$NEW_DASHBOARD")"
+printf '{"uid":"short-lived","title":"Short lived"}\n' >"$SEED/$NEW_DASHBOARD"
+change_rule
+publish 'short-lived dashboard with a rule change'
+rm -rf "$WORK/grafana-short-lived"
+cp -R "$SEED/grafana/dashboards" "$WORK/grafana-short-lived"
+FAKE_GRAFANA_ROOT="$WORK/grafana-short-lived" FAKE_LOKI_STALE="$LOKI_BASE" \
+  expect_not_loaded 'short-lived dashboard published' 'loaded rules differ'
+git_q -C "$SEED" rm --quiet "$NEW_DASHBOARD"
+publish 'remove the short-lived dashboard'
+# Its net diff since the last apply is empty: only the rule changed.
+[[ -z "$(git -C "$SEED" diff --name-only "$base" HEAD -- grafana/dashboards)" ]] || \
+  fail "fixture expected no net dashboard change"
+for attempt in first rerun; do
+  FAKE_GRAFANA_ROOT="$WORK/grafana-short-lived" expect_not_loaded "short-lived, $attempt" \
+    'short-lived was removed but is still served (last in Utilities/new.json'
+done
+expect_applied 'short-lived dashboard gone'
+restore
+
 printf 'case: a UI edit to a dashboard that did not change does not block a deploy\n'
 change_dashboard "$FLEET" changed
 publish 'dashboard content change'
