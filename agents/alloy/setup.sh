@@ -25,6 +25,11 @@
 # The live config is only replaced after the new one passed `alloy validate`,
 # and is restored if Alloy then fails to start. See "How setup.sh handles
 # failure" in README.md for the exit codes and what stays on disk.
+#
+# Alloy must be a version listed in alloy-versions.env; a host without Alloy
+# gets the pinned apt version, held. Only one SkyEye Alloy install, Trading
+# add/retire or uninstall runs at a time on a host (see "Alloy versions" and
+# "One run at a time" in README.md).
 
 set -euo pipefail
 
@@ -32,6 +37,9 @@ cd "$(dirname "$0")"
 
 ALLOY_CONFIG=/etc/alloy/config.alloy
 ENV_FILE=/etc/default/alloy
+# Shared with trading/setup-linux.sh, retire-linux.sh and uninstall.sh. /run is
+# writable only by root, so no other user can create or hold this file.
+LOCK_FILE=/run/skyeye-alloy.lock
 
 # These live next to the config so every rename stays on one filesystem. None
 # may end in .alloy: with CONFIG_FILE=/etc/alloy, Alloy loads every *.alloy in
@@ -77,6 +85,17 @@ for template in "${TEMPLATES[@]}"; do
   fi
 done
 
+if [ ! -r install-common.sh ]; then
+  echo "ERROR: install-common.sh is missing; copy the whole agents/alloy directory" >&2
+  exit 2
+fi
+# shellcheck source=agents/alloy/install-common.sh
+. ./install-common.sh
+if ! skyeye_load_alloy_versions; then
+  echo "ERROR: $SKYEYE_INSTALL_ERROR" >&2
+  exit 2
+fi
+
 if [ -z "${CF_ACCESS_CLIENT_ID:-}" ]; then
   read -rp "CF Access Client ID (xxx.access): " CF_ACCESS_CLIENT_ID
 fi
@@ -108,7 +127,13 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-# ───────────────────────────── 3. Check target state ───────────────────────
+# ───────────────────────────── 3. Lock + target state ──────────────────────
+
+# Held until this script exits. Taken before anything below reads the host.
+if ! skyeye_take_host_lock "$LOCK_FILE"; then
+  echo "ERROR: $SKYEYE_INSTALL_ERROR." >&2
+  exit 1
+fi
 
 # mv replaces a symlink instead of writing through it, and moves into a directory.
 if [ -L "$ALLOY_CONFIG" ] || { [ -e "$ALLOY_CONFIG" ] && [ ! -f "$ALLOY_CONFIG" ]; }; then
@@ -124,10 +149,8 @@ fi
 
 # ───────────────────────────── 4. Install Alloy ────────────────────────────
 
-if command -v alloy >/dev/null 2>&1; then
-  echo "==> Alloy already installed: $(alloy --version | head -1)"
-else
-  echo "==> Installing Grafana Alloy via apt"
+if ! command -v alloy >/dev/null 2>&1; then
+  echo "==> Installing Grafana Alloy $SKYEYE_ALLOY_APT_VERSION via apt"
   apt-get install -y ca-certificates curl gnupg wget lsb-release >/dev/null
   mkdir -p /etc/apt/keyrings/
   wget -q -O - https://apt.grafana.com/gpg.key \
@@ -136,11 +159,22 @@ else
   echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" \
     > /etc/apt/sources.list.d/grafana.list
   apt-get update -qq
-  apt-get install -y alloy
+  apt-get install -y "alloy=$SKYEYE_ALLOY_APT_VERSION"
+  # Keeps apt upgrades, unattended ones included, on the tested version.
+  apt-mark hold alloy
 fi
 
+# An Alloy that was already installed is checked here, never upgraded or held.
+if ! skyeye_alloy_version_gate linux; then
+  echo "ERROR: $SKYEYE_INSTALL_ERROR." >&2
+  echo "       $ALLOY_CONFIG was not changed." >&2
+  exit 1
+fi
+echo "==> Alloy $SKYEYE_ALLOY_VERSION"
+
 # `alloy fmt` only parses, so it passes configs that cannot run. `validate`
-# shipped in v1.9.0; older versions exit non-zero with "unknown command".
+# shipped in v1.9.0; older versions exit non-zero with "unknown command". Every
+# tested version has it, so only SKYEYE_ALLOY_UNTESTED_VERSION can reach this.
 if ! alloy validate --help >/dev/null 2>&1; then
   echo "ERROR: this Alloy has no validate command: $(alloy --version | head -1)" >&2
   echo "       Upgrade to Alloy v1.9.0 or newer, then re-run. $ALLOY_CONFIG was not changed." >&2
