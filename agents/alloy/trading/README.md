@@ -123,13 +123,16 @@ full shadow → canary process.
    (first switch to directory mode, reload unsupported, or Alloy stopped) it
    refuses and names the pipelines a restart interrupts; re-run with
    `--restart-alloy` once that is acceptable. `--no-start` stages files only.
-   An instance that is already installed keeps its probe timer state: a
-   timer someone disabled (for example a Mainnet probe) stays disabled while
-   `add` updates its env or fragment, and the output says so. A timer that
-   was started but not enabled at boot is started again and stays not enabled.
-   Only `--enable-probe` (not with `--no-start`) enables and starts a disabled
-   instance, for example after an `add --no-start`. A new instance is always
-   enabled and run once.
+   An instance that is already installed keeps both facts about its probe
+   timer, whether it is enabled at boot and whether it is running, while
+   `add` updates its env or fragment, and the output says so. A timer someone
+   disabled (for example a Mainnet probe) stays disabled. A timer that was
+   enabled but stopped (`systemctl stop`) is enabled again without `--now`,
+   and the probe does not run. A timer that was started but not enabled at
+   boot is started again and stays not enabled. Only `--enable-probe` (not
+   with `--no-start`) enables and starts a stopped or disabled instance, for
+   example after an `add --no-start`. A new instance is always enabled and
+   run once.
    Identity and path values (`TQ_STRATEGY`, `TQ_INSTANCE_ID`, the executable,
    config, log, manifest and textfile settings) must be literal `NAME=value`,
    `NAME="value"` or `NAME='value'` assignments with no `$`, backquote or

@@ -27,8 +27,9 @@ usage() {
     '' \
     'add      validate, install, reload Alloy and enable this strategy probe in one step.' \
     '         Idempotent; an installed instance with a changed env is updated in place' \
-    '         and its probe timer keeps the state it had: a timer that was disabled' \
-    '         stays disabled until --enable-probe. Reloads Alloy by default; a restart' \
+    '         and its probe timer stays as enabled-at-boot and as running as it was:' \
+    '         a stopped or disabled timer stays so until --enable-probe, which enables' \
+    '         and starts it. Reloads Alloy by default; a restart' \
     '         (which interrupts every Alloy pipeline) needs --restart-alloy.' \
     '         --no-start stages files only.' \
     'retire   disable this strategy probe, archive its env, fragment and metrics' \
@@ -609,35 +610,29 @@ elif "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_SERVICE" >/dev/null 2>&1 || \
   die "target probe instance must be inactive and disabled before installation: $TQ_STRATEGY"
 fi
 
-# The state this run leaves the target timer in. A new instance, and the flag
-# form, end enabled and running, because running the command is the operator's
-# instruction to start monitoring it. An installed instance keeps the state it
-# had, so updating the env of a probe someone disabled (a Mainnet strategy, for
-# example) does not quietly switch it back on; --enable-probe does that.
-TARGET_TIMER_FINAL=enabled
+# The state this run leaves the target timer in, as two separate facts:
+# enabled at boot, and running now. A new instance, the flag form and
+# --enable-probe end enabled and running, because that is the operator's
+# instruction to start monitoring it. An installed instance keeps both facts as
+# it had them, so updating the env of a probe someone stopped or disabled (a
+# Mainnet strategy, for example) does not quietly start it again.
+TARGET_TIMER_FINAL_ENABLED=1
+TARGET_TIMER_FINAL_ACTIVE=1
 if [[ "$SUBCOMMAND" == "add" && "$NO_START" -eq 0 && "$ENABLE_PROBE" -eq 0 && -f "$INSTALL_ENV" ]]; then
-  if [[ "$TARGET_TIMER_WAS_ENABLED" -eq 1 ]]; then
-    TARGET_TIMER_FINAL=enabled
-  elif [[ "$TARGET_TIMER_WAS_ACTIVE" -eq 1 ]]; then
-    TARGET_TIMER_FINAL=active
-  else
-    TARGET_TIMER_FINAL=disabled
-  fi
+  TARGET_TIMER_FINAL_ENABLED="$TARGET_TIMER_WAS_ENABLED"
+  TARGET_TIMER_FINAL_ACTIVE="$TARGET_TIMER_WAS_ACTIVE"
 fi
-target_timer_converged=0
-case "$TARGET_TIMER_FINAL" in
-  enabled)
-    if [[ "$TARGET_TIMER_WAS_ENABLED" -eq 1 && "$TARGET_TIMER_WAS_ACTIVE" -eq 1 ]]; then
-      target_timer_converged=1
-    fi
-    ;;
-  active)
-    target_timer_converged=1
-    ;;
-  disabled)
-    target_timer_converged=1
-    ;;
+case "$TARGET_TIMER_FINAL_ENABLED$TARGET_TIMER_FINAL_ACTIVE" in
+  11) TARGET_TIMER_FINAL=enabled ;;
+  10) TARGET_TIMER_FINAL=enabled-stopped ;;
+  01) TARGET_TIMER_FINAL=active ;;
+  *) TARGET_TIMER_FINAL=disabled ;;
 esac
+target_timer_converged=0
+if [[ "$TARGET_TIMER_WAS_ENABLED" -eq "$TARGET_TIMER_FINAL_ENABLED" &&
+      "$TARGET_TIMER_WAS_ACTIVE" -eq "$TARGET_TIMER_FINAL_ACTIVE" ]]; then
+  target_timer_converged=1
+fi
 
 for custom_instance_path in \
   "$SYSTEMD_DIR/$INSTANCE_SERVICE" \
@@ -669,12 +664,19 @@ if [[ "$SUBCOMMAND" == "add" ]]; then
     [[ -f "$INSTALL_ENV" && -f "$ALLOY_INSTANCE_FRAGMENT" ]] && \
     cmp -s "$ENV_FILE" "$INSTALL_ENV" && \
     cmp -s "$RENDER_ROOT/trading-$TQ_STRATEGY.alloy" "$ALLOY_INSTANCE_FRAGMENT"; then
-    if [[ "$TARGET_TIMER_FINAL" == "disabled" ]]; then
-      printf 'Already installed: %s (no changes; Alloy untouched; probe timer stays disabled, add --enable-probe to start it)\n' \
-        "$TQ_STRATEGY"
-    else
-      printf 'Already installed and running: %s (no changes; Alloy untouched)\n' "$TQ_STRATEGY"
-    fi
+    case "$TARGET_TIMER_FINAL" in
+      disabled)
+        printf 'Already installed: %s (no changes; Alloy untouched; probe timer stays disabled, add --enable-probe to start it)\n' \
+          "$TQ_STRATEGY"
+        ;;
+      enabled-stopped)
+        printf 'Already installed: %s (no changes; Alloy untouched; probe timer stays enabled at boot but not running, add --enable-probe to start it)\n' \
+          "$TQ_STRATEGY"
+        ;;
+      *)
+        printf 'Already installed and running: %s (no changes; Alloy untouched)\n' "$TQ_STRATEGY"
+        ;;
+    esac
     exit 0
   fi
   alloy_fragments="$(list_alloy_fragments "$ALLOY_CONFIG_DIR")"
@@ -735,6 +737,8 @@ done
     printf 'target_timer_was_enabled=%s\n' "$TARGET_TIMER_WAS_ENABLED"
     printf 'target_timer_was_active=%s\n' "$TARGET_TIMER_WAS_ACTIVE"
     printf 'target_timer_final=%s\n' "$TARGET_TIMER_FINAL"
+    printf 'target_timer_final_enabled=%s\n' "$TARGET_TIMER_FINAL_ENABLED"
+    printf 'target_timer_final_active=%s\n' "$TARGET_TIMER_FINAL_ACTIVE"
     printf 'alloy_action=%s\n' "$ALLOY_ACTION"
   fi
 } >"$TRANSACTION_BACKUP/transaction.meta"
@@ -829,10 +833,15 @@ elif ! "$SYSTEMCTL_BIN" restart alloy; then
   die "Alloy restart failed"
 fi
 
+# Only a running timer gets a first probe run now; an enabled but stopped one
+# is enabled for the next boot and nothing is started.
 case "$TARGET_TIMER_FINAL" in
   enabled)
     "$SYSTEMCTL_BIN" enable --now "$INSTANCE_TIMER"
     "$SYSTEMCTL_BIN" start "$INSTANCE_SERVICE"
+    ;;
+  enabled-stopped)
+    "$SYSTEMCTL_BIN" enable "$INSTANCE_TIMER"
     ;;
   active)
     "$SYSTEMCTL_BIN" start "$INSTANCE_TIMER"
@@ -840,8 +849,14 @@ case "$TARGET_TIMER_FINAL" in
     ;;
 esac
 "$SYSTEMCTL_BIN" is-active --quiet alloy || die "Alloy is not active after installation"
-if [[ "$TARGET_TIMER_FINAL" != "disabled" ]]; then
+if [[ "$TARGET_TIMER_FINAL_ACTIVE" -eq 1 ]]; then
   "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" || die "trading probe timer is not active"
+else
+  ! "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 || \
+    die "trading probe timer is running, but it was not running before this run"
+fi
+if [[ "$TARGET_TIMER_FINAL_ENABLED" -eq 1 ]]; then
+  "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" || die "trading probe timer is not enabled"
 fi
 
 first_log="$(find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print -quit)"
@@ -862,6 +877,12 @@ if [[ "$SUBCOMMAND" == "add" ]]; then
     active)
       printf 'Alloy %s done; probe timer started but not enabled at boot, as before this run: %s\n' \
         "$ALLOY_ACTION" "$INSTANCE_TIMER"
+      ;;
+    enabled-stopped)
+      printf 'Alloy %s done; probe timer left enabled at boot but not running, as before this run: %s\n' \
+        "$ALLOY_ACTION" "$INSTANCE_TIMER"
+      printf 'Start it with: sudo %s/setup-linux.sh add --env-file %s --enable-probe\n' \
+        "$SCRIPT_DIR" "$ENV_FILE"
       ;;
     disabled)
       printf 'Alloy %s done; probe timer left disabled, as before this run: %s\n' \

@@ -880,8 +880,63 @@ assert_not_contains "$SYSTEMCTL_LOG" "^enable( --now)? skyeye-trading-probe@${MA
   printf 'FAIL: add changed whether a started timer is enabled at boot\n' >&2
   exit 1
 }
-# The retire cases below expect the Mainnet probe enabled and running.
+
+printf 'case: add on a converged, started but not enabled instance is a no-op\n'
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_ENV")"
+[[ "$add_output" == *"Already installed and running: $MAINNET"* ]] || {
+  printf 'FAIL: converged started-but-not-enabled add did not report a no-op: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'converged started-but-not-enabled add'
+
+MAINNET_SERVICE_ACTIVE="$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.service"
+printf 'case: add keeps an enabled but stopped timer enabled and stopped\n'
 touch "$MAINNET_TIMER_ENABLED"
+rm -f "$MAINNET_TIMER_ACTIVE" "$MAINNET_SERVICE_ACTIVE"
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_CHANGED_ENV")"
+cmp -s "$MAINNET_CHANGED_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: add did not update the env of an enabled but stopped instance\n' >&2
+  exit 1
+}
+assert_contains "$SYSTEMCTL_LOG" "^enable skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_not_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]"
+assert_not_contains "$SYSTEMCTL_LOG" "^start skyeye-trading-probe@${MAINNET}[.]"
+[[ -e "$MAINNET_TIMER_ENABLED" && ! -e "$MAINNET_TIMER_ACTIVE" && ! -e "$MAINNET_SERVICE_ACTIVE" ]] || {
+  printf 'FAIL: add started a probe that was enabled at boot but stopped\n' >&2
+  exit 1
+}
+[[ "$add_output" == *'probe timer left enabled at boot but not running'* &&
+   "$add_output" == *"--env-file $MAINNET_CHANGED_ENV --enable-probe"* ]] || {
+  printf 'FAIL: add did not say the enabled probe stays stopped: %s\n' "$add_output" >&2
+  exit 1
+}
+
+printf 'case: add on a converged, enabled but stopped instance is a no-op\n'
+: >"$SYSTEMCTL_LOG"
+add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_CHANGED_ENV")"
+[[ "$add_output" == *"Already installed: $MAINNET"*'probe timer stays enabled at boot but not running'* ]] || {
+  printf 'FAIL: converged enabled-but-stopped add did not report a no-op: %s\n' "$add_output" >&2
+  exit 1
+}
+assert_no_mutation 'converged enabled-but-stopped add'
+[[ -e "$MAINNET_TIMER_ENABLED" && ! -e "$MAINNET_TIMER_ACTIVE" ]] || {
+  printf 'FAIL: the no-op changed the enabled-but-stopped timer\n' >&2
+  exit 1
+}
+
+printf 'case: add --enable-probe starts an enabled but stopped instance\n'
+: >"$SYSTEMCTL_LOG"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_ENV" --enable-probe >/dev/null
+assert_contains "$SYSTEMCTL_LOG" "^enable --now skyeye-trading-probe@${MAINNET}[.]timer$"
+assert_contains "$SYSTEMCTL_LOG" "^start skyeye-trading-probe@${MAINNET}[.]service$"
+# The retire cases below expect the Mainnet probe enabled and running.
+[[ -e "$MAINNET_TIMER_ENABLED" && -e "$MAINNET_TIMER_ACTIVE" ]] || {
+  printf 'FAIL: --enable-probe did not enable and start the stopped timer\n' >&2
+  exit 1
+}
 
 printf 'case: retire archives only the target instance and reloads Alloy\n'
 mainnet_metrics="$TEXTFILE_DIR/tnauqquant-$MAINNET.prom"
