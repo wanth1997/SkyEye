@@ -65,6 +65,12 @@ Zero Trust → Access → Applications → **Add Application** (Self-hosted)：
 | SkyEye Prom push | prom-push.wanbrain.com | Service Token == skyeye-agent-push | (service auth) |
 | SkyEye Loki push | loki-push.wanbrain.com | Service Token == skyeye-agent-push | (service auth) |
 
+Grafana 不信任任何 email header，只接受 Access 簽發的 JWT（`Cf-Access-Jwt-Assertion`），而且要同時符合 `SkyEye Grafana` 的 AUD tag 與 team domain `wanbrain.cloudflareaccess.com`。這兩個值寫在 `docker-compose.yml` 的 `GF_AUTH_JWT_EXPECT_CLAIMS` 與 `GF_AUTH_JWT_JWK_SET_URL`。它們不是 secret，每個登入中的瀏覽器都拿得到。
+
+- `grafana.wanbrain.com` 只能由這一個 application 涵蓋，destination 不設 path。Grafana 只接受一個 AUD，另外建 path 專用的 application 時，那些路徑的登入會失敗。
+- 重建這個 application 會換新的 AUD。要重建時，先改 `docker-compose.yml`，否則所有人都會被擋在外面。
+- 登入失敗的判讀、rollback 與救回步驟見 [`docs/operations.md`](../docs/operations.md#grafana-sign-in-cloudflare-access-jwt)。
+
 ## 驗證
 
 ```bash
