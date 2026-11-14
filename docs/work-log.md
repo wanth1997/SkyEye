@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-11-14 19:30 — Mac mini Alloy pin 與 setup-macos 上線 runbook
+
+**改動摘要：** 新增 Mac mini（macmini-m2 / toobit-mexc-btc）的上線 runbook：Alloy 確認是 1.18.1 後 `brew pin`，再重跑 `setup-macos.sh` 換上新 probe 與 Trading log 遮蔽。每一步標明 READ-ONLY 或 CHANGE，附 STOP 條件、rollback R2／R3 與中央、Loki 驗收，並新增直接執行 runbook 原文的演練測試。這次只 merge，主機尚未執行。
+
+**修改的檔案：**
+- `docs/macmini-m2-alloy-rollout.md`：新增。SSH session 能否管理 `gui/<uid>` 與 brew services 的 gate（不行就由 Wan 在 console 執行 CHANGE 與 rollback）；所有 CHANGE 與 rollback 都避開 UTC 18:05–19:30；啟動輸入 freshness、render 比對、tnauqquant census 前後必須相同；Loki 驗收從 installer 成功且 Alloy ready 之後開始算；P&L history 前後比對（KEPT／CHANGED／UNVERIFIED）。
+- `tests/trading/test-macmini-alloy-rollout.sh`：新增，取 runbook 的 helpers 與 Phase 區塊原文，在 brew／launchctl／tmux／Loki shim 沙盒內演練，177 checks。
+- `agents/alloy/README.md`、`agents/alloy/trading/README.md`：補上 macOS pin 說明與 runbook 連結。
+
+**原因/備註：** Wan 同意所有主機升 Alloy，但不能動交易程式（D28 A）。Mac mini 已是 1.18.1，tap 已到 1.21.x，所以只 pin 不移動版本；其他版本 STOP，不 downgrade。Codex review 三輪：R1 有 4 個 MAJOR（rollback 沒有時間與 session gate、Loki 起點太早、log 證據丟掉最後一行），R2 剩 2 個 MINOR，都已修正。真實的 launchd 與跨 SSH 的 brew services 行為只在 shim 演練過，第一次上線要有人看著。`docs/trading01-popdex-rollout.md` 的 `log_evidence` 有同樣丟掉最後一行的問題，另開任務修。
+
+---
+
 ## 2026-11-14 16:55 — Trading installer 從任何工作目錄都能執行
 
 **改動摘要：** `setup-linux.sh` 以 probe user／Alloy user 執行的 helper 一律從 `/` 啟動，root shell 停在 `/root` 時 `add` 不再無訊息失敗。`ensure-log-access.sh` 先 `cd /`，`find` 失敗時印出原因，不再只回 rc=1。

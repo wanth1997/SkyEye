@@ -207,6 +207,12 @@ Adding `popdex-btc` to Trading01 also moves its Alloy off 1.16.0 and replaces
 the shared probe under the running Robinhood and Mainnet probes; follow
 [the Trading01 PopDEX rollout](../../../docs/trading01-popdex-rollout.md).
 
+Re-running `setup-macos.sh` on the Mac mini (`macmini-m2`) to install the
+current probe, P&L history builder and Trading log scrub, and pinning its Alloy
+1.18.1 with `brew pin`, follows
+[the Mac mini rollout](../../../docs/macmini-m2-alloy-rollout.md). Its first
+run restarts Alloy once, because the host has no env record yet.
+
 ### Legacy flag form and singleton migration
 
 Without a subcommand, `setup-linux.sh --env-file PATH` keeps its original
