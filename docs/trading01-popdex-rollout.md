@@ -87,17 +87,27 @@ scp "$OUT/skyeye-alloy-$M7.tar" "$T01:/tmp/skyeye-alloy-$M7.tar"
 `[CHANGE Trading01]`（只新增 staging），以 `ubuntu` 登入 Trading01：
 
 ```bash
-M7=<同上>
-sha256sum /tmp/skyeye-alloy-$M7.tar                              # 必須等於 TAR_SHA
-mkdir -p /home/ubuntu/skyeye-staging
-test ! -e /home/ubuntu/skyeye-staging/popdex-$M7 && echo STAGE-FREE
-tar -x -f /tmp/skyeye-alloy-$M7.tar -C /home/ubuntu/skyeye-staging
-sudo chown -R root:root /home/ubuntu/skyeye-staging/popdex-$M7
-sha256sum /home/ubuntu/skyeye-staging/popdex-$M7/agents/alloy/trading/probe.sh   # 必須等於 PROBE_SHA
-rm -f /tmp/skyeye-alloy-$M7.tar
+M7=<同上>; TAR_SHA=<上面記下的 TAR_SHA>; PROBE_SHA=<上面記下的 PROBE_SHA>
+S=/home/ubuntu/skyeye-staging/popdex-$M7
+if [ -e "$S" ]; then
+  echo "STOP: $S already exists"
+elif [ "$(sha256sum "/tmp/skyeye-alloy-$M7.tar" | cut -c1-64)" != "$TAR_SHA" ]; then
+  echo "STOP: /tmp/skyeye-alloy-$M7.tar does not match TAR_SHA"
+else
+  mkdir -p /home/ubuntu/skyeye-staging &&
+    tar -x -f "/tmp/skyeye-alloy-$M7.tar" -C /home/ubuntu/skyeye-staging &&
+    sudo chown -R root:root "$S" &&
+    [ "$(sha256sum "$S/agents/alloy/trading/probe.sh" | cut -c1-64)" = "$PROBE_SHA" ] &&
+    rm -f "/tmp/skyeye-alloy-$M7.tar" && echo STAGED
+fi
 ```
 
-`STAGE-FREE` 沒印出表示目錄已存在：停下，不覆蓋，改用新的 `MERGE` 或請 manager 確認舊目錄的來源。staging 改成 root 擁有，root 執行的腳本就不能被一般使用者改動。
+整段一起貼上執行，只有前兩個檢查都通過才會寫入。結果：
+
+- `STAGED`：完成。staging 改成 root 擁有，root 執行的腳本就不能被一般使用者改動。
+- `STOP: … already exists`：目錄已存在，什麼都沒寫入。不覆蓋，改用新的 `MERGE` 或請 manager 確認舊目錄的來源。
+- `STOP: … does not match TAR_SHA`：什麼都沒寫入。從 operator 機器重新 `scp`，再跑一次。
+- 沒有 `STAGED` 也沒有 `STOP:`：解壓、`chown` 或 `probe.sh` 檢查失敗，`$S` 可能已部分建立。停下，把輸出交給 manager，不要使用 `$S`。
 
 ## Phase 1 — 前置檢查
 
