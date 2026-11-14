@@ -4,7 +4,7 @@
 >
 > **本文件是 operator 程序，repo 變更 merge 後不會自動生效。** 測試覆蓋：
 >
-> - `tests/trading/test-trading01-popdex-rollout.sh` 在假的 Trading01 上演練 Phase 2–4。它直接執行本文件兩份 `helpers.sh` 的原文：R3（含 retire 失敗、timer 無法 disable 時不動共用檔案，以及重跑後逐 byte 還原），以及 Phase 3／6 的 `log_evidence`／`loki_accept`（含完全沒有 stream 時不會通過）。
+> - `tests/trading/test-trading01-popdex-rollout.sh` 在假的 Trading01 上演練 Phase 2–4。它直接執行本文件兩份 `helpers.sh` 的原文：R3（含 retire 失敗、timer 無法 disable 時不動共用檔案，以及重跑後逐 byte 還原），以及 Phase 3／6 的 `log_evidence`（最後一個以換行結束的行、沒寫完的尾行跳過）／`loki_accept`（含完全沒有 stream 時不會通過，以及 scrub 檢查對空值、`[ORDER_REF]` 與明文 ID 的判定）。
 > - `tests/trading/test-central-deploy.sh` 演練 R5 的兩個 `git restore` 與之後的部署。
 > - `tests/alloy/test-upgrade-linux.sh` 覆蓋 `upgrade-linux.sh`，包括 R2-CRITICAL 讀取的 record 路徑。
 >
@@ -159,16 +159,26 @@ textfile_values() {
       }' "$f"
   done
 }
-# 來源端 log 證據（只讀）：STRATEGY 最新的 raw log 取倒數第二行（一定已經寫完整），
+# 來源端 log 證據（只讀）：STRATEGY 最新的 raw log 只讀一次最後 64 KiB，從同一份內容取最後一個
+# 以換行結束的行（還沒寫完、沒有換行的尾行跳過；讀取期間追加的內容不影響結果），
 # 它的 time= 不早於 SINCE（epoch 秒）時印出事件時間（epoch ns），否則印 none。
 # 輸出是一行要原樣貼到 monitoring-prod 執行的：loki_accept STRATEGY EPOCH_NS|none SINCE
 log_evidence() {
-  local s="$1" since="$2" glob minutes f t ns=none
+  local s="$1" since="$2" glob minutes f bytes line t ns=none
   glob="$(sed -n 's/^TQ_RAW_LOG_GLOB=//p' "$INSTANCES/$s.env" | tail -n 1)"
   minutes=$(( ($(date +%s) - since) / 60 + 1 ))
   f="$(find "${glob%/*}" -maxdepth 1 -type f -name "${glob##*/}" -mmin "-$minutes" -exec ls -1t {} + 2>/dev/null | head -n 1)"
   if [ -n "$f" ]; then
-    t="$(tail -n 2 "$f" | head -n 1 | grep -oE '(^|[[:space:]])time=[^[:space:]]+' | head -n 1 |
+    # 結尾加一個 . 再去掉，保留 $(...) 會吃掉的結尾換行
+    bytes="$(tail -c 65536 "$f"; echo .)"
+    bytes="${bytes%.}"
+    case "$bytes" in
+      *$'\n') line="${bytes%$'\n'}" ;;
+      *$'\n'*) line="${bytes%$'\n'*}" ;;
+      *) line="" ;;
+    esac
+    line="${line##*$'\n'}"
+    t="$(printf '%s\n' "$line" | grep -oE '(^|[[:space:]])time=[^[:space:]]+' | head -n 1 |
       sed -E 's/^[[:space:]]*time=//; s/"//g')"
     if [ -n "$t" ] && ns="$(date -u -d "$t" +%s%N 2>/dev/null)" && [ -n "$ns" ] &&
       [ "$(( ns / 1000000000 ))" -ge "$since" ]; then
@@ -423,7 +433,9 @@ t01_alerts() { q 'ALERTS{product="tnauqquant",server_id="trading01",alertstate="
 # 當時間戳），找到之後 label 與 scrub 檢查才算數。空的 stream 永遠不會印出 LOKI-ACCEPTED。
 loki_accept() {
   local s="$1" ns="$2" since="$3" sel found labels unscrubbed
-  local re='(?i)(order_?id|client_?action_?id|client_?id)=[^\[]'
+  # 明文 ID：= 後面的值不是空的（""、空白或行尾），也不是以 [ORDER_REF] 開頭（不論有沒有引號）。
+  # LogQL 的 RE2 沒有 lookahead，所以「不是 [ORDER_REF]」寫成：[ 之後第一個不同的字元，或行尾。
+  local re='(?i)(order_?id|client_?action_?id|client_?id)=("?\[($|[^O]|O($|[^R]|R($|[^D]|D($|[^E]|E($|[^R]|R($|[^_]|_($|[^R]|R($|[^E]|E($|[^F]|F($|[^\]]))))))))))|"[^"\[]|[^\s"\[])'
   sel="{product=\"tnauqquant\",server_id=\"trading01\",strategy=\"$s\"}"
   if [ "$ns" = none ]; then
     echo "LOKI-PENDING $s: no source log event since $since"
@@ -584,11 +596,14 @@ while read -r s e a <&3; do
   sed -n 's/^Rollback record: //p' "$WORK/add-$s.out" | tail -n 1 >>"$WORK/records.list"
 done 3<"$WORK/timers.before"
 date +%s >"$WORK/siblings-back-epoch"
+echo $(( $(cat "$WORK/siblings-back-epoch") + 1 )) >"$WORK/loki-since"; echo "LOKI-SINCE $(cat "$WORK/loki-since")"
 echo "probe gap: $(( $(cat "$WORK/siblings-back-epoch") - $(cat "$WORK/phase3-epoch") )) s" | tee "$WORK/probe-gap"
 cat "$WORK/records.list"                                 # 三行 record 路徑
 ```
 
 每個 strategy 預期 `Alloy action: reload…`、`Installed Linux trading monitoring fragment: /etc/alloy/trading-<s>.alloy`、`Rollback record: …`、`Probe metrics: …`、`Alloy reload done; probe timer enabled: skyeye-trading-probe@<s>.timer`、`rc=0`。印出任何 `STOP:`：失敗的那次 `add` 已自行還原它自己的檔案，接著執行 [R3](#r3--phase-34-完整退回)，然後 STOP。
+
+`LOKI-SINCE <epoch>` 是 Robinhood Loki 驗收的起點：最後一次 `add` 的 Alloy reload 完成那一秒加 1，寫進 `$WORK/loki-since`。加 1 秒是為了排除那一秒裡、reload 之前由舊 fragment 送出的行；`siblings-back-epoch` 本身只用來算 probe gap。
 
 `probe gap` 超過 180 秒時，兩個既有 strategy 會短暫出現 shadow `TradingTelemetryMissing`，記入執行紀錄即可。
 
@@ -603,7 +618,7 @@ grep -E ' /etc/(default/alloy|alloy/config\.alloy|alloy/trading\.alloy\.pre-pr34
 ls -l "$TEXTFILE"                                         # 三個 tnauqquant-<strategy>.prom
 sleep 30; textfile_values | tee "$WORK/textfile.after-phase3"
 systemctl is-active alloy; curl -fsS "$READY_URL"; echo
-log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/siblings-back-epoch")" | tee "$WORK/loki-evidence.phase3"
+log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/loki-since")" | tee "$WORK/loki-evidence.phase3"
 log_evidence popdex-btc "$(( $(date +%s) - 86400 ))" | tee -a "$WORK/loki-evidence.phase3"
 ```
 
@@ -741,7 +756,7 @@ t01_alerts | tee "$CUT/t01-alerts.post-phase5.json"
 Phase 5 之後 ≥ 10 分鐘。先在 Trading01 root shell 取 log 證據：
 
 ```bash
-log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/siblings-back-epoch")" | tee "$WORK/loki-evidence.phase6"
+log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/loki-since")" | tee "$WORK/loki-evidence.phase6"
 log_evidence popdex-btc "$(( $(date +%s) - 86400 ))" | tee -a "$WORK/loki-evidence.phase6"
 ```
 
@@ -755,7 +770,7 @@ zen_alerts                                       # []
 q 'tnauqquant_current_run_exchange_volume_usd{server_id="trading01",strategy="popdex-btc"}' | jq -c '[.[].metric.exchange] | unique'   # ["popdex"]（lane 有 snapshot 後）
 ```
 
-接著把 `loki-evidence.phase6` 的兩行 `loki_accept …` 原樣貼上執行，結果記入執行紀錄。只有 `LOKI-ACCEPTED` 算 Loki 驗收通過：Loki 有來源端那個事件，stream 只有 `environment`、`level`、`product`、`run_id`、`server_id`、`strategy` 六個 label（Loki 自動加的 `service_name` 除外），而且 `SINCE` 之後沒有明文 order／client ID。Robinhood 的 `SINCE` 是 Phase 3 sibling 恢復的時間，所以 Phase 3 之前進 Loki 的舊行不在檢查範圍，也不在這次刪除範圍；`popdex-btc` 的 stream 在這次 rollout 之前不存在，檢查 24 小時。
+接著把 `loki-evidence.phase6` 的兩行 `loki_accept …` 原樣貼上執行，結果記入執行紀錄。只有 `LOKI-ACCEPTED` 算 Loki 驗收通過：Loki 有來源端那個事件，stream 只有 `environment`、`level`、`product`、`run_id`、`server_id`、`strategy` 六個 label（Loki 自動加的 `service_name` 除外），而且 `SINCE` 之後沒有明文 order／client ID（空值與 `[ORDER_REF]` 不算，其他非空值不論有沒有引號都算）。Robinhood 的 `SINCE` 是 `loki-since`（Phase 3 sibling 恢復之後的下一秒），所以 Phase 3 之前與恢復那一秒進 Loki 的舊行不在檢查範圍，也不在這次刪除範圍；`popdex-btc` 的 stream 在這次 rollout 之前不存在，檢查 24 小時。
 
 - **Robinhood：** 必須是 `LOKI-ACCEPTED`。
   - `LOKI-PENDING`：Phase 3 之後 Robinhood 沒有寫出新的 log 行。告知 tnauqquant manager，Robinhood 的 Loki 驗收記為 PENDING，依下面的後續驗收處理。
@@ -767,7 +782,7 @@ q 'tnauqquant_current_run_exchange_volume_usd{server_id="trading01",strategy="po
 
 **PENDING 的後續驗收：** tnauqquant manager 回報該 lane 已經執行並寫出 raw log 之後 24 小時內，由 SkyEye operator 做一次，結果補進 `docs/work-log.md`：
 
-1. Trading01：`sudo -i`，`WORK=$(ls -d /root/skyeye-popdex-* | tail -n 1); . "$WORK/vars"; . "$WORK/helpers.sh"`，執行 `log_evidence popdex-btc "$(( $(date +%s) - 86400 ))"`（Robinhood 改成 `log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/siblings-back-epoch")"`）。`$WORK` 已經刪除時，照 Phase 1 建一個新的 `$WORK` 與 `helpers.sh`，Robinhood 的 `SINCE` 改用 `date -u -d <phase6-end 紀錄的時間> +%s`。
+1. Trading01：`sudo -i`，`WORK=$(ls -d /root/skyeye-popdex-* | tail -n 1); . "$WORK/vars"; . "$WORK/helpers.sh"`，執行 `log_evidence popdex-btc "$(( $(date +%s) - 86400 ))"`（Robinhood 改成 `log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/loki-since")"`）。`$WORK` 已經刪除時，照 Phase 1 建一個新的 `$WORK` 與 `helpers.sh`，Robinhood 的 `SINCE` 改用 `date -u -d <phase6-end 紀錄的時間> +%s`。
 2. ≥ 60 秒後在 monitoring-prod：`CUT="$HOME/popdex-rollout-<M7>"; . "$CUT/helpers.sh"`，貼上那一行。
 3. `LOKI-ACCEPTED` 才結案。仍是 `LOKI-PENDING` 就等 lane 下一次執行再做；其他結果交給 manager。
 
@@ -987,7 +1002,7 @@ Host 端不必跟著退：沒有 inventory row 時，`popdex-btc` 的 raw series
 | Phase 0 staging | | `MERGE`、`TAR_SHA`、`PROBE_SHA`、`STAGE` |
 | Phase 1 前置檢查 | | `WORK`、`CUT`、`ALLOY_TO`、Mainnet／PopDEX lane 狀態 |
 | Phase 2 Alloy 升級 | | `UPGRADE_RECORD`、ZenIncome 檢查結果 |
-| Phase 3 probe 停止 → 恢復 | | `probe gap` 秒數、`records.list` 三行、Robinhood 與 PopDEX 的 `loki_accept` 結果 |
+| Phase 3 probe 停止 → 恢復 | | `probe gap` 秒數、`loki-since`、`records.list` 三行、Robinhood 與 PopDEX 的 `loki_accept` 結果 |
 | Phase 4 Mainnet | | record、`ProcessDown` 消失時間 |
 | Phase 5 central-deploy | | applied SHA、`TARGETS-OK`、`HEAD-IS-MERGE` |
 | Phase 6 最終核對 | | `TNAUQQUANT-SAME`、Grafana 畫面、Loki 驗收：Robinhood、PopDEX 各為 ACCEPTED／PENDING／FAILED |

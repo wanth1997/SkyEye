@@ -837,6 +837,25 @@ CASE=loki-accept
 CENTRAL_BIN="$WORK_ROOT/central-bin"
 LOKI="$WORK_ROOT/loki"
 mkdir -p "$CENTRAL_BIN" "$LOKI"
+# scrub_count QUERY LINES_FILE: answers a Loki scrub query from a file of lines.
+# The regex is taken from the query as loki_accept sent it and run with rg,
+# whose syntax matches the RE2 subset the runbook uses.
+cat >"$LOKI/scrub-count.sh" <<'EOF'
+scrub_count() {
+  local query="$1" lines="$2" re n
+  re="${query#*\`}"
+  re="${re%\`*}"
+  [ -n "$re" ] && [ "$re" != "$query" ] || return 22
+  n="$(rg -c -e "$re" -- "$lines")"
+  case $? in 0) ;; 1) n=0 ;; *) return 22 ;; esac
+  if [ "$n" -eq 0 ]; then
+    echo '{"status":"success","data":{"resultType":"vector","result":[]}}'
+  else
+    printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%s"]}]}}\n' "$n"
+  fi
+}
+EOF
+# With $LOKI/lines present, the scrub query is answered from those lines.
 cat >"$CENTRAL_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$LOKI/calls.log"
@@ -844,7 +863,12 @@ case "$*" in
   *127.0.0.1:9090/api/v1/query*) cat "$LOKI/prom.json" ;;
   */loki/api/v1/query_range*) cat "$LOKI/range.json" ;;
   */loki/api/v1/series*) cat "$LOKI/series.json" ;;
-  */loki/api/v1/query*) cat "$LOKI/count.json" ;;
+  */loki/api/v1/query*)
+    [ -e "$LOKI/lines" ] || { cat "$LOKI/count.json"; exit 0; }
+    . "$LOKI/scrub-count.sh"
+    for a; do case "$a" in query=*) query="${a#query=}" ;; esac; done
+    scrub_count "$query" "$LOKI/lines"
+    ;;
   *) exit 22 ;;
 esac
 EOF
@@ -896,6 +920,31 @@ accept "$STRATEGY" "$ns" "$since"
 check 'an unscrubbed ID fails' out_has 'LOKI-UNSCRUBBED toobit-mexc-btc:'
 accept "$STRATEGY" none "$since"
 check 'no source event is PENDING' bash -c '[ "$1" -eq 2 ] && grep -q "^LOKI-PENDING " "$2"' _ "$RC" "$BOX/log/out"
+# The scrub check on lines as they reach Loki. Empty values and the scrubber's
+# [ORDER_REF] (bare or quoted) are not IDs; any other value is. The first line
+# is the only hit of this rollout on 2026-11-14 (a false LOKI-UNSCRUBBED).
+scrub_case() {
+  printf '%s\n' "$3" >"$LOKI/lines"
+  accept "$STRATEGY" "$ns" "$since"
+  rm -f "$LOKI/lines"
+  case "$2" in
+    clean) check "$1: not an ID" bash -c '[ "$1" -eq 0 ] && grep -q "^LOKI-ACCEPTED toobit-mexc-btc:" "$2"' _ "$RC" "$BOX/log/out" ;;
+    leak) check "$1: an ID" bash -c '[ "$1" -eq 1 ] && grep -q "^LOKI-UNSCRUBBED toobit-mexc-btc:" "$2"' _ "$RC" "$BOX/log/out" ;;
+  esac
+}
+loki_answers "$found_range" "$good_series" "$no_count"
+scrub_case 'order_id="" (11-14)' clean \
+  'time=2026-11-14T10:18:31.848Z level=INFO msg=coordinated_dispatch_result order_id="" status=ok'
+scrub_case 'order_id= then a space' clean 'order_id= status=ok'
+scrub_case 'order_id= at the end' clean 'order_id='
+scrub_case 'bare [ORDER_REF]' clean 'msg=pnl_status client_id=[ORDER_REF]'
+scrub_case 'quoted [ORDER_REF]' clean 'order_id="[ORDER_REF]" orderId=[ORDER_REF], ack_client_id=[ORDER_REF]'
+scrub_case 'quoted client_id' leak 'msg=coordinated_dispatch_result client_id="tq0123456789abcdefghij"'
+scrub_case 'bare client_id' leak 'msg=coordinated_dispatch_result client_id=tq0123456789abcdefghij'
+scrub_case 'an ID after an empty value' leak 'order_id="" clientId=tq0123456789abcdefghij'
+scrub_case 'a raw value that starts with [' leak 'order_id=[[FAKE-ORDER-0318A FAKE-ORDER-0318B] [FAKE-ORDER-0318C]]'
+scrub_case 'an unterminated [ORDER_REF' leak 'client_action_id="[ORDER_REF"'
+scrub_case 'a value cut inside [ORDER_RE' leak 'order_id=[ORDER_RE'
 
 # ─────────────────────────── P&L history (Phase 5) ──────────────────────────
 
@@ -1016,18 +1065,11 @@ case "$*" in
     range="${query##*[}"
     range="${range%%s]*}"
     from=$(( $(date +%s) - range ))
-    n=0
     while IFS=$'\t' read -r ns line; do
-      [ $(( ns / 1000000000 )) -ge "$from" ] || continue
-      if printf '%s\n' "$line" | perl -ne 'exit(/(?i)(order_?id|client_?action_?id|client_?id)=[^\[]/ ? 0 : 1)'; then
-        n=$((n + 1))
-      fi
-    done <"$LOKI/store"
-    if [ "$n" -eq 0 ]; then
-      echo '{"status":"success","data":{"resultType":"vector","result":[]}}'
-    else
-      printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%s"]}]}}\n' "$n"
-    fi
+      [ $(( ns / 1000000000 )) -lt "$from" ] || printf '%s\n' "$line"
+    done <"$LOKI/store" >"$LOKI/store-lines"
+    . "$LOKI/scrub-count.sh"
+    scrub_count "$query" "$LOKI/store-lines"
     ;;
   *) exit 22 ;;
 esac
