@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-14 20:10 — monitoring-prod 的外部 dead man's switch（SkyEyeWatchdog）
+
+**改動摘要：** 新增 `SkyEyeWatchdog`：只要 Prometheus 的 TSDB head 還在前進就一直 firing，Alertmanager 第一條 route 把它送到 `deadman-external` webhook（`url_file: /etc/alertmanager/secrets/deadman_url`），由外部 hosted check 在收不到 ping 時通知 Wan。另加 shadow 告警 `AllRemoteAgentsSilent`（所有遠端 agent 同時沒有 up）。這次只 merge／部署設定，secret 尚未放、外部帳號尚未開，所以不會送任何流量。
+
+**修改的檔案：**
+- `prometheus/rules/deadman.yml`：`SkyEyeWatchdog`（`time() - prometheus_tsdb_head_max_time/1000 < 120`，`severity: None`）。
+- `alertmanager/alertmanager.yml`：第一條 route `alertname="SkyEyeWatchdog"` → `deadman-external`（`repeat_interval 5m`、`send_resolved: false`、`max_alerts: 1`）。
+- `prometheus/rules/stack-health.yml`：`AlertmanagerNotifyFailures` 排除 `integration="webhook"`，避免 secret 未放時發 Telegram；新增 shadow `AllRemoteAgentsSilent`；`AlertmanagerDown` 指向外部 heartbeat。
+- `scripts/central-deploy`：`alertmanager/secrets/deadman_url` 加入允許的本機檔案。
+- `runbooks/skyeye-watchdog.md`、`runbooks/all-remote-agents-silent.md`：新增；`runbooks/README.md`、`alertmanager/secrets/README.md`、`docs/operations.md`、`README.md` 更新。
+- `prometheus/rules/tests/deadman.test.yml`、`prometheus/rules/tests/stack-health.test.yml`、`tests/stack/test-deadman-switch.sh`（新增）、`tests/trading/test-central-deploy.sh`：rule、route 與沒有 secret 時的實機測試。
+
+**原因/備註：** D15 A（11-14 重啟）：monitoring-prod 自己掛掉時目前沒人會發現。Codex review R1 一個 BLOCKER：釘住的 Alertmanager v0.27.0 用 `url_file` 的 webhook 收到非 2xx 回應會 nil-pointer panic 並退出（upstream #3800，v0.28.0 修正）。沒有 secret 時不會發 HTTP，所以現在部署是安全的；runbook 與 secrets README 加了硬性檢查：Alertmanager < 0.28.0 不得放 `deadman_url`。升級到 v0.34.2 另開任務（需手動 pull／recreate，central-deploy 不處理 image 變更）。Tunnel 探測也另開任務。R2 READY。
+
+---
+
 ## 2026-11-14 20:30 — Rollout runbook 的 Loki 驗收修正
 
 **改動摘要：** Trading01 與 Mac mini 兩份 rollout runbook 的 Loki 驗收改成：來源 log 取最後一個寫完的行；未遮蔽 ID 的檢查不再把空值（`order_id=""`）算成外洩，也只把完整的 `[ORDER_REF]` 當成已遮蔽，`[ORDER_REF]tq123` 這類殘留仍算外洩。
