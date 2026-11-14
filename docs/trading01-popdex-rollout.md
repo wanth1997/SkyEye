@@ -154,6 +154,26 @@ textfile_values() {
       }' "$f"
   done
 }
+# 來源端 log 證據（只讀）：STRATEGY 最新的 raw log 取倒數第二行（一定已經寫完整），
+# 它的 time= 不早於 SINCE（epoch 秒）時印出事件時間（epoch ns），否則印 none。
+# 輸出是一行要原樣貼到 monitoring-prod 執行的：loki_accept STRATEGY EPOCH_NS|none SINCE
+log_evidence() {
+  local s="$1" since="$2" glob minutes f t ns=none
+  glob="$(sed -n 's/^TQ_RAW_LOG_GLOB=//p' "$INSTANCES/$s.env" | tail -n 1)"
+  minutes=$(( ($(date +%s) - since) / 60 + 1 ))
+  f="$(find "${glob%/*}" -maxdepth 1 -type f -name "${glob##*/}" -mmin "-$minutes" -exec ls -1t {} + 2>/dev/null | head -n 1)"
+  if [ -n "$f" ]; then
+    t="$(tail -n 2 "$f" | head -n 1 | grep -oE '(^|[[:space:]])time=[^[:space:]]+' | head -n 1 |
+      sed -E 's/^[[:space:]]*time=//; s/"//g')"
+    if [ -n "$t" ] && ns="$(date -u -d "$t" +%s%N 2>/dev/null)" && [ -n "$ns" ] &&
+      [ "$(( ns / 1000000000 ))" -ge "$since" ]; then
+      :
+    else
+      ns=none
+    fi
+  fi
+  printf 'loki_accept %s %s %s\n' "$s" "$ns" "$since"
+}
 # tnauqquant 的 unit 與程序（只讀）
 tnauqquant_state() {
   systemctl list-units --all --no-legend --plain 'tnauqquant*' | awk '{print $1, $2, $3, $4}'
@@ -376,7 +396,9 @@ done
 ```bash
 M7=<同上>; MERGE=<完整 SHA>
 CUT="$HOME/popdex-rollout-$M7"; install -d -m 700 "$CUT"
+declare -p M7 MERGE CUT >"$CUT/vars"
 cd /home/ubuntu/SkyEye
+cat >"$CUT/helpers.sh" <<'EOF'
 q() { curl -fsS --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
 lq() { curl -fsS --get http://127.0.0.1:3100/loki/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
 targets() { q 'trading_target_info' | jq -S '[.[].metric | del(.__name__)] | sort'; }
@@ -391,6 +413,37 @@ zen_alerts() {
       --data-urlencode 'silenced=false' | jq -c '[.[].labels.alertname]'; } | jq -s -c 'add | unique'; }
 t01_alerts() { q 'ALERTS{product="tnauqquant",server_id="trading01",alertstate="firing"}' \
   | jq -c '[.[].metric | {alertname, strategy}] | sort'; }
+# Trading01 的 log_evidence 印出的那一行：loki_accept STRATEGY EPOCH_NS|none SINCE。
+# 先要求 Loki 在該 strategy 的 stream 裡有時間戳剛好是 EPOCH_NS 的行（Alloy 用 log 的 time=
+# 當時間戳），找到之後 label 與 scrub 檢查才算數。空的 stream 永遠不會印出 LOKI-ACCEPTED。
+loki_accept() {
+  local s="$1" ns="$2" since="$3" sel found labels unscrubbed
+  local re='(?i)(order_?id|client_?action_?id|client_?id)=[^\[]'
+  sel="{product=\"tnauqquant\",server_id=\"trading01\",strategy=\"$s\"}"
+  if [ "$ns" = none ]; then
+    echo "LOKI-PENDING $s: no source log event since $since"
+    return 2
+  fi
+  found="$(curl -fsS --get http://127.0.0.1:3100/loki/api/v1/query_range --data-urlencode "query=$sel" \
+      --data-urlencode "start=$((ns - 1000000000))" --data-urlencode "end=$((ns + 1000000000))" \
+      --data-urlencode 'limit=5000' --data-urlencode 'direction=forward' |
+    jq -r --arg ns "$ns" '[.data.result[].values[] | select(.[0] == $ns)] | length')"
+  case "$found" in
+    '' | *[!0-9]*) echo "LOKI-ERROR $s: the query_range call failed"; return 1 ;;
+    0) echo "LOKI-MISSING $s: no line at the source event time $ns"; return 1 ;;
+  esac
+  labels="$(curl -fsS --get http://127.0.0.1:3100/loki/api/v1/series --data-urlencode "match[]=$sel" \
+      --data-urlencode "start=$since" |
+    jq -c '([.data[] | keys[]] | unique) - ["environment","level","product","run_id","server_id","strategy","service_name"]')"
+  [ -n "$labels" ] || { echo "LOKI-ERROR $s: the series call failed"; return 1; }
+  [ "$labels" = '[]' ] || { echo "LOKI-LABELS $s: unexpected labels $labels"; return 1; }
+  unscrubbed="$(lq "sum(count_over_time($sel |~ \`$re\` [$(( $(date +%s) - since ))s]))")"
+  [ -n "$unscrubbed" ] || { echo "LOKI-ERROR $s: the scrub query failed"; return 1; }
+  [ "$unscrubbed" = '[]' ] || { echo "LOKI-UNSCRUBBED $s: $unscrubbed"; return 1; }
+  echo "LOKI-ACCEPTED $s: the line at $ns is in Loki; labels and scrub checked since $since"
+}
+EOF
+. "$CUT/helpers.sh"
 
 git rev-parse HEAD | tee "$CUT/old-head"
 scripts/central-deploy --status 2>&1 | tee "$CUT/central-status-pre.log"   # Prometheus last reload successful: 1
@@ -404,7 +457,7 @@ zen_alerts | tee "$CUT/zenincome-alerts.pre.json"
 t01_alerts | tee "$CUT/t01-alerts.pre.json"          # 預期含 Mainnet 的 TradingProcessDown
 ```
 
-斷線重連時，重新設定 `M7`、`MERGE`、`CUT`，`cd /home/ubuntu/SkyEye`，再貼上上面的函式定義。
+斷線重連時：`CUT="$HOME/popdex-rollout-<M7>"; . "$CUT/vars"; . "$CUT/helpers.sh"; cd /home/ubuntu/SkyEye`。
 
 - `pre-targets.json` 已有 `popdex-btc`（`jq` 印出 `false`）：中央已提前部署，記下時間（見執行前必讀），照常繼續。
 - `probe_ages` 不是兩筆 age < 60：既有 probe 已有問題，STOP，先查明。
@@ -545,6 +598,8 @@ grep -E ' /etc/(default/alloy|alloy/config\.alloy|alloy/trading\.alloy\.pre-pr34
 ls -l "$TEXTFILE"                                         # 三個 tnauqquant-<strategy>.prom
 sleep 30; textfile_values | tee "$WORK/textfile.after-phase3"
 systemctl is-active alloy; curl -fsS "$READY_URL"; echo
+log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/siblings-back-epoch")" | tee "$WORK/loki-evidence.phase3"
+log_evidence popdex-btc "$(( $(date +%s) - 86400 ))" | tee -a "$WORK/loki-evidence.phase3"
 ```
 
 - 三個 textfile 的 `tnauqquant_probe_timestamp_seconds` 都必須在 `date +%s` 的 60 秒內。不符（某個 probe 沒有產出新資料）：執行 R3，然後 STOP。
@@ -563,6 +618,16 @@ q 'tnauqquant_current_run_exchange_volume_usd{server_id="trading01",strategy="po
 - `probe_ages` 三筆都 < 60 就是 **D5 的條件：`popdex-btc` 已在 remote-write，Phase 5 才可以執行。** 2 分鐘內做不到：執行 R3，然後 STOP。
 - `ZEN-UP-SAME` 沒印出或 `zen_alerts` 非空：執行 R3，然後 STOP。
 - exchange 預期 `["popdex"]`。lane 還沒有 P&L snapshot 時是 `[]`，Phase 6 再看。
+
+**Loki 檢查（Trading01 印出 `loki-evidence.phase3` 之後 ≥ 60 秒）：** 把那兩行 `loki_accept …`（例：`loki_accept lighter-robinhood-btc-canary 1763107262345000000 1763107200`）原樣貼到 monitoring-prod 執行。`log_evidence` 取的是來源 raw log 裡一個已寫完的事件，`loki_accept` 要求 Loki 有同一個時間戳的行，之後才檢查 label 與 scrub，所以沒有收到任何 log 時不會通過。
+
+- Robinhood 必須印出 `LOKI-ACCEPTED`。
+  - `LOKI-PENDING`、`LOKI-MISSING` 或 `LOKI-ERROR`：等 2 分鐘，在 Trading01 重跑 Robinhood 那一行 `log_evidence`，≥ 60 秒後再貼一次，最多共三次。
+  - 三次後仍是 `LOKI-MISSING`：Robinhood 的 log 有寫出，卻沒有進 Loki，屬於這次 rollout 造成的退步。執行 R3，然後 STOP。
+  - 三次後仍是 `LOKI-PENDING`：Phase 3 之後 Robinhood 沒有寫出新的 log 行，不是 Alloy 端的問題。記入執行紀錄，照常繼續，Phase 6 再驗。
+  - 三次後仍是 `LOKI-ERROR`：中央的 Loki 查詢失敗。STOP，把輸出交給 manager。
+  - `LOKI-LABELS` 或 `LOKI-UNSCRUBBED`：STOP，把輸出交給 manager。不要 R3：舊 fragment 的 scrub 更少。
+- PopDEX 的結果只記錄，Phase 6 判定。
 
 Alloy 會從頭讀取 24 小時內更新過的 PopDEX raw log（`tail_from_end = false`、`ignore_older_than = "24h"`）。若 journal 出現 Loki 400 `entry too far behind`，那是早於 Loki 168h 拒收時窗的行，不算失敗。
 
@@ -668,7 +733,14 @@ t01_alerts | tee "$CUT/t01-alerts.post-phase5.json"
 
 ## Phase 6 — 最終核對與收尾 `[READ-ONLY]`
 
-Phase 5 之後 ≥ 10 分鐘。monitoring-prod：
+Phase 5 之後 ≥ 10 分鐘。先在 Trading01 root shell 取 log 證據：
+
+```bash
+log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/siblings-back-epoch")" | tee "$WORK/loki-evidence.phase6"
+log_evidence popdex-btc "$(( $(date +%s) - 86400 ))" | tee -a "$WORK/loki-evidence.phase6"
+```
+
+monitoring-prod（Trading01 印出之後 ≥ 60 秒）：
 
 ```bash
 t01_alerts | tee "$CUT/t01-alerts.final.json"   # 沒有 Mainnet TradingProcessDown；Robinhood 與 Phase 1 相同
@@ -676,15 +748,23 @@ probe_ages                                       # 三筆 < 60
 zen_up | diff "$CUT/zenincome-up.pre.json" - && echo ZEN-UP-SAME
 zen_alerts                                       # []
 q 'tnauqquant_current_run_exchange_volume_usd{server_id="trading01",strategy="popdex-btc"}' | jq -c '[.[].metric.exchange] | unique'   # ["popdex"]（lane 有 snapshot 後）
-curl -fsS --get http://127.0.0.1:3100/loki/api/v1/series \
-  --data-urlencode 'match[]={product="tnauqquant",server_id="trading01",strategy="popdex-btc"}' \
-  --data-urlencode "start=$(( $(date +%s) - 86400 ))" \
-  | jq -c '([.data[] | keys[]] | unique) - ["environment","level","product","run_id","server_id","strategy","service_name"]'   # []
-lq 'sum(count_over_time({product="tnauqquant",server_id="trading01",strategy=~"popdex-btc|lighter-robinhood-btc-canary"} |~ `(?i)(order_?id|client_?action_?id|client_?id)=[^\[]` [10m]))'   # []
 ```
 
-- Loki label 只能有那六個（Loki 自動加的 `service_name` 除外）。多出其他 label：交給 manager，屬於 scrub contract 問題。
-- 最後一個查詢必須是 `[]`：Phase 3 之後進 Loki 的行沒有明文 order／client ID。非 `[]` 時交給 manager；Robinhood 在 Phase 3 之前進 Loki 的舊行不在 10 分鐘視窗內，不受影響，也不在這次刪除範圍。
+接著把 `loki-evidence.phase6` 的兩行 `loki_accept …` 原樣貼上執行，結果記入執行紀錄。只有 `LOKI-ACCEPTED` 算 Loki 驗收通過：Loki 有來源端那個事件，stream 只有 `environment`、`level`、`product`、`run_id`、`server_id`、`strategy` 六個 label（Loki 自動加的 `service_name` 除外），而且 `SINCE` 之後沒有明文 order／client ID。Robinhood 的 `SINCE` 是 Phase 3 sibling 恢復的時間，所以 Phase 3 之前進 Loki 的舊行不在檢查範圍，也不在這次刪除範圍；`popdex-btc` 的 stream 在這次 rollout 之前不存在，檢查 24 小時。
+
+- **Robinhood：** 必須是 `LOKI-ACCEPTED`。
+  - `LOKI-PENDING`：Phase 3 之後 Robinhood 沒有寫出新的 log 行。告知 tnauqquant manager，Robinhood 的 Loki 驗收記為 PENDING，依下面的後續驗收處理。
+  - `LOKI-MISSING`、`LOKI-LABELS`、`LOKI-UNSCRUBBED`、`LOKI-ERROR`：rollout **未完成**。把 `$CUT`、`$WORK` 的路徑與輸出交給 manager，不要自行 rollback。
+- **PopDEX：**
+  - `LOKI-ACCEPTED`：PopDEX 的 log 端到端完成。
+  - `LOKI-PENDING`：24 小時內沒有 PopDEX 的 raw log 事件，lane 還沒有產生 log。PopDEX 的 Loki 驗收記為 **PENDING**，依下面的後續驗收處理，不算完成。
+  - `LOKI-MISSING`、`LOKI-LABELS`、`LOKI-UNSCRUBBED`、`LOKI-ERROR`：PopDEX 的 Loki 驗收記為 **FAILED**，把輸出交給 manager。metrics 與 dashboard 的部分照常驗收，但不回報端到端完成。
+
+**PENDING 的後續驗收：** tnauqquant manager 回報該 lane 已經執行並寫出 raw log 之後 24 小時內，由 SkyEye operator 做一次，結果補進 `docs/work-log.md`：
+
+1. Trading01：`sudo -i`，`WORK=$(ls -d /root/skyeye-popdex-* | tail -n 1); . "$WORK/vars"; . "$WORK/helpers.sh"`，執行 `log_evidence popdex-btc "$(( $(date +%s) - 86400 ))"`（Robinhood 改成 `log_evidence lighter-robinhood-btc-canary "$(cat "$WORK/siblings-back-epoch")"`）。`$WORK` 已經刪除時，照 Phase 1 建一個新的 `$WORK` 與 `helpers.sh`，Robinhood 的 `SINCE` 改用 `date -u -d <phase6-end 紀錄的時間> +%s`。
+2. ≥ 60 秒後在 monitoring-prod：`CUT="$HOME/popdex-rollout-<M7>"; . "$CUT/helpers.sh"`，貼上那一行。
+3. `LOKI-ACCEPTED` 才結案。仍是 `LOKI-PENDING` 就等 lane 下一次執行再做；其他結果交給 manager。
 
 Grafana：
 
@@ -709,7 +789,7 @@ date -u +%FT%TZ | tee "$WORK/phase6-end"
 
 - 把執行紀錄（下表）與 shadow 排除時窗（`phase2-start` 到 `phase6-end`）寫進 `docs/work-log.md`。
 - `$WORK`、`$STAGE` 保留 7 天供 rollback，之後 `rm -rf "$WORK" "$STAGE"`。`$UPGRADE_RECORD`（含兩個 deb，不含 conffile 複本）保留到下一次 Alloy 版本移動；有跑 R2 的話，它的 record 也一樣。`/home/ubuntu/skyeye-agent` 與較舊的 staging 目錄不動。
-- 回報 tnauqquant manager：fleet dashboard 已列出 `popdex-btc`、Mainnet 預期已修正，以及 Robinhood 的值是否有變化。
+- 回報 tnauqquant manager：fleet dashboard 已列出 `popdex-btc`、Mainnet 預期已修正、Robinhood 的值是否有變化，以及 Robinhood 與 PopDEX 的 Loki 驗收結果（ACCEPTED／PENDING／FAILED）。PENDING 時請他在 lane 執行後通知 SkyEye 做後續驗收。
 
 ## Rollback
 
@@ -902,9 +982,10 @@ Host 端不必跟著退：沒有 inventory row 時，`popdex-btc` 的 raw series
 | Phase 0 staging | | `MERGE`、`TAR_SHA`、`PROBE_SHA`、`STAGE` |
 | Phase 1 前置檢查 | | `WORK`、`CUT`、`ALLOY_TO`、Mainnet／PopDEX lane 狀態 |
 | Phase 2 Alloy 升級 | | `UPGRADE_RECORD`、ZenIncome 檢查結果 |
-| Phase 3 probe 停止 → 恢復 | | `probe gap` 秒數、`records.list` 三行 |
+| Phase 3 probe 停止 → 恢復 | | `probe gap` 秒數、`records.list` 三行、Robinhood 與 PopDEX 的 `loki_accept` 結果 |
 | Phase 4 Mainnet | | record、`ProcessDown` 消失時間 |
 | Phase 5 central-deploy | | applied SHA、`TARGETS-OK`、`HEAD-IS-MERGE` |
-| Phase 6 最終核對 | | `TNAUQQUANT-SAME`、Grafana 畫面 |
+| Phase 6 最終核對 | | `TNAUQQUANT-SAME`、Grafana 畫面、Loki 驗收：Robinhood、PopDEX 各為 ACCEPTED／PENDING／FAILED |
+| PENDING 後續驗收 | | 哪個 strategy、`loki_accept` 的那一行與結果 |
 
 Shadow／canary 證據要排除：`trading01` 的 `phase2-start` – `phase6-end`。

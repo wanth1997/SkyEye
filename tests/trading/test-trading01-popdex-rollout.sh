@@ -8,9 +8,11 @@ set -euo pipefail
 # Mainnet manifest. The instance envs come from the checked-in examples with
 # only the repo root, textfile directory and users moved into the test root.
 # The runbook's Phase 1 helpers.sh is taken from the runbook itself, with only
-# HOST_ROOT pointed at the test root, so R3 runs exactly as written there; the
-# other commands below are the runbook's commands. Real `alloy validate` checks
-# every combined config; systemctl is a stub, so no unit is ever touched.
+# HOST_ROOT pointed at the test root, so R3 and log_evidence run exactly as
+# written there, and its monitoring-prod helpers.sh runs loki_accept against a
+# fake Loki; the other commands below are the runbook's commands. Real `alloy
+# validate` checks every combined config; systemctl is a stub, so no unit is
+# ever touched.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -26,11 +28,12 @@ fail() {
   exit 1
 }
 
-for required_tool in alloy rg jq shasum; do
+for required_tool in alloy rg jq shasum perl; do
   command -v "$required_tool" >/dev/null 2>&1 || \
     fail "$required_tool is required; this suite must not pass by skipping"
 done
 REAL_ALLOY="$(command -v alloy)"
+REAL_DATE="$(command -v date)"
 for required_file in "$SETUP" "$ROBINHOOD_EXAMPLE" "$MAINNET_EXAMPLE" "$POPDEX_EXAMPLE" "$RUNBOOK"; do
   [[ -f "$required_file" ]] || fail "required file is missing: $required_file"
 done
@@ -223,6 +226,22 @@ case "$cmd" in
 esac
 EOF
 
+# Trading01 has GNU date, and log_evidence uses its "-u -d TIME +%s%N"; every
+# other call goes to this machine's date.
+cat >"$FAKE_BIN/date" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$#" -eq 4 && "$1" == "-u" && "$2" == "-d" && "$4" == "+%s%N" ]]; then
+  exec perl -MTime::Local=timegm -e '
+    $ARGV[0] =~ /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(?:(Z)|([+-])(\d\d):(\d\d))$/ or exit 1;
+    my $seconds = timegm($6, $5, $4, $3, $2 - 1, $1);
+    $seconds -= ($9 eq "-" ? -1 : 1) * ($10 * 3600 + $11 * 60) if defined $9;
+    printf "%d%s\n", $seconds, substr(($7 // "") . "000000000", 0, 9);' "$3"
+fi
+exec @REAL_DATE@ "$@"
+EOF
+# Baked in: the probe runs under env -i.
+sed -i.bak "s#@REAL_DATE@#$REAL_DATE#" "$FAKE_BIN/date" && rm -f "$FAKE_BIN/date.bak"
+
 cat >"$FAKE_BIN/runuser" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -264,7 +283,7 @@ awk -v open="$helpers_open" '$0 == open { on = 1; next } on && $0 == "EOF" { exi
 grep -qx 'HOST_ROOT=""[[:space:]]*#.*' "$TEST_ROOT/runbook-helpers.sh" || \
   fail 'the runbook helpers.sh no longer sets HOST_ROOT="" on a line of its own'
 sed -E "s#^HOST_ROOT=\"\"#HOST_ROOT=\"$ROOT_P\"#" "$TEST_ROOT/runbook-helpers.sh" >"$TEST_ROOT/helpers.sh"
-for helper in record_timer_states textfile_values probe_strategies stop_all_probes r3_rollback; do
+for helper in record_timer_states textfile_values probe_strategies stop_all_probes r3_rollback log_evidence; do
   grep -q "^$helper() {" "$TEST_ROOT/helpers.sh" || fail "the runbook helpers.sh does not define $helper"
 done
 # shellcheck disable=SC2034  # read by the sourced helpers.sh
@@ -459,6 +478,136 @@ done
   fail 'disabled Mainnet still reads as an expected run'
 [[ "$(probe_metric "$ROBINHOOD" tnauqquant_run_expected)" == "1" ]] || \
   fail 'Robinhood stopped reading as an expected run'
+
+printf 'case: log_evidence names a finished source event after SINCE\n'
+live_runs="$FAKE_REPO/logs/live-runs"
+now="$(date +%s)"
+utc() {
+  perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%S", gmtime($ARGV[0] + $ARGV[1]))' "$1" "${2:-0}"
+}
+# The older PopDEX raw log from the fixture, an hour old, and a newer one whose
+# last line is the newest event.
+perl -e 'utime $ARGV[0], $ARGV[0], $ARGV[1]' "$((now - 3600))" \
+  "$live_runs/20261113_141635_popdex_btc_config.raw.log"
+{
+  printf 'time=%s.123Z level=INFO msg="cycle done" client_id=[ORDER_REF]\n' "$(utc "$((now - 120))")"
+  printf 'time=%s.456Z level=INFO msg="cycle start"\n' "$(utc "$((now - 60))")"
+} >"$live_runs/20261114_121500_popdex_btc_config.raw.log"
+popdex_since="$((now - 86400))"
+popdex_ns="$((now - 120))123000000"
+evidence="$(log_evidence "$POPDEX" "$popdex_since")"
+[[ "$evidence" == "loki_accept $POPDEX $popdex_ns $popdex_since" ]] || \
+  fail "PopDEX evidence is not the second-to-last line of the newest log: $evidence"
+# Robinhood writes local time with an offset; its last line is still being written.
+{
+  printf 'time=%s.000+08:00 level=INFO msg=a\n' "$(utc "$((now - 40))" 28800)"
+  printf 'time=%s.250+08:00 level=INFO msg=b\n' "$(utc "$((now - 30))" 28800)"
+  printf 'time=%s.500+08:00 level=INFO msg=partial' "$(utc "$((now - 1))" 28800)"
+} >"$live_runs/20261114_000000_lighter_robinhood_btc_config.raw.log"
+evidence="$(log_evidence "$ROBINHOOD" "$((now - 300))")"
+[[ "$evidence" == "loki_accept $ROBINHOOD $((now - 30))250000000 $((now - 300))" ]] || \
+  fail "Robinhood evidence did not take the last finished line in UTC: $evidence"
+evidence="$(log_evidence "$ROBINHOOD" "$((now - 10))")"
+[[ "$evidence" == "loki_accept $ROBINHOOD none $((now - 10))" ]] || \
+  fail "an event older than SINCE counted as evidence: $evidence"
+evidence="$(log_evidence "$MAINNET" "$((now - 300))")"
+[[ "$evidence" == "loki_accept $MAINNET none $((now - 300))" ]] || \
+  fail "a strategy without a raw log produced evidence: $evidence"
+
+printf 'case: loki_accept passes only on the source event, never on an empty stream\n'
+cut_open="cat >\"\$CUT/helpers.sh\" <<'EOF'"
+awk -v open="$cut_open" '$0 == open { on = 1; next } on && $0 == "EOF" { exit } on { print }' \
+  "$RUNBOOK" >"$TEST_ROOT/central-helpers.sh"
+grep -q '^loki_accept() {' "$TEST_ROOT/central-helpers.sh" || \
+  fail 'the runbook monitoring-prod helpers.sh does not define loki_accept'
+CENTRAL_BIN="$TEST_ROOT/central-bin"
+LOKI="$TEST_ROOT/loki"
+mkdir -p "$CENTRAL_BIN" "$LOKI"
+# Loki as the runbook queries it: an answer per endpoint, every call logged.
+cat >"$CENTRAL_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$LOKI/calls.log"
+[[ ! -e "$LOKI/down" ]] || exit 7
+case "$*" in
+  */loki/api/v1/query_range*) cat "$LOKI/range.json" ;;
+  */loki/api/v1/series*) cat "$LOKI/series.json" ;;
+  */loki/api/v1/query*) cat "$LOKI/count.json" ;;
+  *) exit 22 ;;
+esac
+EOF
+chmod 755 "$CENTRAL_BIN/curl"
+export LOKI
+central_accept() {
+  (
+    export PATH="$CENTRAL_BIN:$PATH"
+    # shellcheck source=/dev/null
+    . "$TEST_ROOT/central-helpers.sh"
+    loki_accept "$@"
+  )
+}
+LOKI_OUT=""
+LOKI_RC=0
+accept() {
+  : >"$LOKI/calls.log"
+  if LOKI_OUT="$(central_accept "$@" 2>&1)"; then LOKI_RC=0; else LOKI_RC=$?; fi
+}
+loki_answers() {
+  printf '%s\n' "$1" >"$LOKI/range.json"
+  printf '%s\n' "$2" >"$LOKI/series.json"
+  printf '%s\n' "$3" >"$LOKI/count.json"
+}
+stream='{"environment":"production","level":"INFO","product":"tnauqquant","run_id":"20261114_121500_popdex_btc_config","server_id":"trading01","strategy":"popdex-btc"}'
+found_range="{\"status\":\"success\",\"data\":{\"resultType\":\"streams\",\"result\":[{\"stream\":$stream,\"values\":[[\"$popdex_ns\",\"client_id=[ORDER_REF]\"],[\"$((now - 60))456000000\",\"cycle start\"]]}]}}"
+other_range="{\"status\":\"success\",\"data\":{\"resultType\":\"streams\",\"result\":[{\"stream\":$stream,\"values\":[[\"$((popdex_ns + 1))\",\"x\"]]}]}}"
+empty_range='{"status":"success","data":{"resultType":"streams","result":[]}}'
+good_series="{\"status\":\"success\",\"data\":[$(jq -c '. + {service_name: "tnauqquant"}' <<<"$stream")]}"
+extra_series="{\"status\":\"success\",\"data\":[$(jq -c '. + {order_id: "123"}' <<<"$stream")]}"
+empty_series='{"status":"success","data":[]}'
+no_count='{"status":"success","data":{"resultType":"vector","result":[]}}'
+hit_count='{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"2"]}]}}'
+
+loki_answers "$found_range" "$good_series" "$no_count"
+accept "$POPDEX" "$popdex_ns" "$popdex_since"
+[[ "$LOKI_RC" -eq 0 && "$LOKI_OUT" == "LOKI-ACCEPTED $POPDEX:"* ]] || fail "the source event was not accepted: $LOKI_OUT"
+if ! rg -qF "start=$((popdex_ns - 1000000000))" "$LOKI/calls.log" ||
+  ! rg -qF "end=$((popdex_ns + 1000000000))" "$LOKI/calls.log"; then
+  fail 'loki_accept did not query the two seconds around the source event'
+fi
+rg -qF "start=$popdex_since" "$LOKI/calls.log" || fail 'the label check does not start at SINCE'
+rg -qF "[$((now - popdex_since))s]" "$LOKI/calls.log" || rg -qF "[$((now - popdex_since + 1))s]" "$LOKI/calls.log" || \
+  fail 'the scrub check does not cover SINCE to now'
+
+# No stream at all: the label and scrub checks would both read "[]", which the
+# previous Phase 6 counted as a pass. They must not even run.
+loki_answers "$empty_range" "$empty_series" "$no_count"
+accept "$POPDEX" "$popdex_ns" "$popdex_since"
+[[ "$LOKI_RC" -eq 1 && "$LOKI_OUT" == "LOKI-MISSING $POPDEX:"* ]] || fail "an empty stream was not MISSING: $LOKI_OUT"
+if rg -q 'series|v1/query --' "$LOKI/calls.log" || [[ "$(grep -c . "$LOKI/calls.log")" -ne 1 ]]; then
+  fail 'loki_accept ran the label or scrub check without the source event'
+fi
+
+loki_answers "$other_range" "$good_series" "$no_count"
+accept "$POPDEX" "$popdex_ns" "$popdex_since"
+[[ "$LOKI_RC" -eq 1 && "$LOKI_OUT" == "LOKI-MISSING $POPDEX:"* ]] || fail "other lines stood in for the source event: $LOKI_OUT"
+
+loki_answers "$found_range" "$extra_series" "$no_count"
+accept "$POPDEX" "$popdex_ns" "$popdex_since"
+[[ "$LOKI_RC" -eq 1 && "$LOKI_OUT" == "LOKI-LABELS $POPDEX: unexpected labels [\"order_id\"]" ]] || \
+  fail "an extra label passed: $LOKI_OUT"
+
+loki_answers "$found_range" "$good_series" "$hit_count"
+accept "$POPDEX" "$popdex_ns" "$popdex_since"
+[[ "$LOKI_RC" -eq 1 && "$LOKI_OUT" == "LOKI-UNSCRUBBED $POPDEX:"* ]] || fail "an unscrubbed ID passed: $LOKI_OUT"
+
+touch "$LOKI/down"
+accept "$POPDEX" "$popdex_ns" "$popdex_since"
+rm -f "$LOKI/down"
+[[ "$LOKI_RC" -eq 1 && "$LOKI_OUT" == "LOKI-ERROR $POPDEX:"* ]] || fail "a failed Loki call was not an error: $LOKI_OUT"
+
+loki_answers "$found_range" "$good_series" "$no_count"
+accept "$ROBINHOOD" none "$((now - 10))"
+[[ "$LOKI_RC" -eq 2 && "$LOKI_OUT" == "LOKI-PENDING $ROBINHOOD:"* ]] || fail "no source event was not PENDING: $LOKI_OUT"
+[[ ! -s "$LOKI/calls.log" ]] || fail 'loki_accept queried Loki without a source event'
 
 printf 'case: R3 stops at a failed retire and changes nothing\n'
 snapshot >"$TEST_ROOT/before-r3.snapshot"
