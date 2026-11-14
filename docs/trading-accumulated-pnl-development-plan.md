@@ -196,7 +196,7 @@ docker compose config --quiet
 docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint /bin/promtool \
   prom/prometheus:v2.54.1 check config /etc/prometheus/prometheus.yml
 docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" --tmpfs /etc/alertmanager/secrets \
-  --entrypoint /bin/amtool prom/alertmanager:v0.27.0 \
+  --entrypoint /bin/amtool prom/alertmanager:v0.34.2 \
   check-config /etc/alertmanager/alertmanager.yml
 find grafana/dashboards -name '*.json' -exec jq empty {} +
 ```

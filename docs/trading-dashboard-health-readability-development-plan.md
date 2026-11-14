@@ -234,7 +234,7 @@ docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" \
   --entrypoint promtool prom/prometheus:v2.54.1 \
   test rules /etc/prometheus/rules/tests/trading.test.yml
 docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" \
-  --entrypoint amtool prom/alertmanager:v0.27.0 \
+  --entrypoint amtool prom/alertmanager:v0.34.2 \
   check-config /etc/alertmanager/alertmanager.yml
 ```
 

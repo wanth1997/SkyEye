@@ -33,6 +33,7 @@ Add a row + a runbook here every time you add a rule with `severity: High` or `M
 ## Procedures
 
 - [`trading-alert-promotion.md`](./trading-alert-promotion.md) — Trading silence rule, SMTP fill-in, real canary and the promotion checklist.
+- [`alertmanager-upgrade.md`](./alertmanager-upgrade.md) — Manual Alertmanager image upgrade (v0.27.0 → v0.34.2): pre-pull, `up -d`, `--manual-applied`, post-checks and rollback.
 - [`skyeye-watchdog.md`](./skyeye-watchdog.md) — External dead man's switch: hosted check, `deadman_url` secret, deploy, the one-time Alertmanager stop test and planned-downtime pauses.
 
 ## Template
