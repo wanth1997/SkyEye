@@ -293,6 +293,10 @@ done
   die "TQ_ENVIRONMENT must be development or production"
 [[ "$TQ_SIDECAR_REQUIRED" == "0" || "$TQ_SIDECAR_REQUIRED" == "1" ]] || \
   die "TQ_SIDECAR_REQUIRED must be 0 or 1"
+# Optional; the probe refuses any other value and would stop publishing.
+[[ -z "${TQ_STRATEGY_DISABLED:-}" || "$TQ_STRATEGY_DISABLED" == "0" ||
+   "$TQ_STRATEGY_DISABLED" == "1" ]] || \
+  die "TQ_STRATEGY_DISABLED must be 0 or 1 when set"
 [[ "$TQ_TEXTFILE_MODE" == "640" ]] || \
   die "Linux coexistence requires TQ_TEXTFILE_MODE=640"
 

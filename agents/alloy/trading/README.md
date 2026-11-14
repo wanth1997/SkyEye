@@ -14,7 +14,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
 |---|---|
 | `config-linux.alloy.tmpl` | Per-strategy Loki fragment that reuses the existing central receiver |
 | `config-linux-metrics.alloy.tmpl` | Shared textfile collector for all Linux strategy outputs |
-| `deployment-linux-{robinhood,mainnet,ourbit}.env.example` | Credential-free Trading01 instance contracts |
+| `deployment-linux-{robinhood,mainnet,ourbit,popdex}.env.example` | Credential-free Trading01 instance contracts (`popdex` is `popdex-btc` on the PopDEX venue) |
 | `setup-linux.sh` | `add` (one-step install/update), `retire`, render-only, and explicit singleton migration |
 | `retire-linux.sh` | Per-strategy retirement with an exact rollback record (run via `setup-linux.sh retire`) |
 | `linux-common.sh` | Shared test-root, systemctl and path guards for the Linux scripts |
@@ -140,6 +140,14 @@ full shadow → canary process.
    executing the env; `add` refuses anything else.
    It never starts, stops or signals a trading process: a Mainnet env with
    `TQ_POC_RUN_EXPECTED=0` gets only its read-only probe.
+   A strategy the operator stopped on purpose sets `TQ_STRATEGY_DISABLED=1`
+   in its env (default `0`). The probe then reports `run_expected=0` whatever
+   `current.json` or the done marker says, so a stop that left a `running`
+   manifest behind does not read as ProcessDown, and a process that starts
+   anyway raises `TradingUnexpectedProcess`. Process, config, log and marker
+   facts are still reported. `add` and the probe refuse any value other than
+   `0` or `1`. Set it back to `0` with `add` before the strategy is started
+   again.
 2. Repo:
 
    ~~~bash
@@ -195,6 +203,10 @@ The strategy has no monitoring between the retire and the new probe.
 Shared collector, units and `probe.sh` are rewritten only while every
 templated probe is stopped and disabled; both commands refuse otherwise.
 
+Adding `popdex-btc` to Trading01 also moves its Alloy off 1.16.0 and replaces
+the shared probe under the running Robinhood and Mainnet probes; follow
+[the Trading01 PopDEX rollout](../../../docs/trading01-popdex-rollout.md).
+
 ### Legacy flag form and singleton migration
 
 Without a subcommand, `setup-linux.sh --env-file PATH` keeps its original
@@ -244,7 +256,7 @@ restart once interrupting every Alloy pipeline is acceptable.
 
 Both macOS and Linux pipelines scrub the complete log line before it reaches the Loki sink:
 
-- order and client action fields become `[ORDER_REF]`;
+- order, client action and client order ID fields (`order_id`, `client_action_id`, and `client_id` with prefixes such as `ack_`, `bid_` and `ask_`, in snake or camel case) become `[ORDER_REF]`;
 - attempt, reservation and recovery correlation fields become `[TRACE_REF]`;
 - execution grant/mutation/account fields (`grant_id`, `mutation_id`, `mutations`, `account`) become `[EXECUTION_REF]`;
 - repo paths, email addresses and tokens use their existing placeholders.

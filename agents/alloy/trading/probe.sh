@@ -658,6 +658,13 @@ case "$TQ_POC_RUN_EXPECTED" in
   *) die "TQ_POC_RUN_EXPECTED must be 0 or 1" ;;
 esac
 
+# 1 means the operator has deliberately disabled this strategy on this host.
+TQ_STRATEGY_DISABLED="${TQ_STRATEGY_DISABLED:-0}"
+case "$TQ_STRATEGY_DISABLED" in
+  0|1) ;;
+  *) die "TQ_STRATEGY_DISABLED must be 0 or 1" ;;
+esac
+
 case "$TQ_REQUIRE_RUNTIME_CONTRACT" in
   0|1) ;;
   *) die "TQ_REQUIRE_RUNTIME_CONTRACT must be 0 or 1" ;;
@@ -1037,6 +1044,14 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       fi
     fi
   fi
+fi
+
+# A stopped run that wrote no marker leaves its manifest behind, which reads as an
+# expected run that died. A disabled strategy is expected by nobody, whatever the
+# manifest says. Everything else is still reported, so a process that starts
+# anyway counts and shows as unexpected.
+if [[ "$TQ_STRATEGY_DISABLED" -eq 1 ]]; then
+  RUN_EXPECTED=0
 fi
 
 TODAY_LOCAL="$(TZ="$TQ_TIMEZONE" date +%F)"

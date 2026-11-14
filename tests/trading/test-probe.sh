@@ -477,6 +477,134 @@ if [[ "$mode" != "640" ]]; then
   exit 1
 fi
 
+printf 'case: single-exchange PopDEX text-log contract\n'
+# logging.format: text is Go slog TextHandler output, i.e. logfmt. These lines
+# follow the 2026-11-13 Trading01 canary: UTC times with milliseconds, a quoted
+# summary that repeats keys with rounded values, an empty quoted value, one
+# executor and a net position with no carrier. IDs are synthetic.
+POPDEX_CONFIG_PATH="$FAKE_REPO/config/popdex_btc_config.yaml"
+POPDEX_LOG_PATH="$FAKE_REPO/logs/live-runs/20261113_141635_popdex_btc_config.raw.log"
+POPDEX_MANIFEST_PATH="$FAKE_REPO/run-state/popdex-btc/current.json"
+POPDEX_MARKER_PATH="$FAKE_REPO/run-state/popdex-btc/current.done.json"
+POPDEX_RUN_ID=20261113_141635_popdex_btc_config
+mkdir -p "$(dirname "$POPDEX_MANIFEST_PATH")"
+cat >"$POPDEX_CONFIG_PATH" <<'EOF'
+instance_id: "popdex-btc"
+max_cycles: 3
+logging:
+  format: text
+EOF
+cat >"$POPDEX_LOG_PATH" <<EOF
+time=${today_local}T12:00:01.763${FIXTURE_OFFSET} level=INFO msg=tactic_taker_ioc_sent order_id=9000001 price=68836 book_level=0 qty_contracts=0.0002 order_qty=0.0002
+time=${today_local}T12:00:01.764${FIXTURE_OFFSET} level=WARN msg=coordinated_dispatch_result intent=normal_entry executor=popdex-main attempt_id=11 client_action_id=tq-fixture-11 dispatch_claimed=true disposition=unresolved order_id=9000001 ack_client_id=tq-fixture-11 cycle_state=waiting signal_direction=Short net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book ui_submission_status=accepted
+time=${today_local}T12:00:02.063${FIXTURE_OFFSET} level=INFO msg=trade_status state=open signal=open position=Short executor=popdex-main attempt_id=11 client_action_id=tq-fixture-11 qty_base=0.00020000 volume_usd=13.82 total_volume_usd=13.82 quote_notional="" settlement=pending cycle=1 session_cycle=1 cycle_id=fixture-1.1 cycle_identity_state=active
+time=${today_local}T12:00:02.545${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=entry executor=popdex-main attempt_id=11 settlement=confirmed evidence_source=api_position cycle=1 session_cycle=1 cycle_id=fixture-1.1 initiator_venue=popdex-main initiator_side=Short initiator_qty_btc=0.00020000 net_side=Short net_qty_btc=0.00020000 portfolio_projection=coordinator_book next_action=close_position
+time=${today_local}T12:01:04.218${FIXTURE_OFFSET} level=INFO msg=trade_status state=closed executor=popdex-main attempt_id=12 volume_usd=13.82 total_volume_usd=27.64 net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book
+time=${today_local}T12:01:04.300${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=9999 equity_now=9998.9862 rebate_usdt=0.0044 cash_pnl_usdt=-0.0062 real_pnl_usdt=-0.0018 risk_pnl_usdt=-0.0018 cycles_completed=1 risk_stopped=false samples=2 stable=true cycle_completed=true summary="PNL equity_start=9999.00 equity_now=9998.99 cash_pnl=-0.0062 rebate=0.0044 real_pnl=-0.0018 risk_pnl=-0.0018 cycles=1 risk_stopped=false samples=2 stable=true cycle_completed=true" equity_usdt_by_executor=popdex-main:9998.99 volume_usd_by_executor=popdex-main:27.64 cycle_real_pnl_usdt=-0.0018 cycle=1 session_cycle=1 cycle_id=fixture-1.1 cycle_identity_state=complete
+time=${today_local}T12:02:43.216${FIXTURE_OFFSET} level=INFO msg=trade_status state=open signal=open position=Short executor=popdex-main attempt_id=13 client_action_id=tq-fixture-13 volume_usd=13.76 total_volume_usd=41.4 quote_notional="" settlement=pending cycle=2 session_cycle=2 cycle_id=fixture-1.2
+time=${today_local}T12:02:43.329${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=entry executor=popdex-main attempt_id=13 settlement=confirmed cycle=2 session_cycle=2 cycle_id=fixture-1.2 initiator_venue=popdex-main initiator_side=Short initiator_qty_btc=0.10000000 net_side=Short net_qty_btc=0.10000000 portfolio_projection=coordinator_book
+EOF
+
+export TQ_STRATEGY=popdex-btc
+export TQ_INSTANCE_ID=popdex-btc
+export TQ_CONFIG_PATH="$POPDEX_CONFIG_PATH"
+export TQ_RAW_LOG_GLOB="$FAKE_REPO/logs/live-runs/*popdex_btc_config.raw.log"
+export TQ_RUN_MANIFEST="$POPDEX_MANIFEST_PATH"
+export TQ_DONE_MARKER="$POPDEX_MARKER_PATH"
+export TQ_EXECUTOR_MAP=popdex-main=popdex
+export TQ_TEXTFILE_NAME=tnauqquant-popdex-btc.prom
+ROBINHOOD_METRICS_PATH="$METRICS_PATH"
+METRICS_PATH="$TEXTFILE_DIR/tnauqquant-popdex-btc.prom"
+
+popdex_config_sha="$(shasum -a 256 "$POPDEX_CONFIG_PATH" | awk '{print $1}')"
+jq -n \
+  --arg run_id "$POPDEX_RUN_ID" \
+  --arg strategy "$TQ_STRATEGY" \
+  --arg instance_id "$TQ_INSTANCE_ID" \
+  --arg config_sha256 "$popdex_config_sha" \
+  --arg executable "$FAKE_REPO/quant" \
+  --arg config_path "$POPDEX_CONFIG_PATH" \
+  --arg log_path "$POPDEX_LOG_PATH" \
+  --arg done_marker_path "$POPDEX_MARKER_PATH" \
+  '{
+    schema_version: 1,
+    run_id: $run_id,
+    strategy: $strategy,
+    instance_id: $instance_id,
+    pid: 999999,
+    config_sha256: $config_sha256,
+    process_started_at: "2026-11-13T14:16:35Z",
+    executable: $executable,
+    config_path: $config_path,
+    log_path: $log_path,
+    done_marker_path: $done_marker_path,
+    state: "running"
+  }' >"$POPDEX_MANIFEST_PATH"
+
+run_probe
+assert_metric tnauqquant_process_count 0
+assert_metric tnauqquant_run_expected 1
+assert_metric tnauqquant_runtime_contract_available 1
+assert_metric tnauqquant_log_binding_ok 1
+assert_metric tnauqquant_current_run_info 1 "run_id=\"$POPDEX_RUN_ID\""
+assert_metric tnauqquant_current_pnl_valid 1
+assert_metric tnauqquant_current_real_pnl_usdt -0.0018
+# The first equity_now is the record's; the summary repeats it rounded.
+assert_metric tnauqquant_current_equity_usdt 9998.9862
+assert_metric tnauqquant_current_cycles_completed 1
+assert_metric tnauqquant_last_cycle_real_pnl_usdt -0.0018
+assert_metric tnauqquant_cycle_cumulative_real_pnl_usdt -0.0018 'cycle="1"'
+# The stable snapshot wins over the trade_status volumes, which include cycle 2.
+assert_metric tnauqquant_current_run_exchange_volume_usd 27.64 'exchange="popdex"'
+assert_metric tnauqquant_current_position_valid 1
+assert_metric tnauqquant_current_position_btc 0.10000000 'exchange="popdex",side="short"'
+assert_metric tnauqquant_current_net_position_btc -0.1
+assert_metric tnauqquant_sidecar_required 0
+assert_metric tnauqquant_risk_stopped 0
+popdex_exchange_series="$(rg -o 'exchange="[^"]*"' "$METRICS_PATH" | sort -u | tr '\n' ' ')"
+[[ "$popdex_exchange_series" == 'exchange="popdex" ' ]] || {
+  printf 'FAIL: PopDEX output named another exchange: %s\n' "$popdex_exchange_series" >&2
+  exit 1
+}
+if rg -q '(_path|pid|order_id|client_id)=' "$METRICS_PATH"; then
+  printf 'FAIL: PopDEX paths, PIDs or order references became metric labels\n' >&2
+  exit 1
+fi
+
+printf 'case: a bound PopDEX max-cycles marker makes the run not expected\n'
+jq -n \
+  --arg run_id "$POPDEX_RUN_ID" \
+  --arg strategy "$TQ_STRATEGY" \
+  --arg instance_id "$TQ_INSTANCE_ID" \
+  --arg config_sha256 "$popdex_config_sha" \
+  '{
+    schema_version: 1,
+    run_id: $run_id,
+    strategy: $strategy,
+    instance_id: $instance_id,
+    pid: 999999,
+    config_sha256: $config_sha256,
+    reason: "max_cycles_complete",
+    phase: "max_cycles_complete",
+    completed_at: "2026-11-13T22:56:00Z",
+    long_btc: 0,
+    short_btc: 0,
+    net_btc: 0,
+    dust_tolerance_btc: 0
+  }' >"$POPDEX_MARKER_PATH"
+run_probe
+assert_metric tnauqquant_marker_binding_ok 1
+assert_metric tnauqquant_done_marker 1 'reason="max_cycles_complete"'
+assert_metric tnauqquant_run_expected 0
+if [[ ! -f "$ROBINHOOD_METRICS_PATH" ]] ||
+   ! rg -q 'strategy="lighter-robinhood-btc-canary"' "$ROBINHOOD_METRICS_PATH"; then
+  printf 'FAIL: the PopDEX probe changed the Robinhood output\n' >&2
+  exit 1
+fi
+METRICS_PATH="$ROBINHOOD_METRICS_PATH"
+unset TQ_TEXTFILE_NAME
+export TQ_RAW_LOG_GLOB="$FAKE_REPO/logs/live-runs/*.raw.log"
+
 printf 'case: two strategy probes keep distinct atomic outputs\n'
 MAINNET_CONFIG_PATH="$FAKE_REPO/config/lighter_mainnet_btc_config.yaml"
 MAINNET_METRICS_PATH="$TEXTFILE_DIR/tnauqquant-lighter-mainnet-btc-canary.prom"

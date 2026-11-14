@@ -1,8 +1,9 @@
 # shellcheck shell=bash
 # The SKYEYE_* results are read by the scripts that source this file.
 # shellcheck disable=SC2034
-# Shared guards for the SkyEye Alloy host scripts: setup.sh, uninstall.sh and
-# trading/{setup-linux,retire-linux,setup-macos}.sh. Source it; do not run it.
+# Shared guards for the SkyEye Alloy host scripts: setup.sh, uninstall.sh,
+# upgrade-linux.sh and trading/{setup-linux,retire-linux,setup-macos}.sh. Source
+# it; do not run it.
 # macOS runs these scripts with /bin/bash, so keep this file bash 3.2 safe.
 #
 # A function that refuses returns non-zero and leaves the reason in

@@ -1106,6 +1106,48 @@ FAKE_LOKI_STALE="$LOKI_BASE" expect_not_loaded 'manual apply, stale ruler' 'load
 expect_applied 'manual apply, loaded' --manual-applied "${target:0:12}"
 restore
 
+printf 'case: the PopDEX runbook R5 leaves a checkout the next central-deploy accepts\n'
+# R5's own git commands, in order, from docs/trading01-popdex-rollout.md: R5-1
+# puts the inventory from before Phase 5 in the worktree; R5-2, once the remove
+# PR is merged, brings the file back to HEAD so the next deploy can run.
+r5_git=()
+while IFS= read -r r5_line; do
+  r5_git+=("$r5_line")
+done < <(awk '/^### R5 / { on = 1; next } on && /^##/ { exit }
+  on && /^```bash$/ { code = 1; next } on && /^```$/ { code = 0; next }
+  on && code && /^git (restore|checkout) / { print }' "$REPO_ROOT/docs/trading01-popdex-rollout.md")
+[[ "${#r5_git[@]}" -eq 2 ]] || fail "R5 should run two git commands, found ${#r5_git[@]}"
+r5_file=prometheus/rules/trading-targets.yml
+r5_old_head="$(live_head)"
+"$SEED/scripts/trading-target" --file "$SEED/$r5_file" add --server trading01 --strategy r5-lane-btc >/dev/null
+publish 'add r5-lane-btc'
+expect_applied 'R5: the row goes live'
+CUT="$WORK/r5-cut"
+mkdir -p "$CUT"
+printf '%s\n' "$r5_old_head" >"$CUT/old-head"
+(cd "$LIVE" && eval "${r5_git[0]}") || fail "R5-1 failed: ${r5_git[0]}"
+git -C "$LIVE" show "$r5_old_head:$r5_file" | cmp -s - "$LIVE/$r5_file" || \
+  fail 'R5-1 did not put the inventory from before the row in the worktree'
+[[ "$(git -C "$LIVE" status --porcelain --untracked-files=no)" == " M $r5_file" ]] || \
+  fail "R5-1 should leave one unstaged change: $(git -C "$LIVE" status --porcelain)"
+if output="$(deploy 2>&1)"; then
+  fail 'central-deploy accepted the checkout R5-1 left, which would bring the row back'
+fi
+[[ "$output" == *'tracked files have local changes'* ]] || fail "unexpected refusal after R5-1: $output"
+"$SEED/scripts/trading-target" --file "$SEED/$r5_file" remove --server trading01 --strategy r5-lane-btc >/dev/null
+publish 'remove r5-lane-btc'
+r5_remove="$(seed_head)"
+(cd "$LIVE" && eval "${r5_git[1]}") || fail "R5-2 failed: ${r5_git[1]}"
+[[ -z "$(git -C "$LIVE" status --porcelain --untracked-files=no)" ]] || \
+  fail "R5-2 left tracked changes, so central-deploy would refuse: $(git -C "$LIVE" status --porcelain)"
+output="$(deploy --dry-run --expect "$r5_remove" 2>&1)" || fail "the R5-2 dry run was refused: $output"
+[[ "$output" == *'Dry run: validation passed'* ]] || fail "the R5-2 dry run did not pass: $output"
+expect_applied 'R5-2: the remove PR deploys' --expect "$r5_remove"
+if rg -q 'r5-lane-btc' "$LIVE/$r5_file"; then
+  fail 'the inventory still has the row after R5-2'
+fi
+restore
+
 printf 'case: a diverged checkout is refused\n'
 git_q -C "$LIVE" commit --quiet --allow-empty -m 'local divergence'
 if deploy >/dev/null 2>&1; then
