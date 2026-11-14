@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-14 21:28 — Alertmanager 升到 v0.34.2
+
+**改動摘要：** Alertmanager 從 `prom/alertmanager:v0.27.0` 升到 `v0.34.2`，修掉 `url_file` webhook 收到非 2xx 回應就 nil-pointer panic 的問題（upstream #3800，v0.28.0 起修正），這是放 `deadman_url` 的前提。新增升級與 rollback runbook，並補上回歸測試。這次只 merge，部署要照 runbook 手動 pull／recreate。
+
+**修改的檔案：**
+- `docker-compose.yml`：Alertmanager image 改為 `prom/alertmanager:v0.34.2`。
+- `AGENTS.md`、`docs/project-brief.md`、`docs/trading-accumulated-pnl-development-plan.md`、`docs/trading-dashboard-health-readability-development-plan.md`：版本與驗證命令更新。
+- `tests/stack/test-deadman-switch.sh`：ping 端點依序回 404、503、200，確認 Alertmanager 不會退出、失敗有計數、其他告警照常送到 `telegram-high`；另外用未修改的設定（secrets 為空、假 `tg_token`）完整啟動一次。
+- `tests/trading/test-central-deploy.sh`：Alertmanager image 改從 compose 讀，不再寫死版本。
+- `runbooks/alertmanager-upgrade.md`：新增。內容包括時段、baseline、強制先 pull、手動 recreate、部署後檢查，以及 rollback（降到 0.28.0 以下前要先移除 `deadman_url`）。
+- `runbooks/skyeye-watchdog.md`、`runbooks/README.md`、`alertmanager/secrets/README.md`：第 2 步改連到升級 runbook，並更新 0.34 的 `reason` 對照表與 log 行為說明。
+
+**原因/備註：** 同樣的回歸測試在 v0.27.0 上會失敗（panic 後 rc=1），在 v0.34.2 上通過。離線驗過以下幾點：0.27.0 → 0.34.2 → 0.27.0 往返後 silence 與 nflog 都保留；dashboard 與 rule 用到的 metrics 都還在；Grafana 的 datasource 是 `access: proxy`，不受 0.34.2 預設關閉 CORS 影響。`scripts/central-deploy` 不處理 image 變更，也沒有改；它的 amtool／promtool 驗證沒有 `--pull=never`，所以 runbook 規定部署前必須先 pull。Codex review R1 READY_WITH_MINOR，三個 MINOR 已修：200 案例的計數 baseline、log 可能含回應 body 裡的網址、重試 WARN 會去重。
+
+---
+
 ## 2026-11-14 20:10 — monitoring-prod 的外部 dead man's switch（SkyEyeWatchdog）
 
 **改動摘要：** 新增 `SkyEyeWatchdog`：只要 Prometheus 的 TSDB head 還在前進就一直 firing，Alertmanager 第一條 route 把它送到 `deadman-external` webhook（`url_file: /etc/alertmanager/secrets/deadman_url`），由外部 hosted check 在收不到 ping 時通知 Wan。另加 shadow 告警 `AllRemoteAgentsSilent`（所有遠端 agent 同時沒有 up）。這次只 merge／部署設定，secret 尚未放、外部帳號尚未開，所以不會送任何流量。
