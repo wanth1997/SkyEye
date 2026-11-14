@@ -6,7 +6,7 @@ Day-2 reference: what to do when, by whom, and how often. If you're reading this
 
 Morning check (9:00-10:00 Taipei):
 
-1. **Telegram group** — expect one silent `DailyHeartbeat` message per 24 h. If absent for 2+ days, the alert pipeline has a problem somewhere (Prom ↔ AM ↔ Telegram). Investigate even if Grafana looks fine.
+1. **Telegram group** — expect one silent `DailyHeartbeat` message per 24 h. If absent for 2+ days, the alert pipeline has a problem somewhere (Prom ↔ AM ↔ Telegram). Investigate even if Grafana looks fine. A dead monitoring-prod no longer depends on noticing this: once the external heartbeat check is set up it emails (later also Telegrams) Wan within about 16 minutes, see [`skyeye-watchdog.md`](../runbooks/skyeye-watchdog.md).
 2. **Grafana Overview** (https://grafana.wanbrain.com) — 30-second glance:
    - `Active alerts (High/Medium)` = 0 — green
    - `Products UP` == product count — nothing has fallen off
@@ -61,9 +61,11 @@ If all three are fine, you're done. Total: under 2 minutes.
 
 ### SkyEye itself stops paging (no alerts, no heartbeat)
 
-Symptom: no silent `DailyHeartbeat` in Telegram for 2+ mornings, `24h Telegram 通知` reads 0.
+Symptom: the external heartbeat service reports `skyeye-monitoring-prod` down (no `SkyEyeWatchdog` ping for 15 minutes), or no silent `DailyHeartbeat` in Telegram for 2+ mornings and `24h Telegram 通知` reads 0.
 
-1. **UptimeRobot** — check your dashboard (https://uptimerobot.com). If ppclub.tw is still being probed, your monitoring stack is silent but the external probe is alive.
+The external check is the primary signal: `SkyEyeWatchdog` is tied to the TSDB head and pings through Alertmanager, so a dead EC2, Docker, Prometheus or Alertmanager, a full disk that stops TSDB writes, or a lost outbound network all stop the pings. Follow [`runbooks/skyeye-watchdog.md`](../runbooks/skyeye-watchdog.md#外部服務告警時). Before planned downtime longer than 10 minutes, pause the external check.
+
+1. **External check** — open the heartbeat service and look at the last ping time. No ping but the host is reachable: check the `deadman-external` errors in the Alertmanager log.
 2. **SSH monitoring-prod**:
    ```bash
    sudo docker compose -f /home/ubuntu/SkyEye/docker-compose.yml ps
@@ -601,7 +603,7 @@ New product added = $0 incremental (agent runs on the product's own host).
 ## FAQ
 
 **Q: Why are there Low alerts that are always firing?**
-A: `DailyHeartbeat` is a `vector(1)` rule — intentional. Its daily silent Telegram message proves the full Prom→AM→Telegram path is alive. If it stops arriving, something's broken.
+A: `DailyHeartbeat` is a `vector(1)` rule — intentional. Its daily silent Telegram message proves the full Prom→AM→Telegram path is alive. If it stops arriving, something's broken. `SkyEyeWatchdog` is also always firing (`severity=None`, so the Overview panels skip it); it is the external dead man's switch ping and never reaches Telegram.
 
 **Q: Why does the scrape `job` label say `integrations/unix` instead of `node-exporter`?**
 A: Alloy's `prometheus.exporter.unix` integration sets its own job name. Our rules don't filter by `job` so it doesn't matter.

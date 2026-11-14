@@ -329,7 +329,7 @@ done
 
 printf 'case: the supported local secret files are allowed\n'
 mkdir -p "$LIVE/alertmanager/secrets"
-for secret in tg_token smtp_password email-addresses.tmpl; do
+for secret in tg_token smtp_password email-addresses.tmpl deadman_url; do
   printf 'fixture' >"$LIVE/alertmanager/secrets/$secret"
   deploy --dry-run >/dev/null || fail "dry run refused the supported alertmanager/secrets/$secret"
 done

@@ -125,6 +125,7 @@ ALLOWED_LOCAL_FILES=(
   alertmanager/secrets/tg_token
   alertmanager/secrets/smtp_password
   alertmanager/secrets/email-addresses.tmpl
+  alertmanager/secrets/deadman_url
 )
 
 applied_file() {

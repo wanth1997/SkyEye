@@ -14,6 +14,17 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    # Must stay first: the dead man's switch only proves the pipeline when it
+    # reaches the external heartbeat service, whatever labels other routes match.
+    # Pings every 5-6 minutes (repeat is checked on each 1m flush). It is not a
+    # shadow rule: the external service is its canary, see
+    # runbooks/skyeye-watchdog.md.
+    - matchers: [alertname="SkyEyeWatchdog"]
+      receiver: deadman-external
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 5m
+      continue: false
     # New rules enter shadow mode first: Prometheus evaluates and exposes them,
     # but Alertmanager does not notify until the canary review promotes them.
     - matchers: [notification_mode="shadow"]
@@ -56,6 +67,18 @@ time_intervals:
 
 receivers:
   - name: shadow-null
+
+  # The ping URL is a credential: it lives in secrets/deadman_url, never in Git.
+  # Alertmanager reads the file at every send, so placing it needs no reload.
+  # Until it exists every send fails at once with "read url_file: ... no such
+  # file" (one log line per minute, no retry, nothing leaves the host) and the
+  # other receivers are unaffected. A plain webhook POST to a secret URL, so any
+  # heartbeat service that counts a 2xx-answered POST as a ping works.
+  - name: deadman-external
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/deadman_url
+        send_resolved: false
+        max_alerts: 1
 
   - name: telegram-high
     telegram_configs:

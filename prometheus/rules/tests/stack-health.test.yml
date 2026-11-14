@@ -83,3 +83,27 @@ tests:
       - eval_time: 12m
         alertname: PrometheusRuleIterationsMissed
         exp_alerts: []
+
+  # Until alertmanager/secrets/deadman_url exists every watchdog ping fails;
+  # that must not page through Telegram, but a Telegram failure still must.
+  - name: webhook failures do not fire AlertmanagerNotifyFailures, Telegram failures do
+    interval: 30s
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="webhook",reason="other",instance="alertmanager:9093",job="alertmanager"}'
+        values: '0+1x80'
+      - series: 'alertmanager_notifications_failed_total{integration="telegram",reason="other",instance="alertmanager:9093",job="alertmanager"}'
+        values: '0x20 1+1x60'
+      - series: 'alertmanager_notifications_failed_total{integration="email",reason="other",instance="alertmanager:9093",job="alertmanager"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AlertmanagerNotifyFailures
+        exp_alerts: []
+      - eval_time: 38m
+        alertname: AlertmanagerNotifyFailures
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              integration: telegram
+            exp_annotations:
+              summary: "Alertmanager failing to deliver via telegram for 15min"
