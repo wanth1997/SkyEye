@@ -203,6 +203,10 @@ The strategy has no monitoring between the retire and the new probe.
 Shared collector, units and `probe.sh` are rewritten only while every
 templated probe is stopped and disabled; both commands refuse otherwise.
 
+Adding `popdex-btc` to Trading01 also moves its Alloy off 1.16.0 and replaces
+the shared probe under the running Robinhood and Mainnet probes; follow
+[the Trading01 PopDEX rollout](../../../docs/trading01-popdex-rollout.md).
+
 ### Legacy flag form and singleton migration
 
 Without a subcommand, `setup-linux.sh --env-file PATH` keeps its original
