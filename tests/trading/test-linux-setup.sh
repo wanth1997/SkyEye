@@ -91,8 +91,9 @@ assert_contains "$MAINNET_EXAMPLE" '^TQ_POC_RUN_EXPECTED=0$'
 assert_contains "$MAINNET_EXAMPLE" '^TQ_STRATEGY_DISABLED=1$'
 assert_contains "$ROBINHOOD_EXAMPLE" '/bin/lighter-robinhood-btc-canary/quant$'
 assert_contains "$MAINNET_EXAMPLE" '/bin/lighter-mainnet-btc-canary/quant$'
-assert_contains "$SETUP" 'runuser -u "[$]TQ_PROBE_USER" -- test -x "[$]TQ_TEXTFILE_DIR"'
-assert_contains "$SETUP" 'runuser -u "[$]TQ_PROBE_USER" -- test -w "[$]TQ_TEXTFILE_DIR"'
+assert_contains "$SETUP" 'run_as_user "[$]TQ_PROBE_USER" test -x "[$]TQ_TEXTFILE_DIR"'
+assert_contains "$SETUP" 'run_as_user "[$]TQ_PROBE_USER" test -w "[$]TQ_TEXTFILE_DIR"'
+assert_not_contains "$SETUP" '^[^#]*runuser -u'
 assert_contains "$SERVICE_TEMPLATE" '^ExecStartPre=@@ACCESS_PATH@@$'
 
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-linux-multi.XXXXXX")"
@@ -379,13 +380,42 @@ case "$cmd" in
 esac
 EOF
 
+# Like runuser, keeps the caller's working directory. FAKE_RUNUSER_USER marks
+# the command as running as another user, and each call is logged with its
+# working directory when FAKE_RUNUSER_LOG is set.
 cat >"$FAKE_BIN/runuser" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+[[ "$1" == "-u" ]] || exit 2
+export FAKE_RUNUSER_USER="$2"
 while [[ "$1" != "--" ]]; do shift; done
 shift
+if [[ -n "${FAKE_RUNUSER_LOG:-}" ]]; then
+  printf '%s %s %s\n' "$(pwd -P)" "$FAKE_RUNUSER_USER" "$1" >>"$FAKE_RUNUSER_LOG"
+fi
 exec "$@"
 EOF
+
+# GNU find saves its starting directory and returns to it before exiting.
+# Run as another user from a directory that user cannot open (runuser from a
+# root shell in /root, mode 700), it lists every file and then exits 1. This
+# test runs as one user, so FAKE_DENIED_CWD marks the unopenable directory.
+cat >"$FAKE_BIN/find" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${FAKE_RUNUSER_USER:-}" && -n "${FAKE_DENIED_CWD:-}" ]]; then
+  start_dir="$(pwd -P)"
+  case "$start_dir/" in
+    "$FAKE_DENIED_CWD"/*)
+      @REAL_FIND@ "$@"
+      printf 'find: Failed to restore initial working directory: %s: Permission denied\n' \
+        "$start_dir" >&2
+      exit 1
+      ;;
+  esac
+fi
+exec @REAL_FIND@ "$@"
+EOF
+sed -i.bak "s#@REAL_FIND@#$(command -v find)#g" "$FAKE_BIN/find" && rm -f "$FAKE_BIN/find.bak"
 
 cat >"$FAKE_BIN/getent" <<'EOF'
 #!/usr/bin/env bash
@@ -812,6 +842,35 @@ cmp -s "$MAINNET_ENV" "$MAINNET_INSTALLED_ENV" || {
   printf 'FAIL: add --restart-alloy did not install the env\n' >&2
   exit 1
 }
+
+printf 'case: add works from a working directory the probe user cannot open\n'
+# Trading01 2026-11-14: add from a root shell in /root failed with only
+# "installation failed" because the probe user's find could not return there.
+DENIED_CWD="$TEST_ROOT/root-home"
+mkdir -p "$DENIED_CWD"
+DENIED_CWD="$(cd "$DENIED_CWD" && pwd -P)"
+RUNUSER_LOG="$TEST_ROOT/runuser.log"
+: >"$RUNUSER_LOG"
+: >"$SYSTEMCTL_LOG"
+if ! add_output="$(cd "$DENIED_CWD" && FAKE_DENIED_CWD="$DENIED_CWD" \
+  FAKE_RUNUSER_LOG="$RUNUSER_LOG" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" add --env-file "$MAINNET_CHANGED_ENV" 2>&1)"
+then
+  printf 'FAIL: add failed from a working directory the probe user cannot open: %s\n' \
+    "$add_output" >&2
+  exit 1
+fi
+cmp -s "$MAINNET_CHANGED_ENV" "$MAINNET_INSTALLED_ENV" || {
+  printf 'FAIL: add from an unopenable working directory did not install the env\n' >&2
+  exit 1
+}
+assert_contains "$RUNUSER_LOG" '/ensure-log-access[.]sh$'
+if rg -v '^/ ' "$RUNUSER_LOG" >&2; then
+  printf 'FAIL: setup ran the commands above as another user outside /\n' >&2
+  exit 1
+fi
+# Back to the env the next cases start from.
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MAINNET_ENV" >/dev/null
 
 MAINNET_TIMER_ENABLED="$SYSTEMCTL_STATE/enabled_skyeye-trading-probe@$MAINNET.timer"
 MAINNET_TIMER_ACTIVE="$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MAINNET.timer"
