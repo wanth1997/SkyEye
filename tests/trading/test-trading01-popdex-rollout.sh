@@ -486,18 +486,19 @@ utc() {
   perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%S", gmtime($ARGV[0] + $ARGV[1]))' "$1" "${2:-0}"
 }
 # The older PopDEX raw log from the fixture, an hour old, and a newer one whose
-# last line is the newest event.
+# last line is the newest event. That last line ends with a newline, so it is
+# finished and is the evidence, not the line before it.
 perl -e 'utime $ARGV[0], $ARGV[0], $ARGV[1]' "$((now - 3600))" \
   "$live_runs/20261113_141635_popdex_btc_config.raw.log"
 {
+  printf 'time=%s.456Z level=INFO msg="cycle start"\n' "$(utc "$((now - 180))")"
   printf 'time=%s.123Z level=INFO msg="cycle done" client_id=[ORDER_REF]\n' "$(utc "$((now - 120))")"
-  printf 'time=%s.456Z level=INFO msg="cycle start"\n' "$(utc "$((now - 60))")"
 } >"$live_runs/20261114_121500_popdex_btc_config.raw.log"
 popdex_since="$((now - 86400))"
 popdex_ns="$((now - 120))123000000"
 evidence="$(log_evidence "$POPDEX" "$popdex_since")"
 [[ "$evidence" == "loki_accept $POPDEX $popdex_ns $popdex_since" ]] || \
-  fail "PopDEX evidence is not the second-to-last line of the newest log: $evidence"
+  fail "PopDEX evidence is not the finished last line of the newest log: $evidence"
 # Robinhood writes local time with an offset; its last line is still being written.
 {
   printf 'time=%s.000+08:00 level=INFO msg=a\n' "$(utc "$((now - 40))" 28800)"
@@ -510,6 +511,26 @@ evidence="$(log_evidence "$ROBINHOOD" "$((now - 300))")"
 evidence="$(log_evidence "$ROBINHOOD" "$((now - 10))")"
 [[ "$evidence" == "loki_accept $ROBINHOOD none $((now - 10))" ]] || \
   fail "an event older than SINCE counted as evidence: $evidence"
+robinhood_log="$live_runs/20261114_000000_lighter_robinhood_btc_config.raw.log"
+# A finished new last line after an old one is the evidence even when the old
+# line is before SINCE; taking the line before the last reported PENDING here.
+{
+  printf 'time=%s.000+08:00 level=INFO msg=a\n' "$(utc "$((now - 40))" 28800)"
+  printf 'time=%s.250+08:00 level=INFO msg=b\n' "$(utc "$((now - 30))" 28800)"
+} >"$robinhood_log"
+evidence="$(log_evidence "$ROBINHOOD" "$((now - 35))")"
+[[ "$evidence" == "loki_accept $ROBINHOOD $((now - 30))250000000 $((now - 35))" ]] || \
+  fail "a finished last line after an older one was not the evidence: $evidence"
+# The unfinished tail is skipped: the finished line before it is the evidence.
+printf 'time=%s.500+08:00 level=INFO msg=partial' "$(utc "$((now - 1))" 28800)" >>"$robinhood_log"
+evidence="$(log_evidence "$ROBINHOOD" "$((now - 35))")"
+[[ "$evidence" == "loki_accept $ROBINHOOD $((now - 30))250000000 $((now - 35))" ]] || \
+  fail "an unfinished tail replaced the finished line before it: $evidence"
+# A file holding only an unfinished line has no evidence.
+printf 'time=%s.500+08:00 level=INFO msg=partial' "$(utc "$((now - 1))" 28800)" >"$robinhood_log"
+evidence="$(log_evidence "$ROBINHOOD" "$((now - 35))")"
+[[ "$evidence" == "loki_accept $ROBINHOOD none $((now - 35))" ]] || \
+  fail "an unfinished line counted as evidence: $evidence"
 evidence="$(log_evidence "$MAINNET" "$((now - 300))")"
 [[ "$evidence" == "loki_accept $MAINNET none $((now - 300))" ]] || \
   fail "a strategy without a raw log produced evidence: $evidence"
@@ -524,6 +545,9 @@ CENTRAL_BIN="$TEST_ROOT/central-bin"
 LOKI="$TEST_ROOT/loki"
 mkdir -p "$CENTRAL_BIN" "$LOKI"
 # Loki as the runbook queries it: an answer per endpoint, every call logged.
+# With $LOKI/lines present, the scrub query is answered from those lines: the
+# regex is taken from the query as loki_accept sent it and run with rg, whose
+# syntax matches the RE2 subset the runbook uses.
 cat >"$CENTRAL_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$LOKI/calls.log"
@@ -531,7 +555,20 @@ printf '%s\n' "$*" >>"$LOKI/calls.log"
 case "$*" in
   */loki/api/v1/query_range*) cat "$LOKI/range.json" ;;
   */loki/api/v1/series*) cat "$LOKI/series.json" ;;
-  */loki/api/v1/query*) cat "$LOKI/count.json" ;;
+  */loki/api/v1/query*)
+    [[ -e "$LOKI/lines" ]] || { cat "$LOKI/count.json"; exit 0; }
+    for a; do case "$a" in query=*) query="${a#query=}" ;; esac; done
+    re="${query#*\`}"
+    re="${re%\`*}"
+    [[ -n "$re" && "$re" != "$query" ]] || exit 22
+    n="$(rg -c -e "$re" -- "$LOKI/lines")"
+    case $? in 0) ;; 1) n=0 ;; *) exit 22 ;; esac
+    if [[ "$n" -eq 0 ]]; then
+      echo '{"status":"success","data":{"resultType":"vector","result":[]}}'
+    else
+      printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%s"]}]}}\n' "$n"
+    fi
+    ;;
   *) exit 22 ;;
 esac
 EOF
@@ -598,6 +635,43 @@ accept "$POPDEX" "$popdex_ns" "$popdex_since"
 loki_answers "$found_range" "$good_series" "$hit_count"
 accept "$POPDEX" "$popdex_ns" "$popdex_since"
 [[ "$LOKI_RC" -eq 1 && "$LOKI_OUT" == "LOKI-UNSCRUBBED $POPDEX:"* ]] || fail "an unscrubbed ID passed: $LOKI_OUT"
+
+# The scrub check on lines as they reach Loki. Empty values and the scrubber's
+# [ORDER_REF] (bare or quoted) are not IDs; any other value is. The first line
+# is the only hit of the Mac mini rollout on 2026-11-14.
+scrub_case() {
+  local want="$1" line="$2"
+  printf '%s\n' "$line" >"$LOKI/lines"
+  accept "$POPDEX" "$popdex_ns" "$popdex_since"
+  rm -f "$LOKI/lines"
+  case "$want" in
+    clean) [[ "$LOKI_RC" -eq 0 && "$LOKI_OUT" == "LOKI-ACCEPTED $POPDEX:"* ]] || \
+      fail "a scrubbed or empty value counted as an ID: $line -> $LOKI_OUT" ;;
+    leak) [[ "$LOKI_RC" -eq 1 && "$LOKI_OUT" == "LOKI-UNSCRUBBED $POPDEX:"* ]] || \
+      fail "an unscrubbed ID passed: $line -> $LOKI_OUT" ;;
+  esac
+}
+loki_answers "$found_range" "$good_series" "$no_count"
+scrub_case clean 'time=2026-11-14T10:18:31.848Z level=INFO msg=coordinated_dispatch_result order_id="" status=ok'
+scrub_case clean 'order_id= status=ok'
+scrub_case clean 'order_id='
+scrub_case clean 'msg="cycle done" client_id=[ORDER_REF]'
+scrub_case clean 'order_id="[ORDER_REF]" orderId=[ORDER_REF], ack_client_id=[ORDER_REF]'
+# A bare [ORDER_REF] ends where a scrubbed value ends: the closing quote of an
+# enclosing value (the scrubber writes this), whitespace, the end or , ; ) } ].
+scrub_case clean 'msg="dispatch order_id=[ORDER_REF]" status=ok'
+scrub_case clean 'order_id=[ORDER_REF]; client_id=[ORDER_REF]) clientId=[ORDER_REF]} orderId=[ORDER_REF]]'
+scrub_case leak 'msg=coordinated_dispatch_result client_id="tq0123456789abcdefghij"'
+scrub_case leak 'msg=coordinated_dispatch_result client_id=tq0123456789abcdefghij'
+scrub_case leak 'order_id="" clientId=tq0123456789abcdefghij'
+scrub_case leak 'order_id=[[FAKE-ORDER-0318A FAKE-ORDER-0318B] [FAKE-ORDER-0318C]]'
+scrub_case leak 'client_action_id="[ORDER_REF"'
+scrub_case leak 'order_id=[ORDER_RE'
+# [ORDER_REF] followed by more of the value is not a complete scrubbed value.
+scrub_case leak 'client_id="[ORDER_REF]tq123"'
+scrub_case leak 'client_id=[ORDER_REF]tq123'
+scrub_case leak 'order_id="[ORDER_REF] tq123"'
+scrub_case leak 'order_id="[ORDER_REF],tq123"'
 
 touch "$LOKI/down"
 accept "$POPDEX" "$popdex_ns" "$popdex_since"
