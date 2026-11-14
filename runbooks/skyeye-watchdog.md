@@ -23,9 +23,13 @@
 - `alertmanager_notifications_failed_total{integration="webhook"}` 每分鐘 +1。`AlertmanagerNotifyFailures` 不看 webhook，所以不會送 Telegram。
 - 其他 route 與 Telegram 完全不受影響。
 
-`tests/stack/test-deadman-switch.sh` 會用真的 Alertmanager 驗證這個狀態，以及放入 secret 之後的行為。
+`tests/stack/test-deadman-switch.sh` 會用真的 Alertmanager 驗證這個狀態，以及放入 secret 之後、端點回 200 時的行為。
+
+**目前釘的 Alertmanager v0.27.0 不能放 secret。** 在 v0.27.0 上，`url_file` webhook 只要收到 ping 端點的非 2xx 回應（例如 check 被刪的 404、服務端的 503），Alertmanager 就會 nil pointer panic 並退出，Telegram 與 email 跟著全停。上游在 v0.28.0 修掉（[prometheus/alertmanager#3800](https://github.com/prometheus/alertmanager/pull/3800)）。沒有 secret 時根本不發 HTTP 請求，所以上面的狀態在 v0.27.0 上是安全的。升級是另一個任務，見第 2 步。
 
 ## 一次性設定（依序）
+
+順序：central-deploy 部署 → Alertmanager 升級（後續任務）上線 → Wan 建立託管 check → 放 `deadman_url` → 確認 ping → 停止測試。
 
 ### 1. 部署
 
@@ -46,7 +50,11 @@ sudo docker compose logs --since 3m alertmanager | grep -c 'read url_file'   # �
 
 central-deploy 先 reload Prometheus，再 reload Alertmanager。如果 Alertmanager 拒絕 reload，舊設定沒有這條 route，Watchdog 會掉到 root receiver（`telegram-medium`），所以要立刻照 central-deploy 印出的 rollback 指令做（`git reset --hard … && curl -X POST …/-/reload`），把 rule 拿掉。`amtool check-config` 已先驗過，這個情況不應該發生。
 
-### 2. 建立託管 check
+### 2. 等 Alertmanager 升級上線
+
+Alertmanager 升到 v0.28.0 以上是另一個任務。它要改 `docker-compose.yml` 的 image tag，central-deploy 會拒絕，所以要照該任務的 runbook 手動 pull、`up -d` 再 `--manual-applied`。這一步完成前，不要做第 4 步。
+
+### 3. 建立託管 check
 
 由 Wan 在託管服務上建立，例如 Healthchecks.io 或 Better Stack heartbeat。只要服務接受「對秘密網址的 POST，回 2xx 就算一次 ping」即可。
 
@@ -55,9 +63,24 @@ central-deploy 先 reload Prometheus，再 reload Alertmanager。如果 Alertman
 - 通知：**第一週只寄 email 給 Wan**。連續 7 天沒有誤報後，再加上服務**自己的** Telegram integration。不要用 SkyEye 的 `tg_token`，通知路徑不能經過 monitoring-prod。
 - Ping URL 存進密碼管理器。不要貼進對話、ticket 或 commit。
 
-### 3. 放 secret
+### 4. 放 secret
 
-一定要在第 1 步之後。舊版 `scripts/central-deploy` 不認得這個檔案，會拒絕部署。
+**先檢查版本。執行中的 Alertmanager 低於 v0.28.0 就停止，不要放檔案。** 在 v0.27.0 上，ping 端點一回非 2xx，Alertmanager 就會 panic 退出（上游修正 [#3800](https://github.com/prometheus/alertmanager/pull/3800)，v0.28.0）。
+
+```bash
+cd /home/ubuntu/SkyEye
+v=$(sudo docker compose exec -T alertmanager alertmanager --version 2>&1 | awk '$2 == "version" { print $3; exit }')
+echo "running Alertmanager: ${v:-unknown}"
+if [ -n "$v" ] && [ "$(printf '%s\n' 0.28.0 "$v" | sort -V | head -n 1)" = 0.28.0 ]; then
+  echo OK
+else
+  echo "STOP: Alertmanager ${v:-unknown} is below 0.28.0; do not place deadman_url"
+fi
+```
+
+印出 `STOP` 就停在這裡，先完成第 2 步。
+
+也一定要在第 1 步之後。舊版 `scripts/central-deploy` 不認得這個檔案，會拒絕部署。
 
 權限與 `tg_token` 相同：owner `ubuntu`、mode `0644`，目錄 `0755`。Alertmanager container 以 `nobody`（uid 65534）執行，讀不到 `0600`，原因見 [`alertmanager/secrets/README.md`](../alertmanager/secrets/README.md)。
 
@@ -76,7 +99,7 @@ grep -c '^https://' deadman_url   # 預期 1
 
 不需要 reload。
 
-### 4. 確認 ping 有到
+### 5. 確認 ping 有到
 
 2 分鐘內：
 
@@ -84,9 +107,9 @@ grep -c '^https://' deadman_url   # 預期 1
 - `sudo docker compose logs --since 2m alertmanager | grep -c 'read url_file'` 是 `0`。
 - `curl -fsS http://127.0.0.1:9093/metrics | grep 'notifications_failed_total{integration="webhook"'` 的數字不再增加。
 
-收到 4xx（`reason="clientError"`）代表網址錯了，回第 3 步重放。
+Ping 一直失敗、log 是 `unexpected status code` 之類的錯誤，代表網址錯了或 check 不存在，回第 4 步重放。各種非 2xx 在升級後的版本怎麼計數（`reason` 的值），以 Alertmanager 升級任務的說明為準。
 
-### 5. 一次性 20 分鐘 Alertmanager 停止測試
+### 6. 一次性 20 分鐘 Alertmanager 停止測試
 
 確認外部服務真的會叫。只做一次。託管 check 要先綠燈至少一天。
 
@@ -111,7 +134,7 @@ curl -fsS http://127.0.0.1:9093/-/ready
 - 20 分鐘內沒收到 down email，代表測試失敗：檢查託管服務的通知設定，修好後另約時段重測。
 - 把結果（時間、down 與 up email 的時間）記在 work-log。
 
-### 6. Tunnel 探測：後續工作
+### 7. Tunnel 探測：後續工作
 
 專用 hostname（cloudflared 直接回 204）加外部 HTTP 監控，用來抓 tunnel connector 中斷。這需要一次 cloudflared recreate，要在低流量時段做，且絕不在 18:15～19:30 UTC。它不在這次變更裡，另開任務處理。在那之前，tunnel 中斷只有 [`AllRemoteAgentsSilent`](./all-remote-agents-silent.md)（shadow）與 `LokiIngestStalled` 會反映。
 
@@ -133,7 +156,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://example.com   # 出站網路
 
 - Container 停了：`sudo docker compose up -d <service>`。
 - 磁碟滿：照 [`disk-full.md`](./disk-full.md) 處理這台主機。
-- 主機都正常、ping 卻失敗：看 `deadman-external` 的錯誤。4xx 通常是網址被輪替或 check 被刪了。託管服務本身故障的話，到它的 status page 確認。
+- 主機都正常、ping 卻失敗：看 `deadman-external` 的錯誤。非 2xx 回應通常是網址被輪替或 check 被刪了。託管服務本身故障的話，到它的 status page 確認。
 - 恢復後幾分鐘內，託管服務會送「up」。
 
 ## 計畫內停機
@@ -142,5 +165,5 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://example.com   # 出站網路
 
 ## Secret 輪替與停用
 
-- 輪替：在託管服務重新產生 ping URL，照第 3 步重放，不需要 reload。
+- 輪替：在託管服務重新產生 ping URL，照第 4 步重放（含版本檢查），不需要 reload。
 - 停用：revert 這次 commit 並用 `scripts/central-deploy` 部署，刪掉 `alertmanager/secrets/deadman_url`，再刪掉託管 check。
