@@ -14,7 +14,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
 |---|---|
 | `config-linux.alloy.tmpl` | Per-strategy Loki fragment that reuses the existing central receiver |
 | `config-linux-metrics.alloy.tmpl` | Shared textfile collector for all Linux strategy outputs |
-| `deployment-linux-{robinhood,mainnet,ourbit}.env.example` | Credential-free Trading01 instance contracts |
+| `deployment-linux-{robinhood,mainnet,ourbit,popdex}.env.example` | Credential-free Trading01 instance contracts (`popdex` is `popdex-btc` on the PopDEX venue) |
 | `setup-linux.sh` | `add` (one-step install/update), `retire`, render-only, and explicit singleton migration |
 | `retire-linux.sh` | Per-strategy retirement with an exact rollback record (run via `setup-linux.sh retire`) |
 | `linux-common.sh` | Shared test-root, systemctl and path guards for the Linux scripts |
