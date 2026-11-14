@@ -87,6 +87,8 @@ assert_contains "$TIMER_TEMPLATE" 'Unit=skyeye-trading-probe@%i.service'
 assert_contains "$ROBINHOOD_EXAMPLE" '^TQ_TEXTFILE_NAME=tnauqquant-lighter-robinhood-btc-canary[.]prom$'
 assert_contains "$MAINNET_EXAMPLE" '^TQ_TEXTFILE_NAME=tnauqquant-lighter-mainnet-btc-canary[.]prom$'
 assert_contains "$MAINNET_EXAMPLE" '^TQ_POC_RUN_EXPECTED=0$'
+# The operator disabled Mainnet on 2026-11-07; its leftover manifest must not page.
+assert_contains "$MAINNET_EXAMPLE" '^TQ_STRATEGY_DISABLED=1$'
 assert_contains "$ROBINHOOD_EXAMPLE" '/bin/lighter-robinhood-btc-canary/quant$'
 assert_contains "$MAINNET_EXAMPLE" '/bin/lighter-mainnet-btc-canary/quant$'
 assert_contains "$SETUP" 'runuser -u "[$]TQ_PROBE_USER" -- test -x "[$]TQ_TEXTFILE_DIR"'
@@ -1193,6 +1195,29 @@ assert_no_mutation 'add with an expanding env'
   printf 'FAIL: refused add installed the env\n' >&2
   exit 1
 }
+
+printf 'case: add refuses a TQ_STRATEGY_DISABLED value other than 0 or 1\n'
+DISABLED_BAD_ENV="$TEST_ROOT/$MAINNET.disabled-bad.env"
+for bad_disabled in yes 2 true; do
+  cp "$MAINNET_ENV" "$DISABLED_BAD_ENV"
+  printf 'TQ_STRATEGY_DISABLED=%s\n' "$bad_disabled" >>"$DISABLED_BAD_ENV"
+  chmod 600 "$DISABLED_BAD_ENV"
+  : >"$SYSTEMCTL_LOG"
+  if add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+    "$SETUP" add --env-file "$DISABLED_BAD_ENV" 2>&1)"; then
+    printf 'FAIL: add accepted TQ_STRATEGY_DISABLED=%s\n' "$bad_disabled" >&2
+    exit 1
+  fi
+  [[ "$add_output" == *'TQ_STRATEGY_DISABLED must be 0 or 1'* ]] || {
+    printf 'FAIL: refusal did not name TQ_STRATEGY_DISABLED: %s\n' "$add_output" >&2
+    exit 1
+  }
+  assert_no_mutation "add with TQ_STRATEGY_DISABLED=$bad_disabled"
+  [[ ! -e "$MAINNET_INSTALLED_ENV" ]] || {
+    printf 'FAIL: refused add installed the env with TQ_STRATEGY_DISABLED=%s\n' "$bad_disabled" >&2
+    exit 1
+  }
+done
 
 if rg -q 'tnauqquant' "$SYSTEMCTL_LOG_ALL"; then
   printf 'FAIL: monitoring installer attempted to control a trading service\n' >&2

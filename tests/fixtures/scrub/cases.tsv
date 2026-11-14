@@ -75,6 +75,10 @@ O05	order	both	FAKE-ORDER-0205	-	err="cancel failed order_id=FAKE-ORDER-0205"
 O06	order	both	FAKE-ORDER-0206	-	order_id: FAKE-ORDER-0206
 O07	order	both	FAKE-ORDER-0207	orderId=[ORDER_REF]	orderId=FAKE-ORDER-0207
 O08	order	both	FAKE-ORDER-0208	-	clientOrderId=FAKE-ORDER-0208
+O09	order	both	FAKE-ORDER-0209	ack_client_id=[ORDER_REF]	ack_client_id=FAKE-ORDER-0209
+O10	order	both	FAKE-ORDER-0210	client_id=[ORDER_REF]	client_id=FAKE-ORDER-0210
+O11	order	both	FAKE-ORDER-0211A,FAKE-ORDER-0211B	ask_client_id=[ORDER_REF]	bid_client_id=FAKE-ORDER-0211A ask_client_id=FAKE-ORDER-0211B
+O12	order	both	FAKE-ORDER-0212	clientId=[ORDER_REF]	clientId=FAKE-ORDER-0212
 X01	exec	both	FAKE-TRACE-0301A,FAKE-TRACE-0301B	attempt_id=[TRACE_REF]	attempt_id="FAKE-TRACE-0301A FAKE-TRACE-0301B"
 X02	exec	both	FAKE-TRACE-0302A,FAKE-TRACE-0302B	-	reservation_id="FAKE-TRACE-0302A FAKE-TRACE-0302B"
 X03	exec	both	FAKE-ACCOUNT-0303A,FAKE-ACCOUNT-0303B	-	account="FAKE-ACCOUNT-0303A FAKE-ACCOUNT-0303B"
@@ -156,6 +160,7 @@ R06	safe	both	-	-	authorization_required=true cookie_count=2 password_age_days=3
 R07	safe	both	-	-	token="" order_note="" detail="it's fine"
 R08	safe	both	-	-	body={"kind":"token","next":"keep"}
 R09	safe	both	-	-	pair=('token_count', 'x')
+R10	safe	both	-	-	client_identity_state=active client_ids_count=2 client_idle_ms=5 cycle_identity_state=complete
 P01	pii	general	0900000001	contact [PHONE] updated	contact 0900000001 updated
 P02	pii	general	0900-000-002	contact [PHONE] updated	contact 0900-000-002 updated
 P03	pii	general	FAKE-EMAIL-0903	notify [EMAIL] done	notify FAKE-EMAIL-0903@example.invalid done
@@ -167,3 +172,11 @@ S02	safe	both	-	-	upstream said digest invalid
 S03	safe	both	-	-	upstream said apikey: invalid
 S04	safe	both	-	-	ts=1709123456789 ref=20260912345678
 S05	safe	both	-	-	upstream said api_key='short'
+# PopDEX (popdex-btc) on Trading01 writes logging.format: text, which is slog
+# logfmt. These follow the 2026-11-13 canary line shapes with synthetic values: a
+# quoted summary that repeats keys, an empty quoted value, one executor, no carrier.
+D01	safe	raw	-	-	time=@T@ level=INFO msg=pnl_status equity_start=9999 equity_now=9998.9862 rebate_usdt=0.0044 cash_pnl_usdt=-0.0062 real_pnl_usdt=-0.0018 risk_pnl_usdt=-0.0018 risk_pnl_basis=rebate_adjusted risk_date_utc=2026-11-13 cycles_completed=1 consec_losses=1 risk_stopped=false samples=2 stable=true cycle_completed=true summary="PNL equity_start=9999.00 equity_now=9998.99 cash_pnl=-0.0062 rebate=0.0044 real_pnl=-0.0018 risk_pnl=-0.0018 basis=rebate_adjusted cycles=1 consec_losses=1 risk_stopped=false samples=2 stable=true cycle_completed=true" fee_accounting_source=estimated_schedule equity_usdt_by_executor=popdex-main:9998.99 volume_usd_by_executor=popdex-main:27.64 cycle_real_pnl_usdt=-0.0018 cycle=1 session_cycle=1 cycle_id=SAFE-0901.1 cycle_origin=signal_entry cycle_identity_state=complete
+D02	order	raw	FAKE-TRACE-0911,FAKE-ORDER-0912,FAKE-ORDER-0913	net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book	time=@T@ level=WARN msg=coordinated_dispatch_result intent=normal_entry executor=popdex-main attempt_id=FAKE-TRACE-0911 client_action_id=FAKE-ORDER-0912 dispatch_claimed=true execute_duration_ms=130.735 disposition=unresolved order_id=FAKE-ORDER-0913 cycle_state=waiting signal_direction=Long net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book ui_submission_status=accepted
+D03	order	raw	FAKE-ORDER-0921	order_qty=0.0002	time=@T@ level=INFO msg=tactic_taker_ioc_sent order_id=FAKE-ORDER-0921 price=68836 book_level=0 qty_contracts=0.0002 order_qty=0.0002 entry_quote_bid=68835 entry_quote_ask=68836
+D04	order	raw	FAKE-TRACE-0931,FAKE-ORDER-0932	volume_usd=13.82 total_volume_usd=13.82 partial=false quote_notional="" settlement=pending	time=@T@ level=INFO msg=trade_status state=open signal=open position=Short executor=popdex-main attempt_id=FAKE-TRACE-0931 client_action_id=FAKE-ORDER-0932 qty_base=0.00020000 volume_usd=13.82 total_volume_usd=13.82 partial=false quote_notional="" settlement=pending cycle_id=SAFE-0901.1 cycle_identity_state=active
+D05	order	raw	FAKE-TRACE-0941,FAKE-ORDER-0942,FAKE-ORDER-0943,FAKE-ORDER-0944	portfolio_projection=coordinator_book ui_submission_status=accepted	time=@T@ level=WARN msg=coordinated_dispatch_result intent=normal_entry executor=popdex-main attempt_id=FAKE-TRACE-0941 client_action_id=FAKE-ORDER-0942 dispatch_claimed=true disposition=unresolved order_id=FAKE-ORDER-0943 ack_client_id=FAKE-ORDER-0944 cycle_state=waiting net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book ui_submission_status=accepted

@@ -120,6 +120,30 @@ for dashboard_file in "$DETAIL_DASHBOARD" "$FLEET_DASHBOARD"; do
     ] | all)
   ' "$dashboard_file" >/dev/null
 done
+
+# A new venue (such as PopDEX on Trading01) must appear on the Trading dashboards
+# through its exchange label alone. A selector, value mapping or override that
+# names one exchange would hide or mislabel the next one.
+if rg -n 'exchange *(=|!=|=~|!~) *\\"' "$DETAIL_DASHBOARD" "$FLEET_DASHBOARD"; then
+  printf 'FAIL: a Trading dashboard selects a literal exchange\n' >&2
+  exit 1
+fi
+mapped_exchanges="$(
+  sed -nE 's/^(export )?TQ_EXECUTOR_MAP=//p' "$REPO_ROOT"/agents/alloy/trading/*.env.example |
+    tr -d "'\"" | tr ',' '\n' | sed -E 's/^[^=]*=//' | sort -u
+)"
+[[ "$mapped_exchanges" == *popdex* && "$mapped_exchanges" == *lighter* ]] || {
+  printf 'FAIL: could not read the exchanges from the env examples: %s\n' "$mapped_exchanges" >&2
+  exit 1
+}
+while IFS= read -r mapped_exchange; do
+  if rg -n -F -e "\"$mapped_exchange\"" -e "\\\"$mapped_exchange\\\"" \
+    "$DETAIL_DASHBOARD" "$FLEET_DASHBOARD"; then
+    printf 'FAIL: a Trading dashboard names the exchange %s literally\n' "$mapped_exchange" >&2
+    exit 1
+  fi
+done <<<"$mapped_exchanges"
+
 jq -e '
   .uid == "trading-strategy-detail" and
   .timezone == "Asia/Taipei" and

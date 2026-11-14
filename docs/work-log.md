@@ -15,6 +15,24 @@
 ---
 -->
 
+## 2026-11-14 16:30 — Trading01 PopDEX 監控、Mainnet 停用設定與 Alloy 升級腳本
+
+**改動摘要：** Trading01 新增 `popdex-btc` target，並寫好 Trading01 的上線 runbook：Alloy 1.16.0→1.16.3、共用 probe 換新、加上 PopDEX、Mainnet 停用設定，central-deploy 排在最後。probe 新增 `TQ_STRATEGY_DISABLED`，給刻意停用的 strategy 用：停用後不再顯示 ProcessDown，意外啟動時仍會觸發 `TradingUnexpectedProcess`。新增 Linux Alloy 升級腳本，會先驗證設定，失敗時自動還原。Trading log 另外遮蔽 client order ID。這次只 merge，主機 rollout 與中央部署依 runbook 另外進行。
+
+**修改的檔案：**
+- `agents/alloy/trading/probe.sh`、`setup-linux.sh`、`setup-macos.sh`：新增 `TQ_STRATEGY_DISABLED`（只接受 0/1，其他值 fail closed）。
+- `agents/alloy/trading/deployment-linux-popdex.env.example`：新增 PopDEX instance env，不含 credential。`deployment-linux-mainnet.env.example` 設為 `TQ_STRATEGY_DISABLED=1`。
+- `agents/alloy/trading/config-linux.alloy.tmpl`、`config-macos.alloy.tmpl`：`[ORDER_REF]` 加上 `client_?id`，遮蔽 `ack_`／`bid_`／`ask_client_id` 與 `clientId`。
+- `agents/alloy/upgrade-linux.sh`、`agents/alloy/install-common.sh`、`agents/alloy/README.md`：新增 apt Alloy 升級，`--to`／`--check`／`--rollback`。升級前用新 binary 驗證 live config，conffile hash 必須不變，接著做健康檢查並 hold。還原過設定就強制 restart。每次執行都有自己的 record。
+- `prometheus/rules/trading-targets.yml`：以 `scripts/trading-target add` 新增 trading01/popdex-btc。
+- `docs/trading01-popdex-rollout.md`：新增 Trading01 rollout runbook，每一步標明 READ-ONLY 或 CHANGE，附 STOP 條件與 rollback R2–R5。Loki 驗收必須在中央找到與來源端時間相同的行，空的 stream 不算通過。
+- `agents/alloy/trading/README.md`、`docs/trading-new-server-handoff.md`：補上停用設定與 runbook 連結。
+- `tests/alloy/test-upgrade-linux.sh`、`tests/trading/test-trading01-popdex-rollout.sh`：新增。另擴充 `test-probe`、`test-probe-safety`、`test-linux-setup`、`test-macos-setup`、`test-central-config`、`test-central-deploy`、scrub fixture 與 `trading.test.yml`。
+
+**原因/備註：** Wan 透過 tnauqquant manager 要求把 PopDEX 接進 Grafana，並要求走正規升級。Trading01 的 Alloy 是 1.16.0，不在支援清單內，`add` 會拒絕執行。共用 probe 還是 09-13 的版本。Mainnet 11-07 是 graceful stop，沒有留下 done marker，所以只設 `TQ_POC_RUN_EXPECTED=0` 無效。Codex review 兩輪：R1 有 5 個 MAJOR，都在 rollback 路徑；R2 READY。Mac mini 不在這次範圍內，它的 Trading log 遮蔽要等下次重跑 installer 才生效。PROD02 與 Mac mini 的 Alloy 升級另開任務。
+
+---
+
 ## 2026-11-07 22:30 — 安裝與部署強化（Codex review v2 剩餘項）
 
 **改動摘要：** `central-deploy` 改讀 Prometheus 的即時值確認 reload，新增 `--expect`，dashboard UID 檢查改看 applied 之後的歷史，並加上並行鎖。主機 installer 只接受測過的 Alloy 版本、加上互斥鎖，Linux `add` 保留 probe timer 原本的狀態，macOS installer 改成先驗證再替換、失敗時還原。重建主機用的 AWS CLI 鎖定版本並在安裝前比對 sha256。這次只 merge，未部署，也未在任何主機重跑 installer。
