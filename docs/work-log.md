@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-11-14 20:30 — Rollout runbook 的 Loki 驗收修正
+
+**改動摘要：** Trading01 與 Mac mini 兩份 rollout runbook 的 Loki 驗收改成：來源 log 取最後一個寫完的行；未遮蔽 ID 的檢查不再把空值（`order_id=""`）算成外洩，也只把完整的 `[ORDER_REF]` 當成已遮蔽，`[ORDER_REF]tq123` 這類殘留仍算外洩。
+
+**修改的檔案：**
+- `docs/trading01-popdex-rollout.md`：`log_evidence` 改成讀一次尾端、取最後一個完整的行；Robinhood 的 SINCE 改用 `loki-since`（切換後再加 1 秒）；`loki_accept` 換新的 regex。
+- `docs/macmini-m2-alloy-rollout.md`：`loki_accept` 換同一個 regex；新增 2026-11-14 那次驗收的重驗步驟（`loki-since` 1794651500）。
+- `tests/trading/test-trading01-popdex-rollout.sh`、`tests/trading/test-macmini-alloy-rollout.sh`：fake Loki 改用 query 內的 regex 實際比對，新增空值、殘留 ID、完整 marker 與最後一行的案例。
+
+**原因/備註：** 11-14 Mac mini rollout 的 Loki 驗收唯一命中是空的 `order_id=""`，是檢查本身誤判。Trading01 的 `log_evidence` 固定取倒數第二行，可能把 LOKI-MISSING 判成 PENDING；11-14 Trading01 兩條都已 ACCEPTED，不受影響。新 regex 在真實遮蔽輸出（4 條 pipeline 各 909 行）命中 0，在 Loki 3.1.1 實測正確。Codex review 兩輪：R1 一個 MAJOR（只要開頭是 `[ORDER_REF]` 就放行），R2 READY。
+
+---
+
 ## 2026-11-14 19:30 — Mac mini Alloy pin 與 setup-macos 上線 runbook
 
 **改動摘要：** 新增 Mac mini（macmini-m2 / toobit-mexc-btc）的上線 runbook：Alloy 確認是 1.18.1 後 `brew pin`，再重跑 `setup-macos.sh` 換上新 probe 與 Trading log 遮蔽。每一步標明 READ-ONLY 或 CHANGE，附 STOP 條件、rollback R2／R3 與中央、Loki 驗收，並新增直接執行 runbook 原文的演練測試。這次只 merge，主機尚未執行。
