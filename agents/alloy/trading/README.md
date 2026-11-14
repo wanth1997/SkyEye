@@ -252,7 +252,7 @@ restart once interrupting every Alloy pipeline is acceptable.
 
 Both macOS and Linux pipelines scrub the complete log line before it reaches the Loki sink:
 
-- order and client action fields become `[ORDER_REF]`;
+- order, client action and client order ID fields (`order_id`, `client_action_id`, and `client_id` with prefixes such as `ack_`, `bid_` and `ask_`, in snake or camel case) become `[ORDER_REF]`;
 - attempt, reservation and recovery correlation fields become `[TRACE_REF]`;
 - execution grant/mutation/account fields (`grant_id`, `mutation_id`, `mutations`, `account`) become `[EXECUTION_REF]`;
 - repo paths, email addresses and tokens use their existing placeholders.
