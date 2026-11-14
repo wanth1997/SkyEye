@@ -657,12 +657,21 @@ scrub_case clean 'order_id= status=ok'
 scrub_case clean 'order_id='
 scrub_case clean 'msg="cycle done" client_id=[ORDER_REF]'
 scrub_case clean 'order_id="[ORDER_REF]" orderId=[ORDER_REF], ack_client_id=[ORDER_REF]'
+# A bare [ORDER_REF] ends where a scrubbed value ends: the closing quote of an
+# enclosing value (the scrubber writes this), whitespace, the end or , ; ) } ].
+scrub_case clean 'msg="dispatch order_id=[ORDER_REF]" status=ok'
+scrub_case clean 'order_id=[ORDER_REF]; client_id=[ORDER_REF]) clientId=[ORDER_REF]} orderId=[ORDER_REF]]'
 scrub_case leak 'msg=coordinated_dispatch_result client_id="tq0123456789abcdefghij"'
 scrub_case leak 'msg=coordinated_dispatch_result client_id=tq0123456789abcdefghij'
 scrub_case leak 'order_id="" clientId=tq0123456789abcdefghij'
 scrub_case leak 'order_id=[[FAKE-ORDER-0318A FAKE-ORDER-0318B] [FAKE-ORDER-0318C]]'
 scrub_case leak 'client_action_id="[ORDER_REF"'
 scrub_case leak 'order_id=[ORDER_RE'
+# [ORDER_REF] followed by more of the value is not a complete scrubbed value.
+scrub_case leak 'client_id="[ORDER_REF]tq123"'
+scrub_case leak 'client_id=[ORDER_REF]tq123'
+scrub_case leak 'order_id="[ORDER_REF] tq123"'
+scrub_case leak 'order_id="[ORDER_REF],tq123"'
 
 touch "$LOKI/down"
 accept "$POPDEX" "$popdex_ns" "$popdex_since"

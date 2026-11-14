@@ -433,9 +433,11 @@ t01_alerts() { q 'ALERTS{product="tnauqquant",server_id="trading01",alertstate="
 # 當時間戳），找到之後 label 與 scrub 檢查才算數。空的 stream 永遠不會印出 LOKI-ACCEPTED。
 loki_accept() {
   local s="$1" ns="$2" since="$3" sel found labels unscrubbed
-  # 明文 ID：= 後面的值不是空的（""、空白或行尾），也不是以 [ORDER_REF] 開頭（不論有沒有引號）。
-  # LogQL 的 RE2 沒有 lookahead，所以「不是 [ORDER_REF]」寫成：[ 之後第一個不同的字元，或行尾。
-  local re='(?i)(order_?id|client_?action_?id|client_?id)=("?\[($|[^O]|O($|[^R]|R($|[^D]|D($|[^E]|E($|[^R]|R($|[^_]|_($|[^R]|R($|[^E]|E($|[^F]|F($|[^\]]))))))))))|"[^"\[]|[^\s"\[])'
+  # 明文 ID：= 後面的值不是空的（""、空白或行尾），也不是完整的 [ORDER_REF]。完整是指有引號時
+  # 後面緊接結尾的 "，沒有引號時後面是空白、行尾、外層值結尾的 "，或 , ; ) } ]（scrub 規則的值邊界）。
+  # LogQL 的 RE2 沒有 lookahead，所以「不是 [ORDER_REF]」寫成：[ 之後第一個不同的字元或行尾，
+  # 或 [ORDER_REF] 之後還有內容；有引號時，[ORDER_REF] 後面接 " 以外的邊界字元也算還有內容。
+  local re='(?i)(order_?id|client_?action_?id|client_?id)=("?\[($|[^O]|O($|[^R]|R($|[^D]|D($|[^E]|E($|[^R]|R($|[^_]|_($|[^R]|R($|[^E]|E($|[^F]|F($|[^\]]|\][^\s",;)}\]]))))))))))|"\[ORDER_REF\][\s,;)}\]]|"[^"\[]|[^\s"\[])'
   sel="{product=\"tnauqquant\",server_id=\"trading01\",strategy=\"$s\"}"
   if [ "$ns" = none ]; then
     echo "LOKI-PENDING $s: no source log event since $since"
@@ -770,7 +772,7 @@ zen_alerts                                       # []
 q 'tnauqquant_current_run_exchange_volume_usd{server_id="trading01",strategy="popdex-btc"}' | jq -c '[.[].metric.exchange] | unique'   # ["popdex"]（lane 有 snapshot 後）
 ```
 
-接著把 `loki-evidence.phase6` 的兩行 `loki_accept …` 原樣貼上執行，結果記入執行紀錄。只有 `LOKI-ACCEPTED` 算 Loki 驗收通過：Loki 有來源端那個事件，stream 只有 `environment`、`level`、`product`、`run_id`、`server_id`、`strategy` 六個 label（Loki 自動加的 `service_name` 除外），而且 `SINCE` 之後沒有明文 order／client ID（空值與 `[ORDER_REF]` 不算，其他非空值不論有沒有引號都算）。Robinhood 的 `SINCE` 是 `loki-since`（Phase 3 sibling 恢復之後的下一秒），所以 Phase 3 之前與恢復那一秒進 Loki 的舊行不在檢查範圍，也不在這次刪除範圍；`popdex-btc` 的 stream 在這次 rollout 之前不存在，檢查 24 小時。
+接著把 `loki-evidence.phase6` 的兩行 `loki_accept …` 原樣貼上執行，結果記入執行紀錄。只有 `LOKI-ACCEPTED` 算 Loki 驗收通過：Loki 有來源端那個事件，stream 只有 `environment`、`level`、`product`、`run_id`、`server_id`、`strategy` 六個 label（Loki 自動加的 `service_name` 除外），而且 `SINCE` 之後沒有明文 order／client ID（空值與完整的 `[ORDER_REF]` 不算，其他非空值不論有沒有引號都算，包括 `[ORDER_REF]` 後面還接著內容的值）。Robinhood 的 `SINCE` 是 `loki-since`（Phase 3 sibling 恢復之後的下一秒），所以 Phase 3 之前與恢復那一秒進 Loki 的舊行不在檢查範圍，也不在這次刪除範圍；`popdex-btc` 的 stream 在這次 rollout 之前不存在，檢查 24 小時。
 
 - **Robinhood：** 必須是 `LOKI-ACCEPTED`。
   - `LOKI-PENDING`：Phase 3 之後 Robinhood 沒有寫出新的 log 行。告知 tnauqquant manager，Robinhood 的 Loki 驗收記為 PENDING，依下面的後續驗收處理。

@@ -682,9 +682,11 @@ mac_history() {
 # 當時間戳），找到之後 label 與 scrub 檢查才算數。空的 stream 永遠不會印出 LOKI-ACCEPTED。
 loki_accept() {
   local s="$1" ns="$2" since="$3" sel found labels unscrubbed
-  # 明文 ID：= 後面的值不是空的（""、空白或行尾），也不是以 [ORDER_REF] 開頭（不論有沒有引號）。
-  # LogQL 的 RE2 沒有 lookahead，所以「不是 [ORDER_REF]」寫成：[ 之後第一個不同的字元，或行尾。
-  local re='(?i)(order_?id|client_?action_?id|client_?id)=("?\[($|[^O]|O($|[^R]|R($|[^D]|D($|[^E]|E($|[^R]|R($|[^_]|_($|[^R]|R($|[^E]|E($|[^F]|F($|[^\]]))))))))))|"[^"\[]|[^\s"\[])'
+  # 明文 ID：= 後面的值不是空的（""、空白或行尾），也不是完整的 [ORDER_REF]。完整是指有引號時
+  # 後面緊接結尾的 "，沒有引號時後面是空白、行尾、外層值結尾的 "，或 , ; ) } ]（scrub 規則的值邊界）。
+  # LogQL 的 RE2 沒有 lookahead，所以「不是 [ORDER_REF]」寫成：[ 之後第一個不同的字元或行尾，
+  # 或 [ORDER_REF] 之後還有內容；有引號時，[ORDER_REF] 後面接 " 以外的邊界字元也算還有內容。
+  local re='(?i)(order_?id|client_?action_?id|client_?id)=("?\[($|[^O]|O($|[^R]|R($|[^D]|D($|[^E]|E($|[^R]|R($|[^_]|_($|[^R]|R($|[^E]|E($|[^F]|F($|[^\]]|\][^\s",;)}\]]))))))))))|"\[ORDER_REF\][\s,;)}\]]|"[^"\[]|[^\s"\[])'
   sel="{product=\"tnauqquant\",server_id=\"macmini-m2\",strategy=\"$s\"}"
   if [ "$ns" = none ]; then
     echo "LOKI-PENDING $s: no source log event since $since"
@@ -848,13 +850,13 @@ log_evidence toobit-mexc-btc "$(cat "$WORK/loki-since")" | tee "$WORK/loki-evide
 2. ≥ 60 秒後在 monitoring-prod：`CUT="$HOME/macmini-rollout-<M7>"; . "$CUT/helpers.sh"`，貼上那一行。
 3. `LOKI-ACCEPTED` 才結案。仍是 `LOKI-PENDING`，就等策略下一次執行再做。其他結果交給 manager。
 
-**2026-11-14 那次的重驗：** 那次 Phase 4 的 `LOKI-UNSCRUBBED` 唯一命中是一行 `coordinated_dispatch_result` 的空值 `order_id=""`，是舊的 scrub 檢查把空值算成明文 ID 的誤判，Loki 驗收記為 FAILED、沒有 R3。現在的 `loki_accept` 不把空值（`=""`、`=` 後面是空白或行尾）與 `[ORDER_REF]` 算進去，其他非空值不論有沒有引號都算。修正 merge 到 `master` 之後照上面三步重驗一次：`SINCE` 仍是那次的 `loki-since`（`1794651500`），那次的 `$WORK` 就是為此保留的。Mac mini 的 `helpers.sh` 不用重建，那次的 `log_evidence` 已是現行版本。monitoring-prod 那次的 `$CUT/helpers.sh` 還是舊的 `loki_accept`，第 2 步先從 `master` 的本文件重建它（`git fetch` 只更新 remote ref，不移動 checkout，`$CUT/vars` 不動）：
+**2026-11-14 那次的重驗：** 那次 Phase 4 的 `LOKI-UNSCRUBBED` 唯一命中是一行 `coordinated_dispatch_result` 的空值 `order_id=""`，是舊的 scrub 檢查把空值算成明文 ID 的誤判，Loki 驗收記為 FAILED、沒有 R3。現在的 `loki_accept` 不把空值（`=""`、`=` 後面是空白或行尾）與完整的 `[ORDER_REF]` 算進去，其他非空值不論有沒有引號都算，包括 `[ORDER_REF]` 後面還接著內容的值。修正 merge 到 `master` 之後照上面三步重驗一次：`SINCE` 仍是那次的 `loki-since`（`1794651500`），那次的 `$WORK` 就是為此保留的。Mac mini 的 `helpers.sh` 不用重建，那次的 `log_evidence` 已是現行版本。monitoring-prod 那次的 `$CUT/helpers.sh` 還是舊的 `loki_accept`，第 2 步先從 `master` 的本文件重建它（`git fetch` 只更新 remote ref，不移動 checkout，`$CUT/vars` 不動）：
 
 ```bash
 CUT="$HOME/macmini-rollout-324be74"; cd /home/ubuntu/SkyEye; git fetch origin
 git show origin/master:docs/macmini-m2-alloy-rollout.md |
   awk -v open="cat >\"\$CUT/helpers.sh\" <<'EOF'" '$0 == open { on = 1; next } on && $0 == "EOF" { exit } on { print }' >"$CUT/helpers.sh.new"
-grep -qF 'F($|[^\]])' "$CUT/helpers.sh.new" && mv "$CUT/helpers.sh.new" "$CUT/helpers.sh" &&
+grep -qF '"\[ORDER_REF\][\s,;)}\]]' "$CUT/helpers.sh.new" && mv "$CUT/helpers.sh.new" "$CUT/helpers.sh" &&
   . "$CUT/helpers.sh" && echo HELPERS-CURRENT
 ```
 

@@ -939,12 +939,19 @@ scrub_case 'order_id= then a space' clean 'order_id= status=ok'
 scrub_case 'order_id= at the end' clean 'order_id='
 scrub_case 'bare [ORDER_REF]' clean 'msg=pnl_status client_id=[ORDER_REF]'
 scrub_case 'quoted [ORDER_REF]' clean 'order_id="[ORDER_REF]" orderId=[ORDER_REF], ack_client_id=[ORDER_REF]'
+scrub_case 'bare [ORDER_REF] closing an enclosing quote' clean 'msg="dispatch order_id=[ORDER_REF]" status=ok'
+scrub_case 'bare [ORDER_REF] before , ; ) } ]' clean \
+  'order_id=[ORDER_REF]; client_id=[ORDER_REF]) clientId=[ORDER_REF]} orderId=[ORDER_REF]]'
 scrub_case 'quoted client_id' leak 'msg=coordinated_dispatch_result client_id="tq0123456789abcdefghij"'
 scrub_case 'bare client_id' leak 'msg=coordinated_dispatch_result client_id=tq0123456789abcdefghij'
 scrub_case 'an ID after an empty value' leak 'order_id="" clientId=tq0123456789abcdefghij'
 scrub_case 'a raw value that starts with [' leak 'order_id=[[FAKE-ORDER-0318A FAKE-ORDER-0318B] [FAKE-ORDER-0318C]]'
 scrub_case 'an unterminated [ORDER_REF' leak 'client_action_id="[ORDER_REF"'
 scrub_case 'a value cut inside [ORDER_RE' leak 'order_id=[ORDER_RE'
+scrub_case 'quoted [ORDER_REF] then content' leak 'client_id="[ORDER_REF]tq123"'
+scrub_case 'bare [ORDER_REF] then content' leak 'client_id=[ORDER_REF]tq123'
+scrub_case 'quoted [ORDER_REF], a space, content' leak 'order_id="[ORDER_REF] tq123"'
+scrub_case 'quoted [ORDER_REF], a comma, content' leak 'order_id="[ORDER_REF],tq123"'
 
 # ─────────────────────────── P&L history (Phase 5) ──────────────────────────
 
