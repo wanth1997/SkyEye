@@ -252,7 +252,7 @@ date -u +%FT%TZ | tee "$WORK/phase1-start"
 
 ```bash
 alloy --version | head -n 1                              # alloy, version v1.16.0 …
-dpkg-query -W -f='${Status} ${Version}\n' alloy          # install ok installed 1.16.0-1 或 hold ok installed 1.16.0-1
+dpkg-query -W -f='${Status} ${Version}\n' alloy | tee "$WORK/alloy-deb.before"   # install ok installed 1.16.0-1 或 hold ok installed 1.16.0-1
 apt-mark showhold alloy | tee "$WORK/hold.before"        # 空白或 alloy，都可以
 systemctl is-active alloy                                # active
 systemctl show -p MainPID --value alloy | tee "$WORK/alloy-pid.before"
@@ -432,7 +432,7 @@ rc=0
 - **`rc=0`**：繼續下面的檢查。
 - **`rc=1` 且有 `refused, nothing was changed`**：沒有任何變更。STOP，依中止規則處理。
 - **`rc=1` 且有 `rolling back to alloy 1.16.0-1` 與 `rolled back; alloy 1.16.0-1 is installed and Alloy is as it was. Record: …`**：腳本已自動還原。仍跑下面的 ZenIncome 中央檢查確認恢復，然後 STOP，依中止規則處理。
-- **`rc=3`，輸出有 `CRITICAL: rollback_incomplete`**：還原沒有完成，Alloy 與 ZenIncome 可能停擺。**立刻停手，通知 Wan 與 manager**，依 [R2-CRITICAL](#r2-critical--upgrade-linuxsh-exit-3) 處理。不進 Phase 3。
+- **`rc=3`，輸出有 `CRITICAL: rollback_incomplete`**：還原沒有完成，Alloy 與 ZenIncome 可能停擺。**立刻停手，通知 Wan 與 manager**，依 [R2-CRITICAL](#r2-critical--手動回到-phase-1-的-alloy) 處理。不進 Phase 3。
 
 Trading01 檢查（`rc=0` 後立即）：
 
@@ -698,7 +698,7 @@ date -u +%FT%TZ | tee "$WORK/phase6-end"
 收尾：
 
 - 把執行紀錄（下表）與 shadow 排除時窗（`phase2-start` 到 `phase6-end`）寫進 `docs/work-log.md`。
-- `$WORK`、`$STAGE` 保留 7 天供 rollback，之後 `rm -rf "$WORK" "$STAGE"`。`$UPGRADE_RECORD`（含兩個 deb，不含 conffile 複本）保留到下一次 Alloy 版本移動。`/home/ubuntu/skyeye-agent` 與較舊的 staging 目錄不動。
+- `$WORK`、`$STAGE` 保留 7 天供 rollback，之後 `rm -rf "$WORK" "$STAGE"`。`$UPGRADE_RECORD`（含兩個 deb，不含 conffile 複本）保留到下一次 Alloy 版本移動；有跑 R2 的話，它的 record 也一樣。`/home/ubuntu/skyeye-agent` 與較舊的 staging 目錄不動。
 - 回報 tnauqquant manager：fleet dashboard 已列出 `popdex-btc`、Mainnet 預期已修正，以及 Robinhood 的值是否有變化。
 
 ## Rollback
@@ -709,6 +709,7 @@ date -u +%FT%TZ | tee "$WORK/phase6-end"
 | Phase 2 `rc=1` | 腳本已自動還原，確認 ZenIncome 後依中止規則處理 |
 | Phase 2 `rc=0` 但檢查失敗 | R2，然後依中止規則處理 |
 | Phase 2 `rc=3` | R2-CRITICAL |
+| R2 `rc=1` 或 `rc=3` | 見 R2 的分支 |
 | Phase 3 `popdex-btc` add 失敗 | R3a，然後依中止規則處理 |
 | Phase 3 其他失敗 | R3，然後依中止規則處理 |
 | Phase 4 | `add` 自行還原；要撤銷已完成的 Phase 4 用 R4 |
@@ -719,33 +720,67 @@ date -u +%FT%TZ | tee "$WORK/phase6-end"
 只在 Phase 3 開始之前使用。Phase 3 開始之後要退回 Alloy，先做完 R3（還原舊 fragment），再做 R2。
 
 ```bash
-"$UPGRADE" --rollback "$UPGRADE_RECORD" 2>&1 | tee "$WORK/upgrade-rollback.log"; echo "rc=${PIPESTATUS[0]}"
+"$UPGRADE" --rollback "$UPGRADE_RECORD" 2>&1 | tee "$WORK/upgrade-rollback.log"; echo "rc=${PIPESTATUS[0]}" | tee -a "$WORK/upgrade-rollback.log"
 ```
 
-預期 `Moving alloy 1.16.3-1 -> 1.16.0-1; …`、`Restarting Alloy; …`（或 package scripts 已 restart 的那一行）、`Done: alloy 1.16.0-1 is installed again (held=<Phase 1 的 hold 狀態>); Alloy is as it was (active=1).`、`rc=0`。接著重跑 Phase 2 的 Trading01 檢查（版本應為 v1.16.0）與 monitoring-prod 的 ZenIncome 檢查。`rc=3` 時改走 R2-CRITICAL。
+`--rollback` 不改 `$UPGRADE_RECORD`，另外寫一個自己的 record（`mode=rollback`、`rollback_of=$UPGRADE_RECORD`）。依 `rc` 判斷：
 
-### R2-CRITICAL — `upgrade-linux.sh` exit 3
+- **`rc=0`**：預期 `Moving alloy 1.16.3-1 -> 1.16.0-1; …`、`Restarting Alloy; …`（或 package scripts 已 restart 的那一行）、`Done: alloy 1.16.0-1 is installed again (held=<Phase 1 的 hold 狀態>); Alloy is as it was (active=1).`、`Record: /var/lib/skyeye-alloy/upgrade/<UTC>-<pid>`。接著重跑 Phase 2 的 Trading01 檢查（版本應為 v1.16.0，`apt-mark showhold alloy` 與 `hold.before` 相同）與 monitoring-prod 的 ZenIncome 檢查，然後依中止規則處理。
+- **`rc=1` 且有 `refused, nothing was changed`**：沒有任何變更，Alloy 仍是 `$ALLOY_TO`。STOP，把訊息交給 manager 與 Wan（例如 `$UPGRADE_RECORD` 沒設定、不是 committed 的 record，或 host lock 被占用）。在他們決定之前，視同 R2 尚未執行。
+- **`rc=1` 且有 `rolling back to alloy <ALLOY_TO>-1` 與 `rolled back; alloy <ALLOY_TO>-1 is installed and Alloy is as it was. Record: …`**：降版失敗，腳本已回到 R2 之前的狀態（`$ALLOY_TO`）。STOP，通知 Wan 與 manager，跑 Phase 2 的 ZenIncome 中央檢查：
+  - 全部通過：維持 `$ALLOY_TO`，不重跑 R2，等 Wan 與 manager 決定。
+  - 任何一項失敗：ZenIncome 受影響。在 Wan 同意下依 R2-CRITICAL 手動回到 Phase 1 的版本。
+- **`rc=3`，輸出有 `CRITICAL: rollback_incomplete`**：依 R2-CRITICAL。
 
-停手，通知 Wan 與 manager。輸出會指出 `CRITICAL: the config files from before this run are in <R>/conffiles; the packages are in <R>/debs.`。在 Wan 同意下，以 root 執行：
+### R2-CRITICAL — 手動回到 Phase 1 的 Alloy
+
+用在三種情況：Phase 2 的 `upgrade-linux.sh` exit 3、R2 exit 3、R2 `rc=1` 回到 `$ALLOY_TO` 後 ZenIncome 檢查失敗。停手，通知 Wan 與 manager，**在 Wan 同意下**以 root 執行。目標一律是 Phase 1 記錄的狀態：`$WORK/alloy-deb.before` 的版本、`$WORK/hold.before` 的 hold、`$WORK/alloy-files.before` 的設定檔。
+
+先設定 `R`，它要含有 `upgrade.meta` 與 `debs/`：
+
+- Phase 2 exit 3：`R=$(sed -n 's/^CRITICAL: record: //p' "$WORK/upgrade.log" | tail -n 1)`
+- R2 exit 3：`R=$(sed -n 's/^CRITICAL: record: //p' "$WORK/upgrade-rollback.log" | tail -n 1)`
+- R2 `rc=1` 後 ZenIncome 失敗：`R=$UPGRADE_RECORD`
+
+`tests/alloy/test-upgrade-linux.sh` 驗證 exit 3 時 `CRITICAL: record:` 指出的目錄含有下面用到的 `upgrade.meta`、`debs/alloy_1.16.0-1_*.deb` 與 `conffiles/`。
 
 ```bash
-R=<CRITICAL 訊息中的 record 目錄>
+BEFORE_DEB=$(awk '{print $NF}' "$WORK/alloy-deb.before"); echo "R=$R BEFORE_DEB=$BEFORE_DEB"   # BEFORE_DEB=1.16.0-1
+grep -E '^(status|mode|rollback_of|from_deb|to_deb|was_held|was_active)=' "$R/upgrade.meta"
+ls "$R"/debs/alloy_"$BEFORE_DEB"_*.deb                   # 剛好一個檔案
 dpkg-query -W alloy; alloy --version | head -n 1; systemctl status alloy --no-pager | head -n 5
-grep -E '^(from_deb|was_held|was_active)=' "$R/upgrade.meta"
-DEBIAN_FRONTEND=noninteractive dpkg --force-confold -i "$R"/debs/alloy_1.16.0-1_*.deb
-cmp "$R/conffiles/default-alloy" /etc/default/alloy && diff -r "$R/conffiles/etc-alloy" /etc/alloy && echo CONFIG-MATCHES-RECORD
 ```
 
-`CONFIG-MATCHES-RECORD` 沒印出時，把現況移開再還原：`mv /etc/default/alloy "$R/manual-default-alloy"; mv /etc/alloy "$R/manual-etc-alloy"; cp -a "$R/conffiles/default-alloy" /etc/default/alloy; cp -a "$R/conffiles/etc-alloy" /etc/alloy`。然後：
+`ls` 沒有剛好列出一個 deb：STOP，交給 Wan 與 manager。否則：
+
+```bash
+DEBIAN_FRONTEND=noninteractive dpkg --force-confold -i "$R"/debs/alloy_"$BEFORE_DEB"_*.deb
+sha256sum -c --quiet "$WORK/alloy-files.before" && echo CONFIG-AS-PHASE1
+```
+
+`CONFIG-AS-PHASE1` 沒印出時：
+
+- `$R/conffiles` 存在：把現況移開再還原，然後重跑上面的 `sha256sum -c`，這次必須印出 `CONFIG-AS-PHASE1`：
+
+  ```bash
+  mv /etc/default/alloy "$R/manual-default-alloy"; mv /etc/alloy "$R/manual-etc-alloy"
+  cp -a "$R/conffiles/default-alloy" /etc/default/alloy; cp -a "$R/conffiles/etc-alloy" /etc/alloy
+  ```
+
+- `$R/conffiles` 不存在，或還原後仍沒印出：STOP，把 `sha256sum -c` 的輸出交給 Wan 與 manager，不要 restart。
+
+`CONFIG-AS-PHASE1` 印出後：
 
 ```bash
 systemctl daemon-reload
-apt-mark hold alloy        # upgrade.meta 的 was_held=1 時；was_held=0 時改用 apt-mark unhold alloy
+if [ -s "$WORK/hold.before" ]; then apt-mark hold alloy; else apt-mark unhold alloy; fi
 systemctl restart alloy
-curl -fsS "$READY_URL"; echo
+sleep 5; systemctl is-active alloy; curl -fsS "$READY_URL"; echo     # active，ready 成功
+dpkg-query -W -f='${Status} ${Version}\n' alloy | diff "$WORK/alloy-deb.before" - && echo DEB-AS-PHASE1
+alloy --version | head -n 1                              # v1.16.0
 ```
 
-再跑 Phase 2 的 ZenIncome 中央檢查。`$R/conffiles` 含 Cloudflare 憑證，恢復後 `rm -rf "$R/conffiles"`。
+再跑 Phase 2 的 ZenIncome 中央檢查。`$R/conffiles` 與 `$R/manual-*` 含 Cloudflare 憑證，恢復後 `rm -rf "$R/conffiles" "$R"/manual-*`。
 
 ### R3a — `popdex-btc` add 失敗
 
