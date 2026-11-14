@@ -46,6 +46,25 @@ groups:
           summary: "Blackbox exporter down — probe_* metrics will go stale; TLS/reachability signals lost."
 
       # ────────────────────────────────────────────────────────────
+      # Remote ingest path
+      # ────────────────────────────────────────────────────────────
+
+      - alert: AllRemoteAgentsSilent
+        # A tunnel or Access service-token failure cuts every agent off at
+        # once. One alert names the shared cause instead of leaving it to a
+        # pile of per-host alerts. Remote Alloy agents report
+        # up{job="integrations/unix"}; the central node-exporter is
+        # job="monitoring-host" and does not count.
+        expr: absent(up{job="integrations/unix"} == 1)
+        for: 5m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "No remote agent is delivering metrics — check cloudflared and the Access service token"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/all-remote-agents-silent.md"
+
+      # ────────────────────────────────────────────────────────────
       # Prometheus performance / health
       # ────────────────────────────────────────────────────────────
 

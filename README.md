@@ -32,7 +32,7 @@ PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
 - `app.yml` — BackendDown, 5xx rates, latency p99, unhandled exception surge, payment failure and LinkCourt 401/429 surge shadow alerts
 - `business.yml` — PaymentSuccessRateLow, RefundVolumeHigh, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
 - `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, SkyEyeWatchdog (external dead man's switch), DailyHeartbeat
-- `stack-health.yml` — SkyEye components, resource pressure, rule evaluation health
+- `stack-health.yml` — SkyEye components, remote ingest path (AllRemoteAgentsSilent), resource pressure, rule evaluation health
 - `trading-targets.yml` / `trading.yml` — production Trading target inventory (edit with `scripts/trading-target add|remove`) and shadow alerts
 
 Severity → routing:

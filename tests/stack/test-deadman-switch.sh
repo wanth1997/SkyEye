@@ -5,7 +5,8 @@ set -euo pipefail
 #   1. the pinned Prometheus loads the real rules and the watchdog fires on its
 #      own TSDB head, so the metric name and the millisecond units are right;
 #   2. amtool routes the loaded labels through the repository's alertmanager.yml:
-#      the watchdog reaches deadman-external whatever other labels it carries;
+#      the watchdog reaches deadman-external whatever other labels it carries,
+#      and AllRemoteAgentsSilent stays in shadow;
 #   3. a real Alertmanager runs the repository config with no deadman_url, the
 #      state right after deploy: it stays ready, the ping fails without a retry
 #      loop and the other routes still deliver. Then the secret is written,
@@ -82,8 +83,8 @@ while IFS= read -r line; do
 done <"$WORK/prom.log"
 
 # ── 2. Inputs for Alertmanager: loaded labels, routes and a sink config ─────
-# The labels are the ones Prometheus loaded, so the watchdog is tested as it
-# would really be sent.
+# The labels are the ones Prometheus loaded, so a rule that loses its shadow
+# label or the watchdog that gains one is tested as it would really be sent.
 python3 -I - "$WORK/prom.log" "$REPO_ROOT/alertmanager/alertmanager.yml" \
   "$REPO_ROOT/docker-compose.yml" "$WORK/am" <<'PY'
 import json, re, sys
@@ -99,6 +100,8 @@ def labels(name, **extra):
     return " ".join([f"alertname={name}"] + [f"{k}={v}" for k, v in sorted(found.items())])
 
 watchdog = labels("SkyEyeWatchdog")
+remote = labels("AllRemoteAgentsSilent")
+promoted = " ".join(f for f in remote.split() if not f.startswith("notification_mode="))
 with open(f"{out}/routes.txt", "w", encoding="utf-8") as routes:
     for receiver, fields in (
         ("deadman-external", watchdog),
@@ -106,6 +109,8 @@ with open(f"{out}/routes.txt", "w", encoding="utf-8") as routes:
         ("deadman-external", labels("SkyEyeWatchdog", notification_mode="shadow")),
         ("deadman-external", labels("SkyEyeWatchdog", severity="High")),
         ("deadman-external", labels("SkyEyeWatchdog", severity="High", notification_mode="page")),
+        ("shadow-null", remote),
+        ("telegram-high", promoted),
         ("telegram-high", "alertname=BackendDown severity=High product=fixture"),
         ("telegram-low", "alertname=DailyHeartbeat severity=Low"),
     ):

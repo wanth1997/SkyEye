@@ -63,7 +63,7 @@ If all three are fine, you're done. Total: under 2 minutes.
 
 Symptom: the external heartbeat service reports `skyeye-monitoring-prod` down (no `SkyEyeWatchdog` ping for 15 minutes), or no silent `DailyHeartbeat` in Telegram for 2+ mornings and `24h Telegram 通知` reads 0.
 
-The external check is the primary signal: `SkyEyeWatchdog` is tied to the TSDB head and pings through Alertmanager, so a dead EC2, Docker, Prometheus or Alertmanager, a full disk that stops TSDB writes, or a lost outbound network all stop the pings. Follow [`runbooks/skyeye-watchdog.md`](../runbooks/skyeye-watchdog.md#外部服務告警時). Before planned downtime longer than 10 minutes, pause the external check.
+The external check is the primary signal: `SkyEyeWatchdog` is tied to the TSDB head and pings through Alertmanager, so a dead EC2, Docker, Prometheus or Alertmanager, a full disk that stops TSDB writes, or a lost outbound network all stop the pings. Follow [`runbooks/skyeye-watchdog.md`](../runbooks/skyeye-watchdog.md#外部服務告警時). It does not see an inbound tunnel outage; that is `AllRemoteAgentsSilent` ([runbook](../runbooks/all-remote-agents-silent.md)). Before planned downtime longer than 10 minutes, pause the external check.
 
 1. **External check** — open the heartbeat service and look at the last ping time. No ping but the host is reachable: check the `deadman-external` errors in the Alertmanager log.
 2. **SSH monitoring-prod**:

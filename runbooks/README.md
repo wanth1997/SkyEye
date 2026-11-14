@@ -26,6 +26,7 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 | `ExternalApiDown` / `TlsCertExpired` | [external-api-down.md](./external-api-down.md) | High |
 | `SchedulerNoHeartbeat` | [scheduler-dead.md](./scheduler-dead.md) | High |
 | `SkyEyeWatchdog` / `AlertmanagerDown` | [skyeye-watchdog.md](./skyeye-watchdog.md) | None (external dead man's switch) / High |
+| `AllRemoteAgentsSilent` | [all-remote-agents-silent.md](./all-remote-agents-silent.md) | High (shadow) |
 
 Add a row + a runbook here every time you add a rule with `severity: High` or `Medium`.
 

@@ -84,6 +84,51 @@ tests:
         alertname: PrometheusRuleIterationsMissed
         exp_alerts: []
 
+  # Remote Alloy agents report up{job="integrations/unix"}; the central
+  # node-exporter (job monitoring-host) must not hide a tunnel outage.
+  # PROD02 stops sending at 5m and stays visible for the 5 minute lookback;
+  # trading01 keeps sending up == 0. So no agent is up from 10m, firing at 15m.
+  - name: every remote agent going silent fires once after 5 minutes
+    interval: 30s
+    input_series:
+      - series: 'up{job="integrations/unix",instance="PROD02",product="ppclub",server_id="PROD02"}'
+        values: '1x10'
+      - series: 'up{job="integrations/unix",instance="trading01",product="tnauqquant",server_id="trading01"}'
+        values: '1x10 0x30'
+      - series: 'up{job="monitoring-host",instance="node-exporter:9100"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AllRemoteAgentsSilent
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: AllRemoteAgentsSilent
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: AllRemoteAgentsSilent
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: AllRemoteAgentsSilent
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: "No remote agent is delivering metrics — check cloudflared and the Access service token"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/all-remote-agents-silent.md"
+
+  - name: one remote agent still delivering keeps AllRemoteAgentsSilent quiet
+    interval: 30s
+    input_series:
+      - series: 'up{job="integrations/unix",instance="PROD02",product="ppclub",server_id="PROD02"}'
+        values: '1x40'
+      - series: 'up{job="integrations/unix",instance="trading01",product="tnauqquant",server_id="trading01"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AllRemoteAgentsSilent
+        exp_alerts: []
+
   # Until alertmanager/secrets/deadman_url exists every watchdog ping fails;
   # that must not page through Telegram, but a Telegram failure still must.
   - name: webhook failures do not fire AlertmanagerNotifyFailures, Telegram failures do
