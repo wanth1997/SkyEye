@@ -116,8 +116,11 @@ declare -p MERGE M7 ALLOY_TO STAGE WORK >"$WORK/vars"
 cat >"$WORK/helpers.sh" <<'EOF'
 SETUP="$STAGE/agents/alloy/trading/setup-linux.sh"
 UPGRADE="$STAGE/agents/alloy/upgrade-linux.sh"
-INSTANCES=/etc/skyeye-trading/instances
-TEXTFILE=/var/lib/skyeye-trading/textfile
+HOST_ROOT=""   # 在 Trading01 上一定是空字串；只有 rehearsal 測試會把它換成測試根目錄
+INSTANCES="$HOST_ROOT/etc/skyeye-trading/instances"
+TEXTFILE="$HOST_ROOT/var/lib/skyeye-trading/textfile"
+ALLOY_ETC="$HOST_ROOT/etc/alloy"
+SYSTEMD_ETC="$HOST_ROOT/etc/systemd/system"
 # 每個已安裝 instance 一行：strategy enabled|disabled active|inactive
 record_timer_states() {
   local env_path strategy unit enabled active
@@ -146,6 +149,97 @@ tnauqquant_state() {
   systemctl list-units --all --no-legend --plain 'tnauqquant*' | awk '{print $1, $2, $3, $4}'
   systemctl list-unit-files --no-legend 'tnauqquant*' | awk '{print $1, $2}'
   pgrep -a -f '/home/ubuntu/tnauqquant/bin/' || true
+}
+# R3 用：每個 templated probe instance，包括已經 retire 的 popdex-btc
+probe_strategies() {
+  local env_path
+  {
+    for env_path in "$INSTANCES"/*.env; do
+      [ -e "$env_path" ] && basename "$env_path" .env
+    done
+    awk '{ print $1 }' "$WORK/timers.before"
+    echo popdex-btc
+  } | LC_ALL=C sort -u
+}
+# 停止並 disable 每個 templated probe，再確認每個 timer 都 disabled + inactive、
+# service 都 inactive，也沒有任何 skyeye-trading-probe@ 的 wants link。全部做到才回傳 0
+stop_all_probes() {
+  local s link rc=0
+  for s in $(probe_strategies); do
+    systemctl disable --now "skyeye-trading-probe@$s.timer" || rc=1
+    systemctl stop "skyeye-trading-probe@$s.service" || rc=1
+  done
+  for s in $(probe_strategies); do
+    if systemctl is-enabled --quiet "skyeye-trading-probe@$s.timer" ||
+      systemctl is-active --quiet "skyeye-trading-probe@$s.timer" ||
+      systemctl is-active --quiet "skyeye-trading-probe@$s.service"; then
+      echo "still enabled or active: skyeye-trading-probe@$s"
+      rc=1
+    fi
+  done
+  if systemctl is-active --quiet 'skyeye-trading-probe@*.service' ||
+    systemctl is-active --quiet 'skyeye-trading-probe@*.timer' ||
+    systemctl is-enabled --quiet 'skyeye-trading-probe@*.timer'; then
+    echo "a templated probe is still enabled or active"
+    rc=1
+  fi
+  for link in "$SYSTEMD_ETC"/timers.target.wants/skyeye-trading-probe@*.timer; do
+    if [ -e "$link" ] || [ -L "$link" ]; then
+      echo "still enabled: $link"
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+# R3：Phase 3/4 完整退回。每一步失敗都印出 STOP 並回傳 1，之後的步驟不會執行。
+# 共用檔案只在 stop_all_probes 確認全部 probe 停止並 disabled 之後才還原。
+r3_rollback() {
+  local rc record path s e a
+  date -u +%FT%TZ >"$WORK/r3-start"
+  if [ -f "$INSTANCES/popdex-btc.env" ]; then
+    "$SETUP" retire --strategy popdex-btc </dev/null >"$WORK/retire-popdex-btc.out" 2>&1
+    rc=$?
+    cat "$WORK/retire-popdex-btc.out"
+    if [ "$rc" -ne 0 ]; then
+      echo "STOP: retire popdex-btc exited $rc; R3 changed nothing else"
+      return 1
+    fi
+  fi
+  if ! stop_all_probes; then
+    echo "STOP: a templated probe is still enabled or active; no shared file was restored"
+    return 1
+  fi
+  echo PROBES-STOPPED
+  # 最新的 record 先還原；先確認每個 record 都完整，才開始動檔案
+  awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) if (line[i] != "") print line[i] }' \
+    "$WORK/records.list" >"$WORK/records.reverse"
+  while IFS= read -r record <&3; do
+    if [ ! -f "$record/absent.list" ] || [ ! -f "$record/present.list" ]; then
+      echo "STOP: incomplete record $record; no shared file was restored"
+      return 1
+    fi
+  done 3<"$WORK/records.reverse"
+  while IFS= read -r record <&3; do
+    while IFS= read -r path <&4; do
+      [ -z "$path" ] || rm -f -- "$path" || { echo "STOP: cannot remove $path"; return 1; }
+    done 4<"$record/absent.list"
+    while IFS= read -r path <&4; do
+      [ -n "$path" ] || continue
+      { rm -f -- "$path" && mkdir -p "$(dirname "$path")" &&
+        cp -a "$record/previous/${path#"$HOST_ROOT"/}" "$path"; } ||
+        { echo "STOP: cannot restore $path from $record"; return 1; }
+    done 4<"$record/present.list"
+    echo "restored $record"
+  done 3<"$WORK/records.reverse"
+  systemctl daemon-reload || { echo "STOP: systemctl daemon-reload failed"; return 1; }
+  { alloy validate "$ALLOY_ETC" && systemctl reload alloy; } ||
+    { echo "STOP: the restored Alloy config was not reloaded"; return 1; }
+  echo ALLOY-RELOADED
+  while read -r s e a <&3; do
+    [ "$e $a" != "enabled active" ] || systemctl enable --now "skyeye-trading-probe@$s.timer" ||
+      { echo "STOP: cannot enable skyeye-trading-probe@$s.timer"; return 1; }
+  done 3<"$WORK/timers.before"
+  echo TIMERS-ENABLED
 }
 EOF
 . "$WORK/helpers.sh"
@@ -671,41 +765,38 @@ test ! -e "$INSTANCES/popdex-btc.env" && echo NO-POPDEX
 
 ### R3 — Phase 3/4 完整退回
 
-把 Trading01 還原成 Phase 2 結束時的狀態：舊的共用 probe、舊的 fragment 與 env、timer 依 `$WORK/timers.before`。順序與 `tests/trading/test-trading01-popdex-rollout.sh` 的 rollback case 相同。
+把 Trading01 還原成 Phase 2 結束時的狀態：舊的共用 probe、舊的 fragment 與 env、timer 依 `$WORK/timers.before`。步驟寫在 Phase 1 的 `helpers.sh`（`r3_rollback`），`tests/trading/test-trading01-popdex-rollout.sh` 執行的就是同一段程式：
+
+1. `popdex-btc` 有安裝時先 `retire`。exit code 不是 0 就停，R3 沒有改任何其他東西。
+2. `stop_all_probes`：停止並 disable **每一個** templated probe（已安裝的 env、`timers.before` 列出的、`popdex-btc`），再逐一確認 timer disabled + inactive、service inactive，也沒有殘留的 wants link。有任何一個做不到就停，共用檔案一個都沒還原。
+3. 確認 `records.list` 的每個 record 都完整，再由新到舊還原檔案。
+4. `daemon-reload`、`alloy validate` + `reload`，依 `timers.before` 恢復 timer。
 
 ```bash
-date -u +%FT%TZ | tee "$WORK/r3-start"
-[ -f "$INSTANCES/popdex-btc.env" ] && "$SETUP" retire --strategy popdex-btc </dev/null 2>&1 | tee "$WORK/retire-popdex-btc.out"
-while read -r s _ _ <&3; do
-  systemctl disable --now "skyeye-trading-probe@$s.timer"
-  systemctl stop "skyeye-trading-probe@$s.service"
-done 3<"$WORK/timers.before"
-tac "$WORK/records.list" >"$WORK/records.reverse"        # 最新的 record 先還原
-while IFS= read -r record <&3; do
-  [ -d "$record" ] || { echo "STOP: missing record $record"; break; }
-  while IFS= read -r path; do [ -n "$path" ] && rm -f -- "$path"; done <"$record/absent.list"
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    rm -f -- "$path"
-    cp -a "$record/previous/${path#/}" "$path"
-  done <"$record/present.list"
-  echo "restored $record"
-done 3<"$WORK/records.reverse"
-systemctl daemon-reload
-alloy validate /etc/alloy && systemctl reload alloy && echo ALLOY-RELOADED
-while read -r s e a <&3; do
-  [ "$e $a" = "enabled active" ] && systemctl enable --now "skyeye-trading-probe@$s.timer"
-done 3<"$WORK/timers.before"
+r3_rollback 2>&1 | tee "$WORK/r3.log"; echo "rc=${PIPESTATUS[0]}"
+```
+
+成功時依序印出 retire 的輸出（`popdex-btc` 有安裝時）、`PROBES-STOPPED`、每個 record 一行 `restored /etc/skyeye-trading/install-backup/…`、`ALLOY-RELOADED`、`TIMERS-ENABLED`、`rc=0`。retire 預期 `Validating the Alloy configuration without trading-popdex-btc.alloy`、`Retired Linux trading monitoring instance: popdex-btc`、`Rollback record: /etc/skyeye-trading/retired/popdex-btc-<UTC>`，`popdex-btc` 的 env、fragment 與 textfile 移到該目錄。
+
+`rc=0` 之後核對：
+
+```bash
 record_timer_states | diff "$WORK/timers.before" - && echo TIMERS-RESTORED
 sha256sum -c --quiet "$WORK/shared-files.before" && echo SHARED-RESTORED
 sha256sum -c --quiet "$WORK/instances.before" && echo INSTANCES-RESTORED
 sha256sum -c --quiet "$WORK/alloy-files.before" && echo ALLOY-FILES-RESTORED
+test ! -e /etc/alloy/trading-popdex-btc.alloy && echo NO-POPDEX-FRAGMENT
 ```
 
-- `retire` 預期 `Validating the Alloy configuration without trading-popdex-btc.alloy`、`Retired Linux trading monitoring instance: popdex-btc`、`Rollback record: /etc/skyeye-trading/retired/popdex-btc-<UTC>`。`popdex-btc` 的 env、fragment 與 textfile 移到該目錄；`popdex-btc` 沒裝成時跳過這一行。
-- 五個 `…RELOADED`／`…RESTORED` 都必須印出，`ls /etc/alloy` 不再有 `trading-popdex-btc.alloy`。任何一個沒印出或出現 `STOP: missing record`：停手，把 `$WORK` 內容交給 manager，不要重跑。
-- monitoring-prod：`probe_ages` 回到兩筆 < 60，`zen_up | diff "$CUT/zenincome-up.pre.json" -` 相同。
-- 中央已經部署 `popdex-btc` row 時（Phase 5 之後才 R3），先做 R5 再做 R3。
+五行都必須印出，否則停手，把 `$WORK` 交給 manager。
+
+`rc` 不是 0 時，`r3.log` 最後一行 `STOP:` 說明停在哪裡。停手，執行 `record_timer_states | tee "$WORK/timers.r3-stop"`，把 `$WORK` 交給 manager：
+
+- `STOP: retire popdex-btc exited …`：Trading01 維持 Phase 3/4 完成後的狀態，三個 probe 照常執行。
+- `STOP: a templated probe is still enabled or active …`（前面的 `still enabled or active: …` 指出是哪一個）或 `STOP: incomplete record …`：**共用檔案一個都沒還原。** `timers.r3-stop` 顯示哪些 probe 已經停下，停下的 probe 會出現 shadow `TradingTelemetryMissing`。排除原因並經 manager 同意後，從頭重跑上面的 `r3_rollback` 區塊；到這一步為止的動作重跑是安全的（`popdex-btc` 已 retire 時會跳過）。
+- 其他 `STOP:`（檔案還原、`daemon-reload`、Alloy reload 或 timer 恢復失敗）：檔案已部分或全部還原，**不要重跑**，等 manager 判斷。
+
+monitoring-prod：`probe_ages` 回到兩筆 < 60，`zen_up | diff "$CUT/zenincome-up.pre.json" -` 相同。中央已經部署 `popdex-btc` row 時（Phase 5 之後才 R3），先做 R5 再做 R3。
 
 ### R4 — 只撤銷 Phase 4
 

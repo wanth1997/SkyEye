@@ -7,7 +7,9 @@ set -euo pipefail
 # with a shared probe and fragments older than this checkout, and a leftover
 # Mainnet manifest. The instance envs come from the checked-in examples with
 # only the repo root, textfile directory and users moved into the test root.
-# The commands below are the runbook's commands. Real `alloy validate` checks
+# The runbook's Phase 1 helpers.sh is taken from the runbook itself, with only
+# HOST_ROOT pointed at the test root, so R3 runs exactly as written there; the
+# other commands below are the runbook's commands. Real `alloy validate` checks
 # every combined config; systemctl is a stub, so no unit is ever touched.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -17,6 +19,7 @@ SETUP="$TRADING_DIR/setup-linux.sh"
 ROBINHOOD_EXAMPLE="$TRADING_DIR/deployment-linux-robinhood.env.example"
 MAINNET_EXAMPLE="$TRADING_DIR/deployment-linux-mainnet.env.example"
 POPDEX_EXAMPLE="$TRADING_DIR/deployment-linux-popdex.env.example"
+RUNBOOK="$REPO_ROOT/docs/trading01-popdex-rollout.md"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -28,7 +31,7 @@ for required_tool in alloy rg jq shasum; do
     fail "$required_tool is required; this suite must not pass by skipping"
 done
 REAL_ALLOY="$(command -v alloy)"
-for required_file in "$SETUP" "$ROBINHOOD_EXAMPLE" "$MAINNET_EXAMPLE" "$POPDEX_EXAMPLE"; do
+for required_file in "$SETUP" "$ROBINHOOD_EXAMPLE" "$MAINNET_EXAMPLE" "$POPDEX_EXAMPLE" "$RUNBOOK"; do
   [[ -f "$required_file" ]] || fail "required file is missing: $required_file"
 done
 
@@ -50,15 +53,17 @@ if rg -n -i 'CF_ACCESS|SECRET|TOKEN|PASSWORD|PRIVATE' "$POPDEX_EXAMPLE"; then
   fail 'the PopDEX example must not name a credential'
 fi
 
+# setup-linux.sh resolves the test root with pwd -P and its records use that
+# form, so the test root is resolved once here and used in that form throughout.
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-t01-popdex.XXXXXX")"
 cleanup() {
   rm -rf "$TEST_ROOT"
 }
 trap cleanup EXIT
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 
 SYSTEM_ROOT="$TEST_ROOT"
-# setup-linux.sh resolves the test root with pwd -P, and its records use that form.
-ROOT_P="$(cd "$SYSTEM_ROOT" && pwd -P)"
+ROOT_P="$SYSTEM_ROOT"
 PROBE_HOME="$TEST_ROOT/home/ubuntu"
 FAKE_REPO="$PROBE_HOME/tnauqquant"
 TEXTFILE_DIR="$TEST_ROOT/var/lib/skyeye-trading/textfile"
@@ -139,6 +144,10 @@ if [[ "${1:-}" == "--version" ]]; then
   printf 'alloy, version v%s (branch: HEAD, revision: fixture)\n' "${FAKE_ALLOY_VERSION:-1.16.3}"
   exit 0
 fi
+if [[ "${1:-}" == "validate" && -n "${FAKE_ALLOY_VALIDATE_FAILS:-}" ]]; then
+  printf 'Error: fixture validation failure\n' >&2
+  exit 1
+fi
 exec "$REAL_ALLOY" "$@"
 EOF
 
@@ -180,6 +189,10 @@ case "$cmd" in
     ;;
   disable)
     [[ "${1:-}" != "--now" ]] || shift
+    if [[ -n "${FAKE_SYSTEMCTL_FAIL_DISABLE:-}" && "$1" == "$FAKE_SYSTEMCTL_FAIL_DISABLE" ]]; then
+      printf 'Failed to disable unit %s (fixture)\n' "$1" >&2
+      exit 1
+    fi
     rm -f "$(state_path enabled "$1")" "$(state_path active "$1")"
     ;;
   enable)
@@ -243,6 +256,24 @@ export SYSTEMCTL_STATE SYSTEMCTL_LOG SYSTEMCTL_LOG_ALL REAL_ALLOY
 export FAKE_PASSWD_HOME="$PROBE_HOME"
 export SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT"
 
+# The runbook's Phase 1 helpers.sh, as written there. STAGE is the checkout, so
+# SETUP is this checkout's setup-linux.sh; HOST_ROOT is the only line changed.
+helpers_open="cat >\"\$WORK/helpers.sh\" <<'EOF'"
+awk -v open="$helpers_open" '$0 == open { on = 1; next } on && $0 == "EOF" { exit } on { print }' \
+  "$RUNBOOK" >"$TEST_ROOT/runbook-helpers.sh"
+grep -qx 'HOST_ROOT=""[[:space:]]*#.*' "$TEST_ROOT/runbook-helpers.sh" || \
+  fail 'the runbook helpers.sh no longer sets HOST_ROOT="" on a line of its own'
+sed -E "s#^HOST_ROOT=\"\"#HOST_ROOT=\"$ROOT_P\"#" "$TEST_ROOT/runbook-helpers.sh" >"$TEST_ROOT/helpers.sh"
+for helper in record_timer_states textfile_values probe_strategies stop_all_probes r3_rollback; do
+  grep -q "^$helper() {" "$TEST_ROOT/helpers.sh" || fail "the runbook helpers.sh does not define $helper"
+done
+# shellcheck disable=SC2034  # read by the sourced helpers.sh
+STAGE="$REPO_ROOT"
+# shellcheck source=/dev/null
+. "$TEST_ROOT/helpers.sh"
+[[ "$INSTANCES" == "$ROOT_P/etc/skyeye-trading/instances" && "$SETUP" == "$TRADING_DIR/setup-linux.sh" ]] || \
+  fail 'the runbook helpers.sh does not resolve below the test root'
+
 sha_of() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
@@ -272,18 +303,10 @@ snapshot() {
 record_of() {
   sed -n 's/^Rollback record: //p' "$1" | tail -n 1
 }
-# The runbook's Phase 1 timer record: one line per installed instance.
-record_timer_states() {
-  local env_path strategy unit enabled active
-  for env_path in "$INSTANCES"/*.env; do
-    strategy="$(basename "$env_path" .env)"
-    unit="skyeye-trading-probe@$strategy.timer"
-    enabled=disabled
-    active=inactive
-    if systemctl is-enabled --quiet "$unit"; then enabled=enabled; fi
-    if systemctl is-active --quiet "$unit"; then active=active; fi
-    printf '%s %s %s\n' "$strategy" "$enabled" "$active"
-  done
+# The files every templated probe shares, and the siblings' own files: the
+# snapshot without the lines of the instance R3 retires.
+shared_snapshot() {
+  snapshot | grep -v "$POPDEX"
 }
 run_installed_probe() {
   # Positional parameters belong to the child shell.
@@ -437,33 +460,60 @@ done
 [[ "$(probe_metric "$ROBINHOOD" tnauqquant_run_expected)" == "1" ]] || \
   fail 'Robinhood stopped reading as an expected run'
 
-printf 'case: the Phase 3/4 rollback puts Trading01 back byte for byte\n'
+printf 'case: R3 stops at a failed retire and changes nothing\n'
+snapshot >"$TEST_ROOT/before-r3.snapshot"
 : >"$SYSTEMCTL_LOG"
-"$SETUP" retire --strategy "$POPDEX" >"$WORK/retire-$POPDEX.out"
-while read -r strategy _ _; do
-  systemctl disable --now "skyeye-trading-probe@$strategy.timer"
-  systemctl stop "skyeye-trading-probe@$strategy.service"
-done <"$WORK/timers.before"
-# Newest record first. In test mode the recorded paths sit below the test root.
-tail -r "$WORK/records.list" 2>/dev/null >"$WORK/records.reverse" ||
-  tac "$WORK/records.list" >"$WORK/records.reverse"
-while IFS= read -r record; do
-  [[ -d "$record" ]] || fail "missing rollback record: $record"
-  while IFS= read -r path; do
-    [[ -n "$path" ]] && rm -f -- "$path"
-  done <"$record/absent.list"
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
-    rm -f -- "$path"
-    cp -a "$record/previous/${path#"$ROOT_P"/}" "$path"
-  done <"$record/present.list"
-done <"$WORK/records.reverse"
-systemctl daemon-reload
-"$REAL_ALLOY" validate "$ALLOY_DIR" >/dev/null
-systemctl reload alloy
-while read -r strategy enabled active; do
-  [[ "$enabled $active" == "enabled active" ]] && systemctl enable --now "skyeye-trading-probe@$strategy.timer"
-done <"$WORK/timers.before"
+export FAKE_ALLOY_VALIDATE_FAILS=1
+if r3_rollback >"$WORK/r3-retire-fails.log" 2>&1; then
+  fail 'R3 went on after retire failed'
+fi
+unset FAKE_ALLOY_VALIDATE_FAILS
+rg -q '^STOP: retire popdex-btc exited [1-9]' "$WORK/r3-retire-fails.log" || {
+  cat "$WORK/r3-retire-fails.log" >&2
+  fail 'R3 did not stop on the failed retire'
+}
+assert_no_mutation 'R3 after a failed retire'
+snapshot | cmp -s - "$TEST_ROOT/before-r3.snapshot" || fail 'R3 changed a file after retire failed'
+[[ -f "$INSTANCES/$POPDEX.env" ]] || fail 'R3 removed the PopDEX env although retire failed'
+for strategy in "$ROBINHOOD" "$MAINNET" "$POPDEX"; do
+  timer_is "$strategy" "enabled active"
+done
+
+printf 'case: R3 stops when a probe cannot be disabled and restores no shared file\n'
+shared_snapshot >"$TEST_ROOT/shared-before-r3.snapshot"
+: >"$SYSTEMCTL_LOG"
+export FAKE_SYSTEMCTL_FAIL_DISABLE="skyeye-trading-probe@$ROBINHOOD.timer"
+if r3_rollback >"$WORK/r3-disable-fails.log" 2>&1; then
+  fail 'R3 restored files while a probe timer could not be disabled'
+fi
+unset FAKE_SYSTEMCTL_FAIL_DISABLE
+rg -q '^Retired Linux trading monitoring instance: popdex-btc$' "$WORK/r3-disable-fails.log" || \
+  fail 'R3 did not retire popdex-btc first'
+rg -q "^still enabled or active: skyeye-trading-probe@$ROBINHOOD\$" "$WORK/r3-disable-fails.log" || \
+  fail 'R3 did not name the probe it could not stop'
+rg -q '^STOP: a templated probe is still enabled or active' "$WORK/r3-disable-fails.log" || \
+  fail 'R3 did not stop before the restore'
+if rg -q '^(restored |PROBES-STOPPED|ALLOY-RELOADED)' "$WORK/r3-disable-fails.log"; then
+  fail 'R3 went on to the restore while a probe was enabled'
+fi
+shared_snapshot | cmp -s - "$TEST_ROOT/shared-before-r3.snapshot" || \
+  fail 'R3 changed a shared file while a probe was still enabled'
+cmp -s "$TRADING_DIR/probe.sh" "$LIVE_PROBE" || fail 'R3 swapped the shared probe while a probe was enabled'
+timer_is "$ROBINHOOD" "enabled active"
+timer_is "$POPDEX" "disabled inactive"
+
+printf 'case: R3 run again puts Trading01 back byte for byte\n'
+: >"$SYSTEMCTL_LOG"
+r3_rollback >"$WORK/r3.log" 2>&1 || {
+  cat "$WORK/r3.log" >&2
+  fail 'R3 did not finish'
+}
+for marker in PROBES-STOPPED ALLOY-RELOADED TIMERS-ENABLED; do
+  rg -qx "$marker" "$WORK/r3.log" || fail "R3 did not print $marker"
+done
+if rg -q '^Retired ' "$WORK/r3.log"; then fail 'R3 retired popdex-btc a second time'; fi
+[[ "$(rg -c '^restored ' "$WORK/r3.log")" == "$(grep -c . "$WORK/records.list")" ]] || \
+  fail 'R3 did not restore every record'
 snapshot | diff "$TEST_ROOT/before-phase3.snapshot" - >&2 || fail 'the rollback did not restore every file'
 record_timer_states | cmp -s - "$WORK/timers.before" || fail 'the rollback did not restore the timer states'
 timer_is "$POPDEX" "disabled inactive"
