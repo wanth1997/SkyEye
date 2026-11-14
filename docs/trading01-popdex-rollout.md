@@ -47,6 +47,7 @@ Trading01 上會變動的只有：`alloy` package 與 hold、`/etc/alloy/trading
 - **不加 Alertmanager silence。** 所有 Trading 告警都是 `notification_mode="shadow"`，不會發 Telegram。ZenIncome 告警照常通知，它們是 Alloy 重啟出問題時的真實訊號。
 - 不要印出 `/etc/alloy/config.alloy` 或 `/etc/default/alloy` 全文，前者含 Cloudflare service token。本文件只取 hash 與指定的單行設定。
 - Trading01 的命令都在 `sudo -i` 開的 root bash 內執行；monitoring-prod 的命令以 `ubuntu` 在 `/home/ubuntu/SkyEye` 執行。
+- 工作目錄留在 `/root` 即可，`setup-linux.sh` 會從 `/` 以 probe user 執行 helper。只有 staging 的 installer 早於這項修正時，`add` 之前才要先 `cd /`，否則 probe user 的 `find` 回不到 `/root`，`add` 只印出 `installation failed`。2026-11-14 的 rollout 就是這樣執行的。
 
 **預期會看到的 shadow 告警（不是失敗）：**
 
