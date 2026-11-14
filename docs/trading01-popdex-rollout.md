@@ -2,7 +2,11 @@
 
 > **來源：** 2026-11-14 Wan 透過 tnauqquant manager 提出：「幫我把 Lighter Robinhood 在 Grafana 上面也新增，就是 Popdex 這個交易所」，並要求「正規地去做升級」。SkyEye task `SKYEYE-POPDEX-20261114`，manager PLAN_APPROVED（D1 `TQ_STRATEGY_DISABLED`、D2 Alloy 1.16.3、D3 `upgrade-linux.sh`、D5 先 host 後中央）。
 >
-> **本文件是 operator 程序，repo 變更 merge 後不會自動生效。** Phase 2–4 已由 `tests/trading/test-trading01-popdex-rollout.sh` 在假的 Trading01 上演練（含 Phase 3/4 rollback 逐 byte 還原），`upgrade-linux.sh` 由 `tests/alloy/test-upgrade-linux.sh` 覆蓋。
+> **本文件是 operator 程序，repo 變更 merge 後不會自動生效。** 測試覆蓋：
+>
+> - `tests/trading/test-trading01-popdex-rollout.sh` 在假的 Trading01 上演練 Phase 2–4。它直接執行本文件兩份 `helpers.sh` 的原文：R3（含 retire 失敗、timer 無法 disable 時不動共用檔案，以及重跑後逐 byte 還原），以及 Phase 3／6 的 `log_evidence`／`loki_accept`（含完全沒有 stream 時不會通過）。
+> - `tests/trading/test-central-deploy.sh` 演練 R5 的兩個 `git restore` 與之後的部署。
+> - `tests/alloy/test-upgrade-linux.sh` 覆蓋 `upgrade-linux.sh`，包括 R2-CRITICAL 讀取的 record 路徑。
 >
 > **狀態：** 尚未執行。
 
