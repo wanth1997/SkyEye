@@ -19,17 +19,17 @@
 
 - `amtool check-config` 通過，Alertmanager 正常 reload 與啟動，不會 crash loop。
 - `SkyEyeWatchdog` 在 Prometheus 裡 firing，Overview 看不到它（`severity="None"`）。
-- 每分鐘一行 Alertmanager error log：`deadman-external/webhook[0]: notify retry canceled due to unrecoverable error after 1 attempts: read url_file: open /etc/alertmanager/secrets/deadman_url: no such file or directory`。不重試，沒有任何流量離開主機。
-- `alertmanager_notifications_failed_total{integration="webhook"}` 每分鐘 +1。`AlertmanagerNotifyFailures` 不看 webhook，所以不會送 Telegram。
+- 每分鐘一行 Alertmanager error log（v0.28.0 起是 slog 格式）：`level=ERROR source=dispatch.go:… msg="Notify for alerts failed" … err="deadman-external/webhook[0]: notify retry canceled due to unrecoverable error after 1 attempts: read url_file: open /etc/alertmanager/secrets/deadman_url: no such file or directory"`。不重試，沒有任何流量離開主機。
+- `alertmanager_notifications_failed_total{integration="webhook",reason="other"}` 每分鐘 +1。`AlertmanagerNotifyFailures` 不看 webhook，所以不會送 Telegram。
 - 其他 route 與 Telegram 完全不受影響。
 
-`tests/stack/test-deadman-switch.sh` 會用真的 Alertmanager 驗證這個狀態，以及放入 secret 之後、端點回 200 時的行為。
+`tests/stack/test-deadman-switch.sh` 會用真的 Alertmanager 驗證這個狀態、放入 secret 之後端點回 200 的行為，以及端點依序回 404、503、200 時 Alertmanager 不會掛、失敗有計數、BackendDown 照常送到 `telegram-high`。
 
-**目前釘的 Alertmanager v0.27.0 不能放 secret。** 在 v0.27.0 上，`url_file` webhook 只要收到 ping 端點的非 2xx 回應（例如 check 被刪的 404、服務端的 503），Alertmanager 就會 nil pointer panic 並退出，Telegram 與 email 跟著全停。上游在 v0.28.0 修掉（[prometheus/alertmanager#3800](https://github.com/prometheus/alertmanager/pull/3800)）。沒有 secret 時根本不發 HTTP 請求，所以上面的狀態在 v0.27.0 上是安全的。升級是另一個任務，見第 2 步。
+**Alertmanager v0.27.0 不能放 secret。** 這條 dead man's switch 部署時（2026-11-14）repo 釘的是 v0.27.0。在 v0.27.0 上，`url_file` webhook 只要收到 ping 端點的非 2xx 回應（例如 check 被刪的 404、服務端的 503），Alertmanager 就會 nil pointer panic 並退出，Telegram 與 email 跟著全停。上游在 v0.28.0 修掉（[prometheus/alertmanager#3800](https://github.com/prometheus/alertmanager/pull/3800)）。沒有 secret 時根本不發 HTTP 請求，所以上面的狀態在 v0.27.0 上是安全的。Repo 現在釘 v0.34.2，但 production 要照 [`alertmanager-upgrade.md`](./alertmanager-upgrade.md) 手動升級才會換版，見第 2 步；第 4 步的版本檢查看的是執行中的 container，不是 repo。
 
 ## 一次性設定（依序）
 
-順序：central-deploy 部署 → Alertmanager 升級（後續任務）上線 → Wan 建立託管 check → 放 `deadman_url` → 確認 ping → 停止測試。
+順序：central-deploy 部署 → Alertmanager 升級上線（[`alertmanager-upgrade.md`](./alertmanager-upgrade.md)）→ Wan 建立託管 check → 放 `deadman_url` → 確認 ping → 停止測試。
 
 ### 1. 部署
 
@@ -52,7 +52,7 @@ central-deploy 先 reload Prometheus，再 reload Alertmanager。如果 Alertman
 
 ### 2. 等 Alertmanager 升級上線
 
-Alertmanager 升到 v0.28.0 以上是另一個任務。它要改 `docker-compose.yml` 的 image tag，central-deploy 會拒絕，所以要照該任務的 runbook 手動 pull、`up -d` 再 `--manual-applied`。這一步完成前，不要做第 4 步。
+照 [`alertmanager-upgrade.md`](./alertmanager-upgrade.md) 把 production 升到 repo 釘的 v0.34.2。Image tag 的改動 central-deploy 會拒絕，所以那份 runbook 是手動 pre-pull、`git merge --ff-only`、`up -d` 再 `--manual-applied`。升級後第 4 步的版本檢查印 `OK`；印 `STOP` 就是還沒升級，不要做第 4 步。
 
 ### 3. 建立託管 check
 
@@ -107,7 +107,25 @@ grep -c '^https://' deadman_url   # 預期 1
 - `sudo docker compose logs --since 2m alertmanager | grep -c 'read url_file'` 是 `0`。
 - `curl -fsS http://127.0.0.1:9093/metrics | grep 'notifications_failed_total{integration="webhook"'` 的數字不再增加。
 
-Ping 一直失敗、log 是 `unexpected status code` 之類的錯誤，代表網址錯了或 check 不存在，回第 4 步重放。各種非 2xx 在升級後的版本怎麼計數（`reason` 的值），以 Alertmanager 升級任務的說明為準。
+Ping 一直失敗、log 是 `unexpected status code` 之類的錯誤，代表網址錯了或 check 不存在，回第 4 步重放。v0.34.2 的失敗分類（`alertmanager_notifications_failed_total{integration="webhook"}` 的 `reason`，2026-11-14 離線實測）：
+
+| 端點回應 | `reason` | Alertmanager 行為與 log |
+|---|---|---|
+| 401、403 | `authError` | 不重試。每次 flush 一行 `level=ERROR … after 1 attempts: unexpected status code 401: <回應內容>` |
+| 404（網址錯、check 被刪） | `clientError` | 同上，`unexpected status code 404` |
+| 429 | `rateLimited` | 同上，不重試，下一次 flush（1 分鐘後）再送 |
+| 500、503 | `serverError` | 同一次 flush 內一直重試到逾時（離線測試用 5s group_interval，10 秒內 7 次）。相同的重試錯誤只記一次：第一次失敗、或錯誤內容改變時才有一行 `level=WARN msg="Notify attempt failed, will retry later"`，所以 WARN 沒再出現不代表停止重試。Flush 結束時一行 `level=ERROR … notify retry canceled after N attempts`，N 是這次 flush 的總嘗試次數 |
+| `deadman_url` 不存在 | `other` | 不重試，`read url_file: … no such file or directory` |
+| 逾時 | `contextDeadlineExceeded` | 這一列沒有實測，只確認 `/metrics` 有這個 label |
+
+連線、DNS、TLS 這類傳輸錯誤，log 裡的網址會被遮掉（`RedactURL`）。但非 2xx 回應的 body 會原封不動寫進 log，不會過濾網址；端點如果在回應裡帶出 ping URL，log 裡就會有它。**要分享 Alertmanager log 之前，先確認裡面沒有 ping URL**（只印筆數，不印網址）：
+
+```bash
+cd /home/ubuntu/SkyEye
+sudo docker compose logs alertmanager | grep -cF -f alertmanager/secrets/deadman_url   # 預期 0
+```
+
+以上任何一種 Alertmanager 都照常運作，其他 route 不受影響。`AlertmanagerNotifyFailures` 依 `integration` 加總，且排除 webhook，所以不會因此送 Telegram。
 
 ### 6. 一次性 20 分鐘 Alertmanager 停止測試
 

@@ -48,7 +48,7 @@ docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint /bin/promto
 docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint sh \
   prom/prometheus:v2.54.1 -c 'promtool test rules /etc/prometheus/rules/tests/*.yml'
 docker run --rm -v "$PWD/alertmanager:/etc/alertmanager:ro" --tmpfs /etc/alertmanager/secrets \
-  --entrypoint /bin/amtool prom/alertmanager:v0.27.0 \
+  --entrypoint /bin/amtool prom/alertmanager:v0.34.2 \
   check-config /etc/alertmanager/alertmanager.yml
 find grafana/dashboards -name '*.json' -exec jq empty {} +
 ```
