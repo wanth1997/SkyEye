@@ -20,8 +20,10 @@ groups:
           summary: "{{ $labels.product }} scheduler job '{{ $labels.exported_job }}' silent for > 1hr"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/scheduler-dead.md"
 
-      # Prometheus itself went stale — backup for UptimeRobot external check.
-      # prometheus_tsdb_head_max_time is in milliseconds since epoch.
+      # Prometheus itself went stale. This only reaches anyone while
+      # Alertmanager and the network still work; SkyEyeWatchdog below covers
+      # the case where they do not. prometheus_tsdb_head_max_time is in
+      # milliseconds since epoch.
       - alert: PrometheusSelfStale
         expr: time() - (prometheus_tsdb_head_max_time / 1000) > 300
         for: 1m
@@ -30,10 +32,30 @@ groups:
         annotations:
           summary: "Prometheus TSDB head has not advanced in 5min — ingestion stopped"
 
-      # Always-firing heartbeat — proves the entire alert pipeline (rules →
-      # alertmanager → Telegram) is alive. Routed via Low → telegram-low (silent
-      # push, 24h repeat). If the daily silent message stops arriving in the
-      # Telegram chat, investigate.
+      # Dead man's switch for an external heartbeat service. Alertmanager's
+      # first route sends it to deadman-external, which POSTs to the secret URL
+      # in alertmanager/secrets/deadman_url every 5-6 minutes; the service
+      # alarms Wan by itself when pings stop. Tied to the TSDB head rather than
+      # vector(1): a full disk that stops ingestion also stops the ping even
+      # though rule evaluation and Alertmanager still run. A head that stops
+      # advancing ends it within 2 minutes; a self-scrape that cannot be
+      # written at all goes stale and ends it within 5. Never shadow-routed:
+      # its receiver is the external service, not a person. severity None keeps
+      # it off the High/Medium and Low panels.
+      - alert: SkyEyeWatchdog
+        expr: time() - (prometheus_tsdb_head_max_time / 1000) < 120
+        for: 0s
+        labels:
+          severity: None
+        annotations:
+          summary: "SkyEye rule evaluation, TSDB writes and Alertmanager are alive"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/skyeye-watchdog.md"
+
+      # Always-firing heartbeat — proves the alert pipeline to Telegram
+      # (rules → alertmanager → Telegram) is alive. Routed via Low →
+      # telegram-low (silent push, 24h repeat). If the daily silent message
+      # stops arriving in the Telegram chat, investigate. It no longer has to
+      # catch a dead monitoring-prod: SkyEyeWatchdog does that from outside.
       - alert: DailyHeartbeat
         expr: vector(1)
         for: 0s

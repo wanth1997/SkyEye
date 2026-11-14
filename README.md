@@ -31,8 +31,8 @@ PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
 - `system.yml` — CPU, RAM, disk, OOM, systemd units
 - `app.yml` — BackendDown, 5xx rates, latency p99, unhandled exception surge, payment failure and LinkCourt 401/429 surge shadow alerts
 - `business.yml` — PaymentSuccessRateLow, RefundVolumeHigh, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
-- `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, DailyHeartbeat
-- `stack-health.yml` — SkyEye components, resource pressure, rule evaluation health
+- `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, SkyEyeWatchdog (external dead man's switch), DailyHeartbeat
+- `stack-health.yml` — SkyEye components, remote ingest path (AllRemoteAgentsSilent), resource pressure, rule evaluation health
 - `trading-targets.yml` / `trading.yml` — production Trading target inventory (edit with `scripts/trading-target add|remove`) and shadow alerts
 
 Severity → routing:
@@ -116,7 +116,7 @@ SkyEye/
 
 See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest version:
 
-- **Morning habit**: check the Telegram group for the silent `DailyHeartbeat`. If it arrived, the alert pipeline is alive.
+- **Morning habit**: check the Telegram group for the silent `DailyHeartbeat`. If it arrived, the alert pipeline is alive. A dead monitoring-prod is reported by the external `SkyEyeWatchdog` heartbeat service, not by Telegram ([runbook](./runbooks/skyeye-watchdog.md)).
 - **When paged (Telegram 🚨)**: click the Runbook link in the message.
 - **Dashboards**: https://grafana.wanbrain.com → Overview folder (daily), PPClub folder (deep dive), Hosts folder (troubleshoot).
 
