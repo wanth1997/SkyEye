@@ -9,16 +9,17 @@ groups:
       - alert: AlertmanagerDown
         # If AM is down, we CAN'T use AM to deliver this alert. This rule
         # still records the firing state in Prometheus and shows in the
-        # SkyEye — Stack health dashboard. The actual "you can't get
-        # alerts" signal comes from external monitoring (UptimeRobot,
-        # etc). Keep this rule anyway — it's diagnostically useful after
-        # the fact and causes the DailyHeartbeat Telegram message to stop.
+        # SkyEye — Stack health dashboard. The "you can't get alerts" signal
+        # comes from outside: AM down stops the SkyEyeWatchdog pings, and the
+        # external heartbeat service alarms (runbooks/skyeye-watchdog.md).
+        # Keep this rule anyway — it's diagnostically useful after the fact.
         expr: up{job="alertmanager"} == 0
         for: 5m
         labels:
           severity: High
         annotations:
-          summary: "Alertmanager is DOWN — alerts cannot be delivered. External monitoring (UptimeRobot) needed to learn of this."
+          summary: "Alertmanager is DOWN — alerts cannot be delivered. The external SkyEyeWatchdog heartbeat reports this, not Telegram."
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/skyeye-watchdog.md"
 
       - alert: LokiDown
         expr: up{job="loki"} == 0
@@ -43,6 +44,25 @@ groups:
           severity: Medium
         annotations:
           summary: "Blackbox exporter down — probe_* metrics will go stale; TLS/reachability signals lost."
+
+      # ────────────────────────────────────────────────────────────
+      # Remote ingest path
+      # ────────────────────────────────────────────────────────────
+
+      - alert: AllRemoteAgentsSilent
+        # A tunnel or Access service-token failure cuts every agent off at
+        # once. One alert names the shared cause instead of leaving it to a
+        # pile of per-host alerts. Remote Alloy agents report
+        # up{job="integrations/unix"}; the central node-exporter is
+        # job="monitoring-host" and does not count.
+        expr: absent(up{job="integrations/unix"} == 1)
+        for: 5m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "No remote agent is delivering metrics — check cloudflared and the Access service token"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/all-remote-agents-silent.md"
 
       # ────────────────────────────────────────────────────────────
       # Prometheus performance / health
@@ -117,9 +137,15 @@ groups:
       # ────────────────────────────────────────────────────────────
 
       - alert: AlertmanagerNotifyFailures
+        # The webhook integration is left out: its only receiver is the
+        # SkyEyeWatchdog dead man's switch. A failing ping is reported by the
+        # external service itself (the pings stop), and until
+        # alertmanager/secrets/deadman_url exists every ping fails by design,
+        # which must not page. Revisit this before adding another webhook
+        # receiver. Alertmanager 0.27 labels these metrics by integration only.
         expr: |
           sum by (integration) (
-            rate(alertmanager_notifications_failed_total[15m])
+            rate(alertmanager_notifications_failed_total{integration!="webhook"}[15m])
           ) > 0
         for: 15m
         labels:

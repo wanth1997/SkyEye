@@ -43,3 +43,62 @@ tests:
             exp_annotations:
               summary: "ppclub scheduler job 'auto_power_courts' silent for > 1hr"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/scheduler-dead.md"
+
+  # prometheus_tsdb_head_max_time is in milliseconds. A head that keeps up with
+  # the clock rises 60000 per minute; a frozen head keeps its last value.
+  - name: the watchdog fires while the TSDB head advances
+    interval: 1m
+    input_series:
+      - series: 'prometheus_tsdb_head_max_time{job="prometheus",instance="localhost:9090"}'
+        values: '0+60000x30'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SkyEyeWatchdog
+        exp_alerts: &watchdog
+          - exp_labels:
+              severity: None
+              job: prometheus
+              instance: localhost:9090
+            exp_annotations:
+              summary: "SkyEye rule evaluation, TSDB writes and Alertmanager are alive"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/skyeye-watchdog.md"
+      - eval_time: 30m
+        alertname: SkyEyeWatchdog
+        exp_alerts: *watchdog
+      - eval_time: 30m
+        alertname: PrometheusSelfStale
+        exp_alerts: []
+
+  - name: the watchdog stops within 2 minutes of the TSDB head freezing
+    interval: 1m
+    input_series:
+      # The head advances to t=10m, then stays there while the clock goes on.
+      - series: 'prometheus_tsdb_head_max_time{job="prometheus",instance="localhost:9090"}'
+        values: '0+60000x10 600000x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SkyEyeWatchdog
+        exp_alerts: *watchdog
+      - eval_time: 11m
+        alertname: SkyEyeWatchdog
+        exp_alerts: *watchdog
+      - eval_time: 12m
+        alertname: SkyEyeWatchdog
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: SkyEyeWatchdog
+        exp_alerts: []
+
+  - name: the watchdog stops when the self-scrape is no longer written
+    interval: 1m
+    input_series:
+      # The series ends at t=10m; after the 5 minute lookback it is gone.
+      - series: 'prometheus_tsdb_head_max_time{job="prometheus",instance="localhost:9090"}'
+        values: '0+60000x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SkyEyeWatchdog
+        exp_alerts: *watchdog
+      - eval_time: 16m
+        alertname: SkyEyeWatchdog
+        exp_alerts: []
