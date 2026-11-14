@@ -30,6 +30,9 @@ LOKI_IMAGE="$(awk '$1 == "image:" && index($2, "grafana/loki:") == 1 { print $2;
   "$REPO_ROOT/docker-compose.yml")"
 PROM_IMAGE="$(awk '$1 == "image:" && index($2, "prom/prometheus:") == 1 { print $2; exit }' \
   "$REPO_ROOT/docker-compose.yml")"
+AM_IMAGE="$(awk '$1 == "image:" && index($2, "prom/alertmanager:") == 1 { print $2; exit }' \
+  "$REPO_ROOT/docker-compose.yml")"
+[[ -n "$AM_IMAGE" ]] || fail "cannot find the pinned Alertmanager image in docker-compose.yml"
 REAL_DOCKER="$(command -v docker)" || fail "the Loki rule cases need a real docker CLI"
 "$REAL_DOCKER" image inspect "$LOKI_IMAGE" >/dev/null 2>&1 || \
   fail "the Loki rule cases need the pinned image: docker pull $LOKI_IMAGE"
@@ -396,6 +399,7 @@ output="$(deploy)"
 printf 'case: the reload state is read from the pinned Prometheus'"'"'s real /metrics\n'
 # One networkless container: a good reload, then a failed one, each followed by
 # its /metrics. The fake curl replays them, so the parser sees the real format.
+# shellcheck disable=SC2016  # the script runs in the container's shell.
 "$REAL_DOCKER" run --rm --pull=never --network none --entrypoint /bin/sh "$PROM_IMAGE" -c '
 printf "global:\n  scrape_interval: 15s\n" >/tmp/p.yml
 /bin/prometheus --config.file=/tmp/p.yml --storage.tsdb.path=/tmp/data --web.enable-lifecycle \
@@ -425,7 +429,7 @@ reset_logs
 printf '\n' >>"$SEED/alertmanager/alertmanager.yml"
 publish 'touch alertmanager'
 deploy >/dev/null
-rg -q 'prom/alertmanager:v0[.]27[.]0 check-config /etc/alertmanager/alertmanager.yml' "$DOCKER_LOG" || \
+rg -qF -- "$AM_IMAGE check-config /etc/alertmanager/alertmanager.yml" "$DOCKER_LOG" || \
   fail "Alertmanager change was not validated with the pinned amtool"
 rg -q -- '-X POST http://127.0.0.1:9093/-/reload' "$CURL_LOG" || fail "Alertmanager was not reloaded"
 
