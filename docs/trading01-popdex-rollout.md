@@ -810,11 +810,12 @@ Mainnet 的 shadow `TradingProcessDown` 會回來。Wan 日後重新啟用 Mainn
 
 ### R5 — 中央 inventory 退回
 
-monitoring-prod：
+**R5-1**，monitoring-prod：只把 `trading-targets.yml` 的 worktree 換回 Phase 1 的版本，讓 Prometheus 不再載入 `popdex-btc` row。
 
 ```bash
 cd /home/ubuntu/SkyEye
-git checkout "$(cat "$CUT/old-head")" -- prometheus/rules/trading-targets.yml
+git restore --source="$(cat "$CUT/old-head")" --worktree -- prometheus/rules/trading-targets.yml
+git status --porcelain --untracked-files=no            # 只有一行： M prometheus/rules/trading-targets.yml
 sudo docker run --rm --entrypoint promtool -v "$PWD/prometheus:/etc/prometheus:ro" \
   prom/prometheus:v2.54.1 check config /etc/prometheus/prometheus.yml \
   && curl -fsS -X POST http://127.0.0.1:9090/-/reload && echo RELOADED
@@ -822,9 +823,32 @@ sleep 70
 targets | diff "$CUT/pre-targets.json" - && echo ROLLBACK-OK
 ```
 
-- 不用 `scripts/central-deploy`：它只能部署 `origin/master` 最新 commit，那仍含 `popdex-btc`。也不用它提示的 `git reset --hard`：checkout 會落後 master，下一次部署會把 row 帶回來。單檔還原後 checkout 是 dirty，`central-deploy` 會拒絕部署，直到下一步完成。
-- 接著由 manager 用 `scripts/trading-target remove --server trading01 --strategy popdex-btc` 開 PR 並 merge，然後在 monitoring-prod 執行 `git checkout -- prometheus/rules/trading-targets.yml && scripts/central-deploy`（同樣避開 UTC 18:30–19:30）。
-- Host 端不必跟著退：沒有 inventory row 時 `popdex-btc` 的 raw series 不會觸發告警。要完全移除時，在 remove PR 部署之後執行 `"$SETUP" retire --strategy popdex-btc`（README 的 Remove 順序：先中央、後 host）。
+- `RELOADED` 與 `ROLLBACK-OK` 都要印出。否則停手，把 `$CUT` 交給 manager。
+- 不用 `scripts/central-deploy`：它只能部署 `origin/master` 最新 commit，那仍含 `popdex-btc`。也不用它提示的 `git reset --hard`：checkout 會落後 master，下一次部署會把 row 帶回來。
+- R5-1 之後 checkout 有一個 tracked 修改（index 沒動），`central-deploy` 會以 `tracked files have local changes` 拒絕。這是預期的：remove PR 部署之前，任何一次 `central-deploy` 都會把 row 帶回來。
+- 接著由 manager 用 `scripts/trading-target remove --server trading01 --strategy popdex-btc` 開 PR 並 merge，提供 merge 後的 master 完整 SHA（下稱 `REMOVE`）。
+
+**R5-2**，monitoring-prod：remove PR merge 之後，不在 UTC 18:30–19:30。先把 `trading-targets.yml` 的 index 與 worktree 都還原成目前 checkout 的 `HEAD`（其他檔案不動），checkout 回到乾淨狀態，再照常部署：
+
+```bash
+cd /home/ubuntu/SkyEye
+REMOVE=<manager 提供的完整 SHA>
+git restore --source=HEAD --staged --worktree -- prometheus/rules/trading-targets.yml
+git status --porcelain --untracked-files=no | wc -l    # 0
+scripts/central-deploy --dry-run --expect "$REMOVE" 2>&1 | tee "$CUT/r5-dry-run.log"
+```
+
+dry run 的最後一行必須是 `Dry run: validation passed; …`。通過後：
+
+```bash
+scripts/central-deploy --expect "$REMOVE" 2>&1 | tee "$CUT/r5-deploy.log"; echo "rc=${PIPESTATUS[0]}"
+sleep 70
+targets | tee "$CUT/r5-targets.json" | jq -e 'map(select(.strategy == "popdex-btc")) | length == 0'   # true
+```
+
+`rc=0` 且最後一行是 `central-deploy: done; applied <REMOVE 前 12 碼>`，`jq` 印出 `true`，R5 才算完成。dry run 或部署被拒絕時，依 Phase 5 的同類情況處理（`--expect` 不符時請 manager 提供新的 `REMOVE`）。`tests/trading/test-central-deploy.sh` 用一個本機 fixture 跑過 R5-1 與 R5-2 的 `git restore`，以及之後的 dry run 與部署。
+
+Host 端不必跟著退：沒有 inventory row 時，`popdex-btc` 的 raw series 不會觸發告警。要完全移除時，在 R5-2 完成之後執行 `"$SETUP" retire --strategy popdex-btc`（README 的 Remove 順序：先中央、後 host）。
 
 ## 執行紀錄
 
