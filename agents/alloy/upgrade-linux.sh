@@ -19,10 +19,17 @@
 # if it was running (unless the package scripts already did), then require one
 # main process for 5 s, /-/ready within 60 s and the new version, and hold the
 # package. Any failure reinstalls the previous package, restores those files and
-# the hold, and brings Alloy back as it was.
+# the hold, and brings Alloy back as it was; when the files had to be restored,
+# Alloy is restarted after that, so it runs on the restored files.
 #
 # --rollback RECORD_DIR moves back to the package that RECORD_DIR replaced, with
-# the same checks and the same automatic rollback.
+# the same checks and the same automatic rollback. It leaves RECORD_DIR as it is
+# and writes a record of its own (mode=rollback, rollback_of=RECORD_DIR).
+#
+# Every run that changes the host has one record under RECORD_ROOT: upgrade.meta
+# (mode, from/to package, hold and service state, status), debs/ with both
+# packages, and while the run is open conffiles/, a copy of /etc/default/alloy
+# and /etc/alloy taken before the change. A CRITICAL exit names that record.
 #
 # Exit codes: 0 done, or nothing to do; 1 refused with nothing changed, or failed
 # and rolled back; 2 usage; 3 CRITICAL: the rollback did not finish.
@@ -218,6 +225,7 @@ WORK_IS_RECORD=0
 RECORD=""
 MUTATED=0
 PACKAGE_TOUCHED=0
+CONFIG_RESTORED=0
 COMMITTED=0
 ROLLING_BACK=0
 FAIL_REASON=""
@@ -291,36 +299,27 @@ fi
 
 # ─────────────────────────────── Change ─────────────────────────────────────
 
-if [[ "$MODE" == "to" ]]; then
-  install -d -m 700 "$RECORD_ROOT"
-  RECORD="$RECORD_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  mv "$WORK" "$RECORD"
-  WORK="$RECORD"
-  WORK_IS_RECORD=1
-  chmod 700 "$WORK"
-  TO_FILE="$WORK/debs/${TO_FILE##*/}"
-  FROM_FILE="$WORK/debs/${FROM_FILE##*/}"
-  {
-    printf 'status=started\n'
-    printf 'from_version=%s\nfrom_deb=%s\nto_version=%s\nto_deb=%s\n' \
-      "$FROM_VERSION" "$FROM_DEB" "$TO_VERSION" "$TO_DEB"
-    printf 'was_held=%s\nwas_active=%s\nwas_enabled=%s\nmain_pid=%s\n' \
-      "$WAS_HELD" "$WAS_ACTIVE" "$WAS_ENABLED" "$(main_pid)"
-    printf 'config_file=%s\nready_url=%s\nstarted_at_utc=%s\n' \
-      "$CONFIG_PATH" "$READY_URL" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  } >"$WORK/upgrade.meta"
-  META="$WORK/upgrade.meta"
-else
-  RECORD="$ROLLBACK_RECORD"
-  # The rollback leaves the original record and its packages in place.
-  WORK_IS_RECORD=0
-  META="$RECORD/rollback.meta"
-  {
-    printf 'status=started\n'
-    printf 'from_deb=%s\nto_deb=%s\nwas_held=%s\nwas_active=%s\nstarted_at_utc=%s\n' \
-      "$FROM_DEB" "$TO_DEB" "$WAS_HELD" "$WAS_ACTIVE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  } >"$META"
-fi
+# This run's own record, for --rollback too: a --rollback keeps RECORD_DIR as it
+# is, so its packages and metadata stay what that upgrade left.
+install -d -m 700 "$RECORD_ROOT"
+RECORD="$RECORD_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mv "$WORK" "$RECORD"
+WORK="$RECORD"
+WORK_IS_RECORD=1
+chmod 700 "$WORK"
+TO_FILE="$WORK/debs/${TO_FILE##*/}"
+FROM_FILE="$WORK/debs/${FROM_FILE##*/}"
+META="$WORK/upgrade.meta"
+{
+  printf 'status=started\nmode=%s\n' "$MODE"
+  [[ "$MODE" != "rollback" ]] || printf 'rollback_of=%s\n' "$ROLLBACK_RECORD"
+  printf 'from_version=%s\nfrom_deb=%s\nto_version=%s\nto_deb=%s\n' \
+    "$FROM_VERSION" "$FROM_DEB" "$TO_VERSION" "$TO_DEB"
+  printf 'was_held=%s\nwas_active=%s\nwas_enabled=%s\nmain_pid=%s\n' \
+    "$WAS_HELD" "$WAS_ACTIVE" "$WAS_ENABLED" "$(main_pid)"
+  printf 'config_file=%s\nready_url=%s\nstarted_at_utc=%s\n' \
+    "$CONFIG_PATH" "$READY_URL" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} >"$META"
 CONFFILES="$WORK/conffiles"
 install -d -m 700 "$CONFFILES"
 cp -a "$ALLOY_DEFAULTS" "$CONFFILES/default-alloy"
@@ -351,11 +350,16 @@ alloy_ready() {
 
 # Brings the service back to how this run found it, on the package now
 # installed, and checks that package. PID_BEFORE is MainPID before dpkg ran.
+# FORCE_RESTART=1 restarts Alloy even when the package scripts already did: they
+# ran before the config files were restored, so that process loaded other files.
 service_as_found() {
-  local version="$1" deb="$2" pid_before="$3" pid_now
+  local version="$1" deb="$2" pid_before="$3" force_restart="${4:-0}" pid_now
   if [[ "$WAS_ACTIVE" -eq 1 ]]; then
     pid_now="$(main_pid)"
-    if systemctl is-active --quiet alloy && [[ "$pid_now" != "0" && "$pid_now" != "$pid_before" ]]; then
+    if [[ "$force_restart" -eq 1 ]]; then
+      say "Restarting Alloy so it runs on the restored config files; every Alloy pipeline pauses until it is ready"
+      systemctl restart alloy || return 1
+    elif systemctl is-active --quiet alloy && [[ "$pid_now" != "0" && "$pid_now" != "$pid_before" ]]; then
       say "The package scripts already restarted Alloy (MainPID $pid_before -> $pid_now); not restarting it again"
     else
       say "Restarting Alloy; every Alloy pipeline pauses until it is ready"
@@ -369,8 +373,11 @@ service_as_found() {
   [[ "$(installed_deb)" == "$deb" && "$(binary_version alloy)" == "$version" ]]
 }
 
+# Puts back the files copied before the change. CONFIG_RESTORED=1 records that
+# the files on disk changed under a running Alloy, so it has to be restarted.
 restore_config_files() {
   [[ "$(config_hashes)" != "$(cat "$WORK/config.sha256")" ]] || return 0
+  CONFIG_RESTORED=1
   say "Restoring $ALLOY_DEFAULTS and $ALLOY_ETC; the files the failed run left are in $WORK/after-failure" >&2
   install -d -m 700 "$WORK/after-failure"
   mv "$ALLOY_DEFAULTS" "$WORK/after-failure/default-alloy" 2>/dev/null || true
@@ -396,7 +403,7 @@ rollback() {
   else
     apt-mark unhold alloy >/dev/null || problems+=("apt-mark unhold alloy failed")
   fi
-  service_as_found "$FROM_VERSION" "$FROM_DEB" "$pid_before" || \
+  service_as_found "$FROM_VERSION" "$FROM_DEB" "$pid_before" "$CONFIG_RESTORED" || \
     problems+=("Alloy is not back as found: expected alloy $FROM_DEB, active=$WAS_ACTIVE, ready at $READY_URL")
   if [[ "${#problems[@]}" -eq 0 ]]; then
     printf 'status=rolled_back\nreason=%s\n' "$FAIL_REASON" >>"$META"
@@ -407,8 +414,9 @@ rollback() {
   fi
   printf 'status=rollback_incomplete\nreason=%s\n' "$FAIL_REASON" >>"$META"
   printf 'CRITICAL: rollback_incomplete: %s\n' "${problems[@]}" >&2
-  printf 'CRITICAL: the config files from before this run are in %s; the packages are in %s/debs.\n' \
-    "$CONFFILES" "$WORK" >&2
+  printf 'CRITICAL: record: %s\n' "$RECORD" >&2
+  printf 'CRITICAL: %s/upgrade.meta names the packages and the hold and service state this run found; the config files from before this run are in %s; the packages are in %s/debs.\n' \
+    "$RECORD" "$CONFFILES" "$RECORD" >&2
   printf 'CRITICAL: check: dpkg-query -W alloy; alloy --version; systemctl status alloy; curl -fsS %s; journalctl -u alloy -n 50\n' \
     "$READY_URL" >&2
   return 1
@@ -446,4 +454,5 @@ if [[ "$MODE" == "to" ]]; then
   say "Roll back with: sudo $SCRIPT_DIR/upgrade-linux.sh --rollback $RECORD"
 else
   say "Done: alloy $TO_DEB is installed again (held=$FINAL_HOLD); Alloy is as it was (active=$WAS_ACTIVE)."
+  say "Record: $RECORD"
 fi

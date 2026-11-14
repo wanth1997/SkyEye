@@ -80,7 +80,9 @@ shim() {
   {
     printf '#!/bin/bash\nctl="$BOX/ctl"; calls="$BOX/log/calls.log"\n'
     printf 'installed_deb() { cat "$ctl/deb" 2>/dev/null; }\n'
-    printf 'bump_pid() { echo $(($(cat "$ctl/pid") + 1)) >"$ctl/pid"; }\n'
+    # A new Alloy process reads the config files on disk at that moment.
+    printf 'load_config() { cat "$BOX/etc/default/alloy" "$BOX"/etc/alloy/* 2>/dev/null | "$REAL_SHASUM" -a 256 | cut -c1-64 >"$ctl/loaded"; }\n'
+    printf 'bump_pid() { echo $(($(cat "$ctl/pid") + 1)) >"$ctl/pid"; load_config; }\n'
     cat
   } >"$BOX/bin/$1"
   chmod 755 "$BOX/bin/$1"
@@ -258,6 +260,30 @@ new_box() {
     }
   done
   etc_snapshot >"$BOX/etc.snapshot"
+  mark_loaded
+}
+
+# What the running Alloy loaded, in the shims' terms: a digest of the config
+# files when its process started.
+config_digest() {
+  cat "$BOX/etc/default/alloy" "$BOX"/etc/alloy/* 2>/dev/null | "$REAL_SHASUM" -a 256 | cut -c1-64
+}
+mark_loaded() {
+  config_digest >"$BOX/ctl/loaded"
+}
+
+# A box that holds the committed upgrade from the 'upgrade' case. The copy keeps
+# the upgraded state, but its paths still name the first box.
+copy_upgraded_box() {
+  new_box "$1"
+  cp -a "$UPGRADE_BOX/." "$BOX/"
+  sed -i.bak "s#$UPGRADE_BOX#$BOX#g" "$BOX/etc/default/alloy" "$BOX/agents/upgrade-linux.sh" &&
+    rm -f "$BOX"/etc/default/alloy.bak "$BOX"/agents/upgrade-linux.sh.bak
+  RECORD="$BOX/${UPGRADE_RECORD#"$UPGRADE_BOX"/}"
+  etc_snapshot >"$BOX/etc.snapshot"
+  mark_loaded
+  : >"$BOX/log/calls.log"
+  record_snapshot "$RECORD" >"$BOX/record.snapshot"
 }
 
 run_upgrade() {
@@ -306,6 +332,36 @@ record_has_both_debs() {
   [[ -f "$RECORD/debs/alloy_${TARGET_DEB}_amd64.deb" && -f "$RECORD/debs/alloy_${FROM_DEB}_amd64.deb" ]]
 }
 no_conffile_copy() { [[ ! -e "$RECORD/conffiles" ]]; }
+loaded_is_disk() { [[ "$(cat "$BOX/ctl/loaded")" == "$(config_digest)" ]]; }
+record_snapshot() {
+  find "$1" -type f | LC_ALL=C sort | while IFS= read -r path; do
+    printf '%s %s\n' "$path" "$("$REAL_SHASUM" -a 256 <"$path" | cut -c1-64)"
+  done
+}
+record_unchanged() { record_snapshot "$RECORD" | cmp -s - "$BOX/record.snapshot"; }
+# meta_in RECORD_DIR KEY VALUE: the last KEY= line of its upgrade.meta is VALUE.
+meta_in() { [[ -f "$1/upgrade.meta" && "$(sed -n "s/^$2=//p" "$1/upgrade.meta" | tail -n 1)" == "$3" ]]; }
+# Sets RUN_RECORD to the record a --rollback of RECORD wrote.
+find_rollback_record() {
+  local candidate
+  RUN_RECORD=""
+  for candidate in "$BOX"/var/lib/skyeye-alloy/upgrade/*; do
+    if [[ "$candidate" != "$RECORD" ]] && meta_in "$candidate" rollback_of "$RECORD"; then
+      [[ -z "$RUN_RECORD" ]] || return 1
+      RUN_RECORD="$candidate"
+    fi
+  done
+  [[ -n "$RUN_RECORD" ]]
+}
+critical_record() { sed -n 's/^CRITICAL: record: //p' "$BOX/log/out" | tail -n 1; }
+# The files R2-CRITICAL in docs/trading01-popdex-rollout.md reads from the
+# record a CRITICAL exit names: upgrade.meta, the pre-rollout package, conffiles.
+critical_paths_exist() {
+  local record="$1"
+  [[ -n "$record" && -f "$record/upgrade.meta" && -f "$record/debs/alloy_${FROM_DEB}_amd64.deb" &&
+    -f "$record/conffiles/default-alloy" && -f "$record/conffiles/etc-alloy/config.alloy" ]] &&
+    cmp -s "$record/conffiles/default-alloy" "$BOX/etc/default/alloy"
+}
 
 assert_refused() {
   check 'exit code 1' rc_is 1
@@ -438,6 +494,8 @@ check 'record committed' meta_status_is upgrade.meta committed
 check 'record keeps both packages' record_has_both_debs
 check 'config copies deleted' no_conffile_copy
 check 'prints the rollback command' said "--rollback $RECORD"
+check 'record says mode=to' meta_in "$RECORD" mode to
+check 'Alloy runs on the files on disk' loaded_is_disk
 check 'no scratch directory left' no_scratch
 UPGRADE_BOX="$BOX"
 UPGRADE_RECORD="$RECORD"
@@ -480,6 +538,7 @@ assert_rolled_back() {
   check 'one record' only_record
   check 'record says rolled back' meta_status_is upgrade.meta rolled_back
   check 'config copies deleted' no_conffile_copy
+  check 'the running Alloy loaded the files on disk' loaded_is_disk
 }
 
 new_box restart-fails-rolls-back
@@ -505,6 +564,17 @@ assert_rolled_back
 check 'never restarted the new package' count_is "^systemctl restart alloy on $TARGET_DEB\$" 0
 check 'keeps the changed file aside' grep -q 'changed by the package' "$RECORD/after-failure/default-alloy"
 
+# RESTART_ON_UPGRADE=true: the package scripts restart Alloy while the changed
+# files are on disk, for the new package and again for the old one. MainPID has
+# moved, but that process read the changed files, so the restored ones need a
+# restart of their own.
+new_box conffile-change-after-package-restart-rolls-back
+touch "$BOX/ctl/dpkg-changes-conffile-$TARGET_DEB" "$BOX/ctl/postinst-restarts"
+run_upgrade --to "$TARGET"
+assert_rolled_back
+check 'says it restarts for the restored files' said 'Restarting Alloy so it runs on the restored config files'
+check 'one restart, on the old package' count_is "^systemctl restart alloy on $FROM_DEB\$" 1
+
 new_box dpkg-fails-rolls-back
 touch "$BOX/ctl/dpkg-fails-$TARGET_DEB"
 run_upgrade --to "$TARGET"
@@ -519,6 +589,8 @@ check 'reinstalled the old package' deb_is "$FROM_DEB"
 # shellcheck disable=SC2016
 check 'record says incomplete' bash -c '[[ "$(sed -n "s/^status=//p" "$1"/*/upgrade.meta | tail -n 1)" == rollback_incomplete ]]' _ "$BOX/var/lib/skyeye-alloy/upgrade"
 check 'keeps the config copies' test -f "$(echo "$BOX"/var/lib/skyeye-alloy/upgrade/*)/conffiles/default-alloy"
+check 'CRITICAL names the record' [ "$(critical_record)" = "$(echo "$BOX"/var/lib/skyeye-alloy/upgrade/*)" ]
+check 'the record holds what R2-CRITICAL reads' critical_paths_exist "$(critical_record)"
 
 new_box rollback-dpkg-fails-exits-3
 touch "$BOX/ctl/dpkg-fails-$TARGET_DEB" "$BOX/ctl/dpkg-fails-$FROM_DEB"
@@ -528,13 +600,7 @@ check 'names the dpkg failure' said "dpkg could not reinstall alloy $FROM_DEB"
 
 # ─────────────────────────────── --rollback ─────────────────────────────────
 
-new_box rollback-command
-cp -a "$UPGRADE_BOX/." "$BOX/"
-# The copy keeps the upgraded state, but its paths still name the first box.
-sed -i.bak "s#$UPGRADE_BOX#$BOX#g" "$BOX/etc/default/alloy" "$BOX/agents/upgrade-linux.sh" && rm -f "$BOX"/etc/default/alloy.bak "$BOX"/agents/upgrade-linux.sh.bak
-RECORD="$BOX/${UPGRADE_RECORD#"$UPGRADE_BOX"/}"
-etc_snapshot >"$BOX/etc.snapshot"
-: >"$BOX/log/calls.log"
+copy_upgraded_box rollback-command
 run_upgrade --rollback "$RECORD"
 check 'exit code 0' rc_is 0
 check 'old package back' deb_is "$FROM_DEB"
@@ -543,8 +609,15 @@ check 'validated with the old binary' called "^extracted-validate $FROM_DEB "
 check 'one restart, on the old package' count_is "^systemctl restart alloy on $FROM_DEB\$" 1
 check 'hold as before the upgrade' held
 check 'config files unchanged' etc_unchanged
-check 'rollback recorded' meta_status_is rollback.meta committed
-check 'upgrade record kept' meta_status_is upgrade.meta committed
+check 'Alloy runs on the files on disk' loaded_is_disk
+check 'wrote a record of its own' find_rollback_record
+check 'its record says mode=rollback' meta_in "$RUN_RECORD" mode rollback
+check 'its record committed' meta_in "$RUN_RECORD" status committed
+check 'its record names the packages it moved' meta_in "$RUN_RECORD" to_deb "$FROM_DEB"
+check 'its record keeps both packages' test -f "$RUN_RECORD/debs/alloy_${FROM_DEB}_amd64.deb" -a -f "$RUN_RECORD/debs/alloy_${TARGET_DEB}_amd64.deb"
+check 'its config copies deleted' test ! -e "$RUN_RECORD/conffiles"
+check 'prints its record' said "Record: $RUN_RECORD"
+check 'upgrade record unchanged' record_unchanged
 check 'no scratch directory left' no_scratch
 : >"$BOX/log/calls.log"
 run_upgrade --rollback "$RECORD"
@@ -552,12 +625,8 @@ check 'a second rollback is a no-op' rc_is 0
 check 'reports the no-op' said 'nothing to do'
 check 'nothing changed the second time' no_package_change
 
-new_box rollback-refuses-another-version
-cp -a "$UPGRADE_BOX/." "$BOX/"
-sed -i.bak "s#$UPGRADE_BOX#$BOX#g" "$BOX/etc/default/alloy" "$BOX/agents/upgrade-linux.sh" && rm -f "$BOX"/etc/default/alloy.bak "$BOX"/agents/upgrade-linux.sh.bak
-RECORD="$BOX/${UPGRADE_RECORD#"$UPGRADE_BOX"/}"
+copy_upgraded_box rollback-refuses-another-version
 echo "$OTHER_DEB" >"$BOX/ctl/deb"
-: >"$BOX/log/calls.log"
 run_upgrade --rollback "$RECORD"
 check 'exit code 1' rc_is 1
 check 'names the mismatch' said "the installed alloy $OTHER_DEB is not the $TARGET_DEB"
@@ -573,18 +642,35 @@ check 'exit code 1' rc_is 1
 check 'says the record did not commit' said 'did not commit an upgrade'
 check 'no package, hold or service change' no_package_change
 
-new_box rollback-command-fails-returns-to-target
-cp -a "$UPGRADE_BOX/." "$BOX/"
-sed -i.bak "s#$UPGRADE_BOX#$BOX#g" "$BOX/etc/default/alloy" "$BOX/agents/upgrade-linux.sh" && rm -f "$BOX"/etc/default/alloy.bak "$BOX"/agents/upgrade-linux.sh.bak
-RECORD="$BOX/${UPGRADE_RECORD#"$UPGRADE_BOX"/}"
+copy_upgraded_box rollback-command-fails-returns-to-target
 touch "$BOX/ctl/restart-fails-$FROM_DEB"
-: >"$BOX/log/calls.log"
 run_upgrade --rollback "$RECORD"
 check 'exit code 1' rc_is 1
 check 'back on the upgraded package' deb_is "$TARGET_DEB"
 check 'held as found' held
 check 'Alloy active' active
+check 'says it rolled back to the upgraded package' said "rolled back; alloy $TARGET_DEB is installed"
+find_rollback_record || true
+check 'its own record says rolled back' meta_in "$RUN_RECORD" status rolled_back
+check 'upgrade record unchanged' record_unchanged
 check 'no scratch directory left' no_scratch
+
+# Both the downgrade and the move back fail. The CRITICAL output must name a
+# record that holds what R2-CRITICAL reads, and the upgrade record stays as is.
+copy_upgraded_box rollback-command-that-fails-exits-3
+touch "$BOX/ctl/restart-fails-$FROM_DEB" "$BOX/ctl/restart-fails-$TARGET_DEB"
+run_upgrade --rollback "$RECORD"
+check 'exit code 3' rc_is 3
+check 'says CRITICAL' said 'CRITICAL: rollback_incomplete'
+find_rollback_record || true
+check 'CRITICAL names its own record' [ -n "$RUN_RECORD" -a "$(critical_record)" = "$RUN_RECORD" ]
+check 'and points at its upgrade.meta' said "CRITICAL: $RUN_RECORD/upgrade.meta names"
+check 'its record says incomplete' meta_in "$RUN_RECORD" status rollback_incomplete
+check 'its record says mode=rollback' meta_in "$RUN_RECORD" mode rollback
+check 'its record names the package it found' meta_in "$RUN_RECORD" from_deb "$TARGET_DEB"
+check 'its record names the hold it found' meta_in "$RUN_RECORD" was_held 1
+check 'the record holds what R2-CRITICAL reads' critical_paths_exist "$RUN_RECORD"
+check 'upgrade record unchanged' record_unchanged
 
 # ─────────────────────────────── Summary ────────────────────────────────────
 
