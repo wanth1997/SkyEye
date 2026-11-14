@@ -7,10 +7,14 @@ set -euo pipefail
 #   2. amtool routes the loaded labels through the repository's alertmanager.yml:
 #      the watchdog reaches deadman-external whatever other labels it carries,
 #      and AllRemoteAgentsSilent stays in shadow;
-#   3. a real Alertmanager runs the repository config with no deadman_url, the
+#   3. a real Alertmanager starts the repository config exactly as written with
+#      no secrets and with a token file, then runs it with no deadman_url, the
 #      state right after deploy: it stays ready, the ping fails without a retry
 #      loop and the other routes still deliver. Then the secret is written,
-#      without a reload, and the next flush must POST the ping.
+#      without a reload, and the next flush must POST the ping;
+#   4. the ping endpoint answers 404, then 503, then 200: Alertmanager stays up
+#      and ready, counts each failure and still delivers BackendDown. Before
+#      v0.28.0 it panicked and exited on the first non-2xx.
 # Containers have no network. Telegram and mail receivers are replaced by local
 # sinks, deadman-external is kept as written, and no secret reaches a container.
 
@@ -145,6 +149,13 @@ assert "send_resolved: false" in deadman, deadman
 for forbidden in ("telegram_configs", "bot_token", "chat_id", "email_configs", "smarthost", "auth_password"):
     assert forbidden not in rendered, forbidden
 open(f"{out}/sinks.yml", "w", encoding="utf-8").write(rendered)
+
+# The non-2xx cases only shorten the watchdog route's flush, so each status code
+# takes one flush instead of a minute. The receiver stays as written.
+route = "      receiver: deadman-external\n      group_wait: 0s\n      group_interval: 1m\n"
+assert rendered.count(route) == 1, "the deadman-external route changed; update the regression config"
+open(f"{out}/regress.yml", "w", encoding="utf-8").write(
+    rendered.replace(route, route.replace("group_interval: 1m", "group_interval: 5s")))
 PY
 cp "$REPO_ROOT/alertmanager/alertmanager.yml" "$WORK/am/repo.yml"
 
@@ -154,6 +165,16 @@ body="$(head -c "${CONTENT_LENGTH:-0}")"
 printf '%s %s %s %s\n' "$REQUEST_METHOD" "${PATH_INFO#/}" "${CONTENT_TYPE:--}" "$body" >>/tmp/sink.log
 printf 'Status: 200 OK\r\nContent-Type: text/plain\r\n\r\nok\n'
 SINK
+
+# A ping endpoint that answers with the status code in /tmp/status, like a
+# deleted check (404) or a heartbeat service in trouble (503).
+cat >"$WORK/am/status.cgi" <<'STATUS'
+#!/bin/sh
+body="$(head -c "${CONTENT_LENGTH:-0}")"
+code="$(cat /tmp/status)"
+printf '%s %s %s %s\n' "$code" "$REQUEST_METHOD" "${CONTENT_TYPE:--}" "$body" >>/tmp/status.log
+printf 'Status: %s Fixture\r\nContent-Type: text/plain\r\n\r\nfixture\n' "$code"
+STATUS
 
 # ── 3. Routes, then the no-secret state, then the secret appearing ──────────
 cat >"$WORK/am/run.sh" <<'RUN'
@@ -170,25 +191,56 @@ rm -rf "$SECRETS" && mkdir -p "$SECRETS"
 cp /tmp/w/repo.yml /etc/alertmanager/repo.yml
 amtool check-config /etc/alertmanager/repo.yml >/tmp/check.log 2>&1 || \
   echo "not ok  amtool check-config rejects the repository config without secrets: $(tail -n 3 /tmp/check.log)"
+
+start_am() { # start_am CONFIG STORAGE LOG; sets AM_PID
+  alertmanager --config.file="$1" --storage.path="$2" \
+    --web.listen-address=127.0.0.1:9093 --cluster.listen-address= >"$3" 2>&1 &
+  AM_PID=$!
+}
+ready() { # ready SECONDS
+  deadline=$(($(date +%s) + $1))
+  until wget -qO /dev/null "$URL/-/ready" 2>/dev/null; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 1
+  done
+}
+stop_am() {
+  kill "$AM_PID" 2>/dev/null
+  wait "$AM_PID" 2>/dev/null
+  return 0
+}
+
+# A full start of the config exactly as written, which check-config does not
+# cover: email-high with its placeholder smarthost and no smtp_password, a
+# templates glob that matches nothing, and then a token file in place.
+for state in 'no secrets' 'a tg_token'; do
+  start_am /etc/alertmanager/repo.yml /tmp/am-start /tmp/start.log
+  if ! ready 20; then
+    echo "not ok  the repository config does not start with $state: $(grep -i 'level=error' /tmp/start.log | head -n 2)"
+  elif grep -qi 'level=error' /tmp/start.log; then
+    echo "not ok  the repository config starts with $state but logs errors: $(grep -i 'level=error' /tmp/start.log | head -n 2)"
+  elif ! wget -qO- "$URL/api/v2/status" | grep -q 'email-high'; then
+    echo "not ok  the repository config with $state is not the one Alertmanager loaded"
+  fi
+  stop_am
+  rm -rf /tmp/am-start
+  printf '123456:fixture-token-not-real\n' >"$SECRETS/tg_token"
+done
+rm -f "$SECRETS/tg_token"
 cp /tmp/w/sinks.yml /etc/alertmanager/alertmanager.yml
 
 mkdir -p /tmp/www/cgi-bin
 cp /tmp/w/sink.cgi /tmp/www/cgi-bin/sink
-chmod 755 /tmp/www/cgi-bin/sink
+cp /tmp/w/status.cgi /tmp/www/cgi-bin/status
+chmod 755 /tmp/www/cgi-bin/sink /tmp/www/cgi-bin/status
 : >/tmp/sink.log
 httpd -f -p 127.0.0.1:9099 -h /tmp/www &
-alertmanager --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/tmp/am \
-  --web.listen-address=127.0.0.1:9093 --cluster.listen-address= >/tmp/am.log 2>&1 &
-AM_PID=$!
-deadline=$(($(date +%s) + 20))
-until wget -qO /dev/null "$URL/-/ready" 2>/dev/null; do
-  if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo 'not ok  Alertmanager does not become ready without deadman_url'
-    cat /tmp/am.log
-    exit 0
-  fi
-  sleep 1
-done
+start_am /etc/alertmanager/alertmanager.yml /tmp/am /tmp/am.log
+if ! ready 20; then
+  echo 'not ok  Alertmanager does not become ready without deadman_url'
+  cat /tmp/am.log
+  exit 0
+fi
 
 amtool alert add --alertmanager.url=$URL $(cat /tmp/w/watchdog.txt) --annotation=summary=fixture >/dev/null
 amtool alert add --alertmanager.url=$URL alertname=BackendDown severity=High product=fixture \
@@ -201,7 +253,7 @@ echo "NOSECRET-SINK-BEGIN"
 cat /tmp/sink.log
 echo "NOSECRET-SINK-END"
 echo "NOSECRET-LOG-BEGIN"
-grep -v 'level=info' /tmp/am.log
+grep -vi 'level=info' /tmp/am.log
 echo "NOSECRET-LOG-END"
 echo "NOSECRET-METRICS-BEGIN"
 wget -qO- "$URL/metrics" | grep -E '^alertmanager_notifications_(failed_)?total\{integration="webhook"'
@@ -221,6 +273,70 @@ kill -0 "$AM_PID" 2>/dev/null || echo 'not ok  Alertmanager exited after deadman
 echo "SECRET-SINK-BEGIN"
 cat /tmp/sink.log
 echo "SECRET-SINK-END"
+stop_am
+
+# ── 4. The ping endpoint answers 404, then 503, then 200 ───────────────────
+# Alertmanager before v0.28.0 panics on a non-2xx answer to a url_file webhook
+# and exits (prometheus/alertmanager#3800), taking every route down with it.
+webhook() { # webhook failed_|''  -> the webhook counter summed over reasons
+  wget -qO- "$URL/metrics" 2>/dev/null | awk -v want="alertmanager_notifications_$1total" '
+    { split($1, name, "{") }
+    name[1] == want && $1 ~ /integration="webhook"/ { sum += $2 }
+    END { printf "%d\n", sum }'
+}
+waitfor() { # waitfor SECONDS COMMAND...
+  deadline=$(($(date +%s) + $1)); shift
+  until "$@"; do
+    [ "$(date +%s)" -lt "$deadline" ] || return 1
+    sleep 1
+  done
+}
+answered() { tail -n "+$((seen + 1))" /tmp/status.log | grep -q "^$code "; }
+counted() { [ "$(webhook failed_)" -gt "$failed" ]; }
+delivered() { grep -q "^POST telegram-high .*\"product\":\"fixture-$code\"" /tmp/sink.log; }
+
+cp /tmp/w/regress.yml /etc/alertmanager/alertmanager.yml
+printf 'http://127.0.0.1:9099/cgi-bin/status/deadman-ping\n' >"$SECRETS/deadman_url.tmp"
+mv "$SECRETS/deadman_url.tmp" "$SECRETS/deadman_url"
+: >/tmp/status.log
+echo 404 >/tmp/status
+start_am /etc/alertmanager/alertmanager.yml /tmp/am-status /tmp/am-status.log
+ready 20 || echo 'not ok  Alertmanager does not become ready for the status cases'
+amtool alert add --alertmanager.url=$URL $(cat /tmp/w/watchdog.txt) --annotation=summary=fixture >/dev/null || \
+  echo 'not ok  the watchdog cannot be sent for the status cases'
+for code in 404 503 200; do
+  seen=$(wc -l </tmp/status.log)
+  failed=$(webhook failed_)
+  printf '%s\n' "$code" >/tmp/status.tmp && mv /tmp/status.tmp /tmp/status
+  waitfor 20 answered || echo "not ok  $code: no ping reached the endpoint"
+  if [ "$code" = 200 ]; then
+    # The group flushes one at a time, so once a 2xx is answered no failure from
+    # an earlier code is still in flight.
+    failed=$(webhook failed_)
+    sleep 2
+    [ "$(webhook failed_)" -eq "$failed" ] || echo "not ok  $code: a 2xx answer is counted as a failure"
+  else
+    waitfor 25 counted || echo "not ok  $code: the failed ping is not counted under the webhook integration"
+  fi
+  if ! kill -0 "$AM_PID" 2>/dev/null; then
+    echo "not ok  $code: Alertmanager exited after the ping endpoint answered $code"
+    break
+  fi
+  wget -qO /dev/null "$URL/-/ready" 2>/dev/null || echo "not ok  $code: Alertmanager is not ready"
+  amtool alert add --alertmanager.url=$URL alertname=BackendDown severity=High "product=fixture-$code" \
+    --annotation=summary=fixture >/dev/null || echo "not ok  $code: Alertmanager does not accept alerts"
+  waitfor 10 delivered || echo "not ok  $code: BackendDown does not reach telegram-high"
+  echo "STATUS-$code-METRICS-BEGIN"
+  wget -qO- "$URL/metrics" 2>/dev/null | grep -E '^alertmanager_notifications_(failed_)?total\{integration="webhook"'
+  echo "STATUS-$code-METRICS-END"
+done
+stop_am
+echo "STATUS-PING-BEGIN"
+cat /tmp/status.log
+echo "STATUS-PING-END"
+echo "STATUS-LOG-BEGIN"
+grep -vi 'level=info' /tmp/am-status.log
+echo "STATUS-LOG-END"
 RUN
 
 tar -C "$WORK/am" -cf - . | docker run -i --rm --network none --entrypoint /bin/sh "$AM_IMAGE" \
@@ -275,6 +391,23 @@ if pings:
     expect("the ping carries the watchdog for deadman-external only",
            body["receiver"] == "deadman-external" and body["status"] == "firing"
            and [a["labels"]["alertname"] for a in body["alerts"]] == ["SkyEyeWatchdog"])
+
+answers = [line.split(" ", 3) for line in sections.get("STATUS-PING", [])]
+codes = [a[0] for a in answers]
+expect("the ping endpoint saw 404, then 503, then 200",
+       "404" in codes and "503" in codes and "200" in codes
+       and codes.index("404") < codes.index("503") < codes.index("200"))
+ok = [a for a in answers if a[0] == "200"]
+expect("after the non-2xx answers the ping is still the watchdog's JSON POST",
+       bool(ok) and ok[0][1] == "POST" and ok[0][2].startswith("application/json")
+       and json.loads(ok[0][3])["receiver"] == "deadman-external")
+status_log = "\n".join(sections.get("STATUS-LOG", []))
+expect("no panic while the ping endpoint answers non-2xx", "panic" not in status_log)
+# Informational: how this Alertmanager labels each failure (runbooks/skyeye-watchdog.md step 5).
+for code in ("404", "503", "200"):
+    for line in sections.get(f"STATUS-{code}-METRICS", []):
+        if line.startswith("alertmanager_notifications_failed_total"):
+            print(f"#       after {code}: {line}")
 sys.exit(1 if failures else 0)
 PY
 
