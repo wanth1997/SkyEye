@@ -788,6 +788,14 @@ snapshot >"$BOX/snapshot"
 run_setup -- --no-start --restart-alloy
 assert_refused_untouched
 
+new_box strategy-disabled-must-be-0-or-1
+install_host
+printf 'TQ_STRATEGY_DISABLED=yes\n' >>"$ENV_FILE"
+snapshot >"$BOX/snapshot"
+run_setup
+assert_refused_untouched
+check 'names the setting' logged out 'TQ_STRATEGY_DISABLED must be 0 or 1'
+
 # ─────────────────────────────── Version and lock ───────────────────────────
 
 new_box untested-alloy-refused

@@ -166,6 +166,10 @@ done
   die "TQ_ENVIRONMENT must be development or production"
 [[ "$TQ_POC_RUN_EXPECTED" == "0" || "$TQ_POC_RUN_EXPECTED" == "1" ]] || \
   die "TQ_POC_RUN_EXPECTED must be 0 or 1"
+# Optional; the probe refuses any other value and would stop publishing.
+[[ -z "${TQ_STRATEGY_DISABLED:-}" || "$TQ_STRATEGY_DISABLED" == "0" ||
+   "$TQ_STRATEGY_DISABLED" == "1" ]] || \
+  die "TQ_STRATEGY_DISABLED must be 0 or 1 when set"
 [[ "$TQ_REQUIRE_RUNTIME_CONTRACT" == "0" || "$TQ_REQUIRE_RUNTIME_CONTRACT" == "1" ]] || \
   die "TQ_REQUIRE_RUNTIME_CONTRACT must be 0 or 1"
 [[ "$TQ_TIMEZONE" =~ ^[A-Za-z0-9_+./-]+$ ]] || die "invalid TQ_TIMEZONE"

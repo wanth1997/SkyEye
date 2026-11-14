@@ -126,6 +126,7 @@ fixture() {
   export TQ_TEXTFILE_DIR="$TEXT" TQ_EXECUTOR_MAP=venue-a=exa,venue-b=exb TQ_SIDECAR_REQUIRED=0
   export TQ_TEXTFILE_MODE=600 TQ_SIDECAR_SESSION=fixture-missing TQ_SIDECAR_IDENTITY_FILE="$ROOT/none"
   export TQ_SIDECAR_HEALTH_URL=http://127.0.0.1:9/health FIXTURE_ROOT="$ROOT"
+  unset TQ_STRATEGY_DISABLED
   pnl_line "$(iso_offset -30)" >"$LOG"
 }
 
@@ -574,6 +575,60 @@ today_case 'a day that skips midnight starts at its first instant' \
 today_case 'the day before a skipped midnight ends at that first instant' \
   America/Havana 2025-03-09T04:59:30Z 1 \
   2025-03-08T05:00:00Z 2025-03-09T05:00:30Z
+
+printf '# operator-disabled strategy\n'
+# A stopped run with no marker leaves its manifest: without the setting it reads
+# as an expected run that died, which is what TradingProcessDown reports.
+for setting in unset 0; do
+  fixture
+  manifest 999999
+  [[ "$setting" == unset ]] || export TQ_STRATEGY_DISABLED="$setting"
+  run_probe
+  expect "TQ_STRATEGY_DISABLED $setting: a leftover manifest is still expected" "$(metric run_expected)" 1
+done
+
+fixture
+manifest 999999
+export TQ_STRATEGY_DISABLED=1
+run_probe
+expect 'disabled: the probe succeeds' "$PROBE_RC" 0
+expect 'disabled: a leftover manifest is not expected' "$(metric run_expected)" 0
+expect 'disabled: no process is counted' "$(metric process_count)" 0
+expect 'disabled: the manifest is still reported' "$(metric runtime_contract_available)" 1
+expect 'disabled: binding is still evaluated' "$(metric log_binding_ok)" 1
+expect 'disabled: current P&L is still read' "$(metric current_pnl_valid)" 1
+
+fixture
+start "$QUANT" -config "$CONFIG_REL"
+manifest "$LAST_PID"
+export TQ_STRATEGY_DISABLED=1
+run_probe
+expect 'disabled and started: the process is counted' "$(metric process_count)" 1
+expect 'disabled and started: the run stays unexpected' "$(metric run_expected)" 0
+expect 'disabled and started: process identity still matches' "$(metric process_identity_ok)" 1
+start "$QUANT" -config "$CONFIG_REL"
+run_probe
+expect 'disabled and started twice: both processes are counted' "$(metric process_count)" 2
+
+fixture
+manifest 999999
+marker 999999 '.reason="risk_halt"|.phase="cycle"'
+export TQ_STRATEGY_DISABLED=1
+run_probe
+expect 'disabled: a critical marker is still reported' "$(metric done_marker 'reason="risk_halt"')" 1
+
+for bad_value in yes 2 ' 1' true; do
+  fixture
+  manifest 999999
+  run_probe
+  before="$(metric probe_timestamp_seconds)"
+  sleep 1.1
+  export TQ_STRATEGY_DISABLED="$bad_value"
+  run_probe
+  expect "disabled='$bad_value': the probe refuses" "$([[ "$PROBE_RC" -ne 0 ]] && echo failed)" failed
+  expect "disabled='$bad_value': the last textfile stays frozen" "$(metric probe_timestamp_seconds)" "$before"
+done
+unset TQ_STRATEGY_DISABLED
 
 stop_processes
 if [[ "$FAILURES" -gt 0 ]]; then

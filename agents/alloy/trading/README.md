@@ -140,6 +140,14 @@ full shadow → canary process.
    executing the env; `add` refuses anything else.
    It never starts, stops or signals a trading process: a Mainnet env with
    `TQ_POC_RUN_EXPECTED=0` gets only its read-only probe.
+   A strategy the operator stopped on purpose sets `TQ_STRATEGY_DISABLED=1`
+   in its env (default `0`). The probe then reports `run_expected=0` whatever
+   `current.json` or the done marker says, so a stop that left a `running`
+   manifest behind does not read as ProcessDown, and a process that starts
+   anyway raises `TradingUnexpectedProcess`. Process, config, log and marker
+   facts are still reported. `add` and the probe refuse any value other than
+   `0` or `1`. Set it back to `0` with `add` before the strategy is started
+   again.
 2. Repo:
 
    ~~~bash
