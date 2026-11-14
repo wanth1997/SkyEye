@@ -6,6 +6,11 @@ die() {
   exit 1
 }
 
+# Every path below is absolute. A neutral working directory keeps find from
+# failing when it is started from one this user cannot open, such as /root
+# under `runuser` from a root shell.
+cd / || die "unable to change to the root directory"
+
 for required_name in TQ_REPO_ROOT TQ_RAW_LOG_GLOB TQ_ALLOY_USER; do
   [[ -n "${!required_name:-}" ]] || die "$required_name is required"
 done
@@ -37,7 +42,10 @@ case "$raw_log_dir" in
   *) die "TQ_RAW_LOG_GLOB must stay below TQ_REPO_ROOT" ;;
 esac
 
-find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 2>/dev/null |
+# find's own errors stay on stderr; its status is checked after the loop so a
+# failed listing is reported instead of ending the script without a message.
+set +e
+find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 |
   while IFS= read -r -d '' raw_log; do
     if ! acl="$(getfacl -cp -- "$raw_log" 2>/dev/null)"; then
       die "unable to inspect a configured raw log ACL"
@@ -51,3 +59,10 @@ find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 2>/dev/
       die "unable to grant Alloy read access to a configured raw log"
     fi
   done
+pipeline_status=("${PIPESTATUS[@]}")
+set -e
+# The loop has already printed its reason; a find stopped by its exit is not
+# a separate failure.
+[[ "${pipeline_status[1]}" -eq 0 ]] || exit "${pipeline_status[1]}"
+[[ "${pipeline_status[0]}" -eq 0 ]] || \
+  die "listing configured raw logs with find failed (rc=${pipeline_status[0]}) in $raw_log_dir"

@@ -19,6 +19,16 @@ path_exists() {
   [[ -e "$1" || -L "$1" ]]
 }
 
+# Runs a command as USER with / as its working directory. runuser keeps the
+# caller's working directory, which the user may not be able to open (a root
+# shell in /root, mode 700); GNU find then lists its files and still exits 1
+# with "Failed to restore initial working directory".
+run_as_user() {
+  local user="$1"
+  shift
+  (cd / && exec runuser -u "$user" -- "$@")
+}
+
 # Sets TEST_SYSTEM_ROOT. In test mode every argument must resolve below
 # SKYEYE_TRADING_TEST_ROOT; otherwise the caller must be root.
 init_system_root() {

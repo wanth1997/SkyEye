@@ -87,4 +87,69 @@ then
   exit 1
 fi
 
+# GNU find saves its starting directory and returns to it before exiting.
+# Started from a directory its user cannot open (runuser from a root shell in
+# /root, mode 700), it lists every file and then exits 1 with this message.
+# This test runs as one user, so the model marks one directory as unopenable.
+GNU_FIND_BIN="$TEST_ROOT/gnu-find-bin"
+DENIED_CWD="$TEST_ROOT/root-home"
+mkdir -p "$GNU_FIND_BIN" "$DENIED_CWD"
+DENIED_CWD="$(cd "$DENIED_CWD" && pwd -P)"
+cat >"$GNU_FIND_BIN/find" <<'EOF'
+#!/usr/bin/env bash
+start_dir="$(pwd -P)"
+case "$start_dir/" in
+  "$FAKE_DENIED_CWD"/*)
+    /usr/bin/find "$@"
+    printf 'find: Failed to restore initial working directory: %s: Permission denied\n' \
+      "$start_dir" >&2
+    exit 1
+    ;;
+esac
+exec /usr/bin/find "$@"
+EOF
+chmod 755 "$GNU_FIND_BIN/find"
+
+printf 'case: the helper works from a working directory its user cannot open\n'
+printf 'four\n' >"$RAW_LOG_DIR/denied-cwd.raw.log"
+if ! (cd "$DENIED_CWD" && FAKE_DENIED_CWD="$DENIED_CWD" \
+  PATH="$GNU_FIND_BIN:$FAKE_BIN:/usr/bin:/bin" "$ACCESS_HELPER") \
+  >"$TEST_ROOT/denied-cwd.out" 2>"$TEST_ROOT/denied-cwd.err"
+then
+  printf 'FAIL: access helper failed when started from an unopenable directory:\n' >&2
+  cat "$TEST_ROOT/denied-cwd.err" >&2
+  exit 1
+fi
+rg -q '/denied-cwd[.]raw[.]log$' "$SETFACL_LOG" || {
+  printf 'FAIL: access helper started from an unopenable directory did not repair the new log\n' >&2
+  exit 1
+}
+
+printf 'case: a failed find is reported, not silent\n'
+FAILING_FIND_BIN="$TEST_ROOT/failing-find-bin"
+mkdir -p "$FAILING_FIND_BIN"
+cat >"$FAILING_FIND_BIN/find" <<'EOF'
+#!/usr/bin/env bash
+printf "find: '%s': Permission denied\n" "$1" >&2
+exit 1
+EOF
+chmod 755 "$FAILING_FIND_BIN/find"
+if PATH="$FAILING_FIND_BIN:$FAKE_BIN:/usr/bin:/bin" "$ACCESS_HELPER" \
+  >"$TEST_ROOT/find-fail.out" 2>"$TEST_ROOT/find-fail.err"
+then
+  printf 'FAIL: access helper accepted a failed find\n' >&2
+  exit 1
+fi
+rg -q "^find: '.*/logs/live-runs': Permission denied$" "$TEST_ROOT/find-fail.err" || {
+  printf 'FAIL: access helper hid find'"'"'s own error:\n' >&2
+  cat "$TEST_ROOT/find-fail.err" >&2
+  exit 1
+}
+rg -q '^SkyEye trading log access: listing configured raw logs with find failed [(]rc=1[)]' \
+  "$TEST_ROOT/find-fail.err" || {
+  printf 'FAIL: access helper did not name the failed find step:\n' >&2
+  cat "$TEST_ROOT/find-fail.err" >&2
+  exit 1
+}
+
 printf 'PASS: Linux raw-log ACL repair contract\n'

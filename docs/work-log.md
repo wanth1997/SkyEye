@@ -15,6 +15,21 @@
 ---
 -->
 
+## 2026-11-14 16:55 — Trading installer 從任何工作目錄都能執行
+
+**改動摘要：** `setup-linux.sh` 以 probe user／Alloy user 執行的 helper 一律從 `/` 啟動，root shell 停在 `/root` 時 `add` 不再無訊息失敗。`ensure-log-access.sh` 先 `cd /`，`find` 失敗時印出原因，不再只回 rc=1。
+
+**修改的檔案：**
+- `agents/alloy/trading/linux-common.sh`：新增 `run_as_user`，以 `/` 為工作目錄執行 `runuser`。
+- `agents/alloy/trading/setup-linux.sh`：4 個 `runuser` 呼叫改用 `run_as_user`；`ensure-log-access.sh` 失敗時說明是哪一步。
+- `agents/alloy/trading/ensure-log-access.sh`：開頭 `cd /`；保留 `find` 的 stderr，失敗時以 `listing configured raw logs with find failed (rc=N)` 結束。
+- `docs/trading01-popdex-rollout.md`：註明較舊的 installer 需要先 `cd /`，11-14 的 rollout 就是這樣執行。
+- `tests/trading/test-linux-setup.sh`、`tests/trading/test-log-access.sh`：模擬 GNU find 回不到原工作目錄的行為，測從無權進入的目錄執行 `add` 與 helper，以及 `find` 失敗時有錯誤訊息。
+
+**原因/備註：** 11-14 Trading01 PopDEX rollout 的 Phase 3 `add` 回 rc=1 且沒有訊息。原因是 root shell 在 `/root`（mode 700），`runuser -u ubuntu` 的 `find` 列完檔案後回不到 `/root` 而 exit 1，錯誤又被 `2>/dev/null` 和 pipefail 吞掉。當次 rollout 以 `cd /` 繞過並完成。`ensure-log-access.sh` 也是 probe unit 的 ExecStartPre，`find` 失敗時現在會在 journal 留下原因。Codex review R1 READY。
+
+---
+
 ## 2026-11-14 16:30 — Trading01 PopDEX 監控、Mainnet 停用設定與 Alloy 升級腳本
 
 **改動摘要：** Trading01 新增 `popdex-btc` target，並寫好 Trading01 的上線 runbook：Alloy 1.16.0→1.16.3、共用 probe 換新、加上 PopDEX、Mainnet 停用設定，central-deploy 排在最後。probe 新增 `TQ_STRATEGY_DISABLED`，給刻意停用的 strategy 用：停用後不再顯示 ProcessDown，意外啟動時仍會觸發 `TradingUnexpectedProcess`。新增 Linux Alloy 升級腳本，會先驗證設定，失敗時自動還原。Trading log 另外遮蔽 client order ID。這次只 merge，主機 rollout 與中央部署依 runbook 另外進行。

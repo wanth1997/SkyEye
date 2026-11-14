@@ -781,9 +781,9 @@ if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
 else
   install -d -o "$TQ_PROBE_USER" -g "$TQ_ALLOY_GROUP" -m 2770 "$TQ_TEXTFILE_DIR"
 fi
-runuser -u "$TQ_PROBE_USER" -- test -x "$TQ_TEXTFILE_DIR" || \
+run_as_user "$TQ_PROBE_USER" test -x "$TQ_TEXTFILE_DIR" || \
   die "probe user cannot traverse textfile directory: $TQ_TEXTFILE_DIR"
-runuser -u "$TQ_PROBE_USER" -- test -w "$TQ_TEXTFILE_DIR" || \
+run_as_user "$TQ_PROBE_USER" test -w "$TQ_TEXTFILE_DIR" || \
   die "probe user cannot write textfile directory: $TQ_TEXTFILE_DIR"
 if [[ "$shared_changed" -eq 1 ]]; then
   install -m 755 "$RENDER_ROOT/probe.sh" "$INSTALL_ROOT/probe.sh"
@@ -809,7 +809,8 @@ if [[ "$raw_log_dir" == "$probe_home"/* ]]; then
   done
 fi
 
-runuser -u "$TQ_PROBE_USER" -- "$INSTALL_ROOT/ensure-log-access.sh"
+run_as_user "$TQ_PROBE_USER" "$INSTALL_ROOT/ensure-log-access.sh" || \
+  die "raw-log access check failed as $TQ_PROBE_USER (ensure-log-access.sh); see the message above"
 
 if grep -q '^CONFIG_FILE=' "$ALLOY_ENV_FILE"; then
   sed "s|^CONFIG_FILE=.*$|$ALLOY_DIRECTORY_SETTING|" "$ALLOY_ENV_FILE" \
@@ -865,7 +866,7 @@ fi
 
 first_log="$(find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print -quit)"
 if [[ -n "$first_log" ]]; then
-  runuser -u "$TQ_ALLOY_USER" -- test -r "$first_log" || \
+  run_as_user "$TQ_ALLOY_USER" test -r "$first_log" || \
     die "Alloy user cannot read configured raw logs"
 fi
 
