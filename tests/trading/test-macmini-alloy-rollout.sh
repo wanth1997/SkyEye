@@ -9,8 +9,11 @@
 #
 # The runbook's Mac mini helpers.sh and monitoring-prod helpers.sh are taken
 # from the runbook as written; only CONSOLE is pointed at a sandbox file. The
-# Phase 2 and Phase 3 `if` blocks are also run as written there. Phase 3 runs
-# this checkout's setup-macos.sh. Everything runs under /bin/bash with
+# Phase 0 staging block, the Phase 2 and Phase 3 `if` blocks, the Phase 4
+# log_evidence line and the Phase 5 HISTORY-KEPT line are also run as written
+# there. Phase 3 runs this checkout's setup-macos.sh. One fake Loki answers
+# from a store of lines and honours each query's time range, so the Loki
+# acceptance start is checked against lines the old Alloy shipped mid-install. Everything runs under /bin/bash with
 # PATH=<sandbox>/bin only: brew, launchctl, curl, ps, tmux and pgrep are shims
 # that keep their state in files, so no real service, launchd job or trading
 # process is reachable. `alloy fmt` and `alloy validate` run the real binary.
@@ -78,9 +81,10 @@ check() {
 heredoc_body() {
   awk -v open="$1" '$0 == open { on = 1; next } on && $0 == "EOF" { exit } on { print }' "$RUNBOOK"
 }
-# A block that starts with the given line and ends at the first line "fi".
+# A block whose first line starts with the given text and that ends at the
+# first line "fi".
 runbook_block() {
-  awk -v first="$1" '$0 == first { on = 1 } on { print } on && $0 == "fi" { exit }' "$RUNBOOK"
+  awk -v first="$1" '!on && index($0, first) == 1 { on = 1 } on { print } on && $0 == "fi" { exit }' "$RUNBOOK"
 }
 
 MAC_HELPERS="$WORK_ROOT/runbook-helpers.sh"
@@ -97,8 +101,15 @@ CENTRAL_HELPERS="$WORK_ROOT/central-helpers.sh"
 heredoc_body "cat >\"\$CUT/helpers.sh\" <<'EOF'" >"$CENTRAL_HELPERS"
 grep -q '^loki_accept() {' "$CENTRAL_HELPERS" || fail 'the runbook monitoring-prod helpers.sh does not define loki_accept'
 
+PHASE0_BLOCK="$(runbook_block 'S="$HOME/skyeye-staging/macmini-$M7"')"
 PHASE2_BLOCK="$(runbook_block 'if outside_window; then')"
 PHASE3_BLOCK="$(runbook_block 'if phase3_ready; then')"
+PHASE4_EVIDENCE="$(grep -m 1 '^log_evidence toobit-mexc-btc ' "$RUNBOOK")"
+HISTORY_KEPT="$(grep -m 1 '^jq -e -s ' "$RUNBOOK")"
+[[ "$PHASE0_BLOCK" == *'tar -x -f'* && "$PHASE0_BLOCK" == *$'\nfi' ]] || \
+  fail 'the runbook Phase 0 staging block was not found'
+[[ -n "$PHASE4_EVIDENCE" ]] || fail 'the runbook Phase 4 log_evidence line was not found'
+[[ "$HISTORY_KEPT" == *HISTORY-KEPT ]] || fail 'the runbook Phase 5 HISTORY-KEPT line was not found'
 [[ "$PHASE2_BLOCK" == *'brew pin "$FORMULA"'* && "$PHASE2_BLOCK" == *$'\nfi' ]] || \
   fail 'the runbook Phase 2 block was not found'
 [[ "$PHASE3_BLOCK" == *'"$SETUP" </dev/null'* && "$PHASE3_BLOCK" == *$'\nfi' ]] || \
@@ -201,6 +212,13 @@ case "$1" in
         seen="$(config_state)"
         echo "brew services restart sees=$seen" >>"$calls"
         [ ! -e "$ctl/restart-fails" ] || exit 1
+        # The old Alloy ships one more raw log line just before it stops.
+        if [ -e "$ctl/log-on-restart" ]; then
+          t="$("$REAL_DATE" +%s)"
+          echo "$t" >"$state/old-line-epoch"
+          printf 'time=%sZ level=INFO msg=old_pipeline client_id=abc123\n' \
+            "$("$REAL_DATE" -u -r "$t" +%Y-%m-%dT%H:%M:%S)" >>"$(cat "$ctl/log-on-restart")"
+        fi
         touch "$state/loaded_homebrew.mxcl.alloy"
         echo $(( $(cat "$state/alloy-pid" 2>/dev/null || echo 500) + 1 )) >"$state/alloy-pid"
         "$REAL_DATE" +%s >"$state/alloy-started"
@@ -360,7 +378,7 @@ new_box() {
     "$BOX/repo/config" "$BOX/repo/logs/live-runs" "$BOX/repo/run-state/$STRATEGY" "$BOX/old" "$BOX/stage"
   chmod 700 "$BOX/work"
   for tool in awk basename cat chmod cmp comm cp cut diff dirname env find grep head id install ls \
-    mkdir mktemp mv perl plutil rm sed shasum sort stat tail tee touch tr wc; do
+    mkdir mktemp mv perl plutil rm sed shasum sort stat tail tar tee touch tr wc; do
     ln -s "$(command -v "$tool")" "$BOX/bin/$tool"
   done
   ln -s "$RUN_BASH" "$BOX/bin/bash"
@@ -462,9 +480,36 @@ probe_is_new() { cmp -s "$BOX/brew/libexec/skyeye-trading/probe.sh" "$STAGE/agen
 census_lists() { grep -qxF -- "$1" "$BOX/work/tnauqquant.before"; }
 record_status() { grep -qx "status=$2" "$1/transaction.meta"; }
 
-# ─────────────────────────────── Phase 1 ────────────────────────────────────
+# ─────────────────────────────── Phase 0 ────────────────────────────────────
 
 new_box phase1
+CASE=phase0
+M7_TEST=abc1234
+mkdir -p "$BOX/tar-src/macmini-$M7_TEST/agents"
+cp -Rp "$AGENT_DIR" "$BOX/tar-src/macmini-$M7_TEST/agents/alloy"
+tar -c -f "$BOX/home/skyeye-alloy-$M7_TEST.tar" -C "$BOX/tar-src" "macmini-$M7_TEST"
+TAR_SHA="$(shasum -a 256 "$BOX/home/skyeye-alloy-$M7_TEST.tar" | cut -c1-64)"
+PROBE_SHA="$(shasum -a 256 "$AGENT_DIR/trading/probe.sh" | cut -c1-64)"
+stage0() {
+  mac_sh "M7=$M7_TEST; TAR_SHA=$TAR_SHA; PROBE_SHA=$PROBE_SHA
+$PHASE0_BLOCK"
+}
+echo 1830 >"$BOX/ctl/utc-hhmm"
+stage0
+check 'staging inside the window: refused' out_has 'STOP: it is 1830 UTC'
+check 'staging inside the window: nothing extracted' bash -c '! test -e "$1"' _ "$BOX/home/skyeye-staging"
+check 'staging inside the window: the tar is kept' test -f "$BOX/home/skyeye-alloy-$M7_TEST.tar"
+echo 1000 >"$BOX/ctl/utc-hhmm"
+stage0
+check 'staging outside the window' out_line STAGED
+check 'staged probe.sh' cmp -s "$AGENT_DIR/trading/probe.sh" "$BOX/home/skyeye-staging/macmini-$M7_TEST/agents/alloy/trading/probe.sh"
+check 'staged tar removed' bash -c '! test -e "$1"' _ "$BOX/home/skyeye-alloy-$M7_TEST.tar"
+stage0
+check 'staging twice: refused' out_has 'already exists'
+
+# ─────────────────────────────── Phase 1 ────────────────────────────────────
+
+CASE=phase1
 baseline
 check 'jobs.before: Alloy and both jobs loaded' work_file_is jobs.before \
   "homebrew.mxcl.alloy loaded
@@ -553,8 +598,15 @@ alloy_pid | cmp - \"\$WORK/alloy-pid.before\" && echo ALLOY-PID-SAME"
 check 'pinned' pinned
 check 'pin reported' out_line true
 check 'pin left Alloy alone' out_line ALLOY-PID-SAME
-mac_sh 'if [ "$(cat "$WORK/pinned.before")" = false ]; then brew unpin "$FORMULA"; fi
-alloy_pinned | cmp - "$WORK/pinned.before" && echo PIN-AS-PHASE1'
+: >"$BOX/log/calls.log"
+echo 1830 >"$BOX/ctl/utc-hhmm"
+mac_sh 'r2_unpin'
+check 'R2 inside the window: refused' bash -c '[ "$1" -eq 1 ] && grep -qF "STOP: R2 waits until 19:30 UTC" "$2"' _ "$RC" "$BOX/log/out"
+check 'R2 inside the window: still pinned' pinned
+check 'R2 inside the window: brew unpin not called' calls_lack '^brew unpin'
+echo 1000 >"$BOX/ctl/utc-hhmm"
+mac_sh 'r2_unpin'
+check 'R2 rc=0' rc_is 0
 check 'R2 unpins' out_line PIN-AS-PHASE1
 check 'R2 unpinned' bash -c '! test -e "$1"' _ "$BOX/state/pinned"
 mac_sh "$PHASE2_BLOCK"
@@ -619,9 +671,39 @@ check 'an extra file in etc: refused' rc_is 1
 rm -f "$BOX/brew/etc/alloy/stray.txt"
 check 'refusals changed no service' no_service_change
 
+# A rollback inside the window or from a session that cannot manage gui/<uid>
+# stops before it restores anything.
+r3_refused() {
+  local what="$1" message="$2"
+  check "$what: refused" rc_is 1
+  check "$what: says why" out_has "$message"
+  check "$what: no service change" no_service_change
+  check "$what: no file restored" config_is_new
+  check "$what: probe not restored" probe_is_new
+}
+echo 1830 >"$BOX/ctl/utc-hhmm"
+mac_sh "r3_rollback '$RECORD'"
+r3_refused 'R3 inside the window' 'STOP: R3 waits until 19:30 UTC; nothing was restored'
+echo 1814 >"$BOX/ctl/utc-hhmm"
+mac_sh "r3_rollback '$RECORD'"
+r3_refused 'R3 at 18:14 UTC' 'STOP: R3 waits until 19:30 UTC'
+echo 1000 >"$BOX/ctl/utc-hhmm"
+touch "$BOX/ctl/ssh-user-domain"
+mac_sh "r3_rollback '$RECORD'"
+r3_refused 'R3 with brew services in user/*' 'STOP: this session cannot manage gui/'
+check 'R3 with brew services in user/*: names the domain' out_has 'STOP: brew services uses the user/* domain in this session'
+rm -f "$BOX/ctl/ssh-user-domain"
+mac_sh "CONSOLE=/dev/null; r3_rollback '$RECORD'"
+r3_refused 'R3 with the console of another uid' 'Wan runs R3 at the console'
+touch "$BOX/ctl/no-gui-domain"
+mac_sh "r3_rollback '$RECORD'"
+r3_refused 'R3 without the gui domain' 'STOP: launchctl print gui/'
+rm -f "$BOX/ctl/no-gui-domain"
+check 'R3 refusals: nothing forbidden' nothing_forbidden
+
 mac_sh "r3_rollback '$RECORD'"
 check 'R3 rc=0' rc_is 0
-check 'R3 tokens' bash -c 'for t in status=committed FILES-AS-PHASE1 ALLOY-RESTARTED JOBS-AS-PHASE1; do grep -qx "$t" "$1" || exit 1; done' _ "$BOX/log/out"
+check 'R3 tokens' bash -c 'for t in "CLOCK-OK 1000 UTC" SESSION-OK status=committed FILES-AS-PHASE1 ALLOY-RESTARTED JOBS-AS-PHASE1; do grep -qxF "$t" "$1" || exit 1; done' _ "$BOX/log/out"
 check 'files back to Phase 1' skyeye_as_phase1
 check 'config is the old one again' config_is_old
 check 'Alloy restarted on the old config' bash -c 'grep -q "^brew services restart sees=old" "$1"' _ "$BOX/log/calls.log"
@@ -643,6 +725,13 @@ RECORD="$(sed -n 's/^RECORD=//p' "$BOX/log/out")"
 check 'record kept' [ -n "$RECORD" ]
 check 'record rollback_incomplete' record_status "$RECORD" rollback_incomplete
 rm -f "$BOX/ctl/unready-on-new"
+# Alloy stopped and unloaded (for example it went down after rc=3): the Phase 1
+# gate refuses it, R3's gate does not, and R3 brings Alloy back.
+mac_sh 'brew services stop "$FORMULA"'
+mac_sh 'session_gate'
+check 'Alloy stopped: the Phase 1 gate refuses' rc_is 1
+mac_sh 'session_gate stopped-ok'
+check 'Alloy stopped: the R3 gate accepts' bash -c '[ "$1" -eq 0 ] && grep -qx BREW-SERVICES-GUI "$2"' _ "$RC" "$BOX/log/out"
 : >"$BOX/log/calls.log"
 mac_sh "r3_rollback '$RECORD'"
 check 'R3 after rc=3: rc=0' rc_is 0
@@ -692,6 +781,25 @@ mac_sh "log_evidence $STRATEGY $((now - 300))"
 check 'the newest raw log, UTC with nanoseconds' out_line "loki_accept $STRATEGY $((now - 5))123456789 $((now - 300))"
 mac_sh "log_evidence popdex-btc $((now - 300))"
 check 'another strategy: refused' rc_is 1
+# A finished last line is the evidence even when the line before it is older than SINCE.
+rm -f "$BOX"/repo/logs/live-runs/*.raw.log
+{
+  printf 'time=%s.1+08:00 level=INFO msg=older\n' "$(local_time "$((now - 90))")"
+  printf 'time=%s.75+08:00 level=INFO msg=newer\n' "$(local_time "$((now - 30))")"
+} >"$BOX/repo/logs/live-runs/20261114_000200_toobit-mexc.raw.log"
+mac_sh "log_evidence $STRATEGY $((now - 60))"
+check 'a finished new last line after an old one is evidence' out_line "loki_accept $STRATEGY $((now - 30))750000000 $((now - 60))"
+# An unfinished tail is skipped: the finished line before it is the evidence.
+printf 'time=%s.5+08:00 level=INFO msg=partial' "$(local_time "$((now - 1))")" \
+  >>"$BOX/repo/logs/live-runs/20261114_000200_toobit-mexc.raw.log"
+mac_sh "log_evidence $STRATEGY $((now - 60))"
+check 'an unfinished tail is skipped' out_line "loki_accept $STRATEGY $((now - 30))750000000 $((now - 60))"
+# A file holding only an unfinished line has no evidence.
+rm -f "$BOX"/repo/logs/live-runs/*.raw.log
+printf 'time=%s.5+08:00 level=INFO msg=partial' "$(local_time "$((now - 1))")" \
+  >"$BOX/repo/logs/live-runs/20261114_000300_toobit-mexc.raw.log"
+mac_sh "log_evidence $STRATEGY $((now - 60))"
+check 'only an unfinished line: none' out_line "loki_accept $STRATEGY none $((now - 60))"
 rm -f "$BOX"/repo/logs/live-runs/*.raw.log
 mac_sh "log_evidence $STRATEGY $((now - 300))"
 check 'no raw log: none' out_line "loki_accept $STRATEGY none $((now - 300))"
@@ -706,6 +814,7 @@ cat >"$CENTRAL_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$LOKI/calls.log"
 case "$*" in
+  *127.0.0.1:9090/api/v1/query*) cat "$LOKI/prom.json" ;;
   */loki/api/v1/query_range*) cat "$LOKI/range.json" ;;
   */loki/api/v1/series*) cat "$LOKI/series.json" ;;
   */loki/api/v1/query*) cat "$LOKI/count.json" ;;
@@ -714,14 +823,18 @@ esac
 EOF
 chmod 755 "$CENTRAL_BIN/curl"
 export LOKI
-accept() {
-  : >"$LOKI/calls.log"
+# central_run CMD...: runs a monitoring-prod helper against the fake curl.
+central_run() {
   (
-    PATH="$CENTRAL_BIN:$PATH"
+    PATH="${ACCEPT_BIN:-$CENTRAL_BIN}:$PATH"
     # shellcheck source=/dev/null
     . "$CENTRAL_HELPERS"
-    loki_accept "$@"
-  ) >"$BOX/log/out" 2>&1
+    "$@"
+  )
+}
+accept() {
+  : >"$LOKI/calls.log"
+  central_run loki_accept "$@" >"$BOX/log/out" 2>&1
   RC=$?
 }
 loki_answers() {
@@ -756,6 +869,126 @@ accept "$STRATEGY" "$ns" "$since"
 check 'an unscrubbed ID fails' out_has 'LOKI-UNSCRUBBED toobit-mexc-btc:'
 accept "$STRATEGY" none "$since"
 check 'no source event is PENDING' bash -c '[ "$1" -eq 2 ] && grep -q "^LOKI-PENDING " "$2"' _ "$RC" "$BOX/log/out"
+
+# ─────────────────────────── P&L history (Phase 5) ──────────────────────────
+
+CASE=history
+CUT_DIR="$WORK_ROOT/cut"
+mkdir -p "$CUT_DIR"
+prom_history() {
+  jq -n -c --arg cycles "$1" --arg first "$2" --arg current "$3" '
+    def m($n; $v): {metric: {__name__: ("tnauqquant_pnl_history_" + $n), product: "tnauqquant",
+      server_id: "macmini-m2", strategy: "toobit-mexc-btc"}, value: [1763107200, $v]};
+    {status: "success", data: {resultType: "vector", result: [m("valid"; "1"), m("cached_cycles"; $cycles),
+      m("first_supported_event_timestamp_seconds"; $first), m("current_value_usdt"; $current)]}}' >"$LOKI/prom.json"
+}
+mac_history_to() {
+  : >"$LOKI/calls.log"
+  central_run mac_history >"$CUT_DIR/$1"
+}
+history_kept() { CUT="$CUT_DIR" bash -c "$HISTORY_KEPT" >"$BOX/log/out" 2>&1; }
+prom_history 42 1762000000 12.5
+mac_history_to history.pre.json
+check 'mac_history names each history metric' [ "$(cat "$CUT_DIR/history.pre.json")" = \
+  '{"cached_cycles":"42","current_value_usdt":"12.5","first_supported_event_timestamp_seconds":"1762000000","valid":"1"}' ]
+check 'mac_history queries macmini-m2' grep -qF 'server_id="macmini-m2"' "$LOKI/calls.log"
+prom_history 43 1762000000 13.75
+mac_history_to history.final.json
+history_kept
+check 'one more cycle: history kept' out_line HISTORY-KEPT
+prom_history 41 1762000000 12.5
+mac_history_to history.final.json
+history_kept
+check 'fewer cycles: history not kept' out_lacks HISTORY-KEPT
+prom_history 42 1762500000 12.5
+mac_history_to history.final.json
+history_kept
+check 'a later first cycle: history not kept' out_lacks HISTORY-KEPT
+
+# ──────────── Loki acceptance start: old lines during the installer ─────────
+
+# The old Alloy ships an unscrubbed line after the installer started but before
+# it switched config.alloy. The Loki acceptance start must exclude it, both for
+# the source evidence and for the scrub check.
+new_box loki-switch
+baseline
+RAW="$BOX/repo/logs/live-runs/20261114_010000_toobit-mexc.raw.log"
+: >"$RAW"
+echo "$RAW" >"$BOX/ctl/log-on-restart"
+mac_sh "$PHASE3_BLOCK"
+check 'setup rc=0' out_line 'rc=0'
+check 'the old Alloy shipped a line during the installer' test -s "$BOX/state/old-line-epoch"
+OLD_EPOCH="$(cat "$BOX/state/old-line-epoch" 2>/dev/null || echo 0)"
+LOKI_SINCE="$(sed -n 's/^LOKI-SINCE //p' "$BOX/log/out")"
+check 'LOKI-SINCE printed after the installer' [ -n "$LOKI_SINCE" ]
+check 'loki-since is recorded' bash -c '[ -n "$2" ] && [ "$(cat "$1")" = "$2" ]' _ "$BOX/work/loki-since" "$LOKI_SINCE"
+check 'loki-since is after the switch second' [ "${LOKI_SINCE:-0}" -gt "$OLD_EPOCH" ]
+LOKI_SINCE="${LOKI_SINCE:-$(( $("$REAL_DATE" +%s) + 1 ))}"
+OLD_LINE="$(head -n 1 "$RAW")"
+mac_sh "$PHASE4_EVIDENCE"
+check 'only the old pipeline wrote a line: no evidence yet' out_line "loki_accept $STRATEGY none $LOKI_SINCE"
+NEW_LINE="time=$("$REAL_DATE" -u -r "$LOKI_SINCE" +%Y-%m-%dT%H:%M:%S)Z level=INFO msg=new_pipeline client_id=[ORDER_REF]"
+printf '%s\n' "$NEW_LINE" >>"$RAW"
+mac_sh "$PHASE4_EVIDENCE"
+check 'the evidence is the line after the switch' out_line "loki_accept $STRATEGY ${LOKI_SINCE}000000000 $LOKI_SINCE"
+read -r _ EV_STRATEGY EV_NS EV_SINCE < <(grep -m 1 '^loki_accept ' "$BOX/log/out" || echo "x x x x")
+
+# A Loki that answers from a store of "NS<TAB>LINE" and honours the time range
+# of every query, holding what both pipelines shipped.
+STORE_BIN="$WORK_ROOT/store-bin"
+mkdir -p "$STORE_BIN"
+cat >"$STORE_BIN/curl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$LOKI/calls.log"
+arg() {
+  local name="$1" a
+  shift
+  for a in "$@"; do
+    case "$a" in "$name="*) printf '%s\n' "${a#"$name="}"; return ;; esac
+  done
+}
+case "$*" in
+  */loki/api/v1/query_range*)
+    start="$(arg start "$@")"
+    end="$(arg end "$@")"
+    while IFS=$'\t' read -r ns line; do
+      if [ "$ns" -ge "$start" ] && [ "$ns" -le "$end" ]; then printf '%s\t%s\n' "$ns" "$line"; fi
+    done <"$LOKI/store" |
+      jq -R -s -c --argjson stream "$STREAM" \
+        '{status: "success", data: {resultType: "streams", result: [{stream: $stream,
+          values: (split("\n") | map(select(length > 0) | split("\t")))}]}}'
+    ;;
+  */loki/api/v1/series*)
+    printf '{"status":"success","data":[%s]}\n' "$STREAM"
+    ;;
+  */loki/api/v1/query*)
+    query="$(arg query "$@")"
+    range="${query##*[}"
+    range="${range%%s]*}"
+    from=$(( $(date +%s) - range ))
+    n=0
+    while IFS=$'\t' read -r ns line; do
+      [ $(( ns / 1000000000 )) -ge "$from" ] || continue
+      if printf '%s\n' "$line" | perl -ne 'exit(/(?i)(order_?id|client_?action_?id|client_?id)=[^\[]/ ? 0 : 1)'; then
+        n=$((n + 1))
+      fi
+    done <"$LOKI/store"
+    if [ "$n" -eq 0 ]; then
+      echo '{"status":"success","data":{"resultType":"vector","result":[]}}'
+    else
+      printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"%s"]}]}}\n' "$n"
+    fi
+    ;;
+  *) exit 22 ;;
+esac
+EOF
+chmod 755 "$STORE_BIN/curl"
+export STREAM="$stream"
+printf '%s000000000\t%s\n%s000000000\t%s\n' "$OLD_EPOCH" "$OLD_LINE" "$LOKI_SINCE" "$NEW_LINE" >"$LOKI/store"
+ACCEPT_BIN="$STORE_BIN" accept "$EV_STRATEGY" "$EV_NS" "$EV_SINCE"
+check 'the evidence after the switch is accepted' bash -c '[ "$1" -eq 0 ] && grep -q "^LOKI-ACCEPTED toobit-mexc-btc:" "$2"' _ "$RC" "$BOX/log/out"
+ACCEPT_BIN="$STORE_BIN" accept "$STRATEGY" "${LOKI_SINCE}000000000" "$OLD_EPOCH"
+check 'a SINCE before the switch sees the old line unscrubbed' out_has 'LOKI-UNSCRUBBED toobit-mexc-btc:'
 
 if [[ "$FAILURES" -ne 0 ]]; then
   printf 'FAIL: Mac mini rollout rehearsal: %s of %s checks failed\n' "$FAILURES" "$CHECKS"

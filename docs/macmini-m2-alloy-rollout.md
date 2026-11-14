@@ -2,7 +2,7 @@
 
 > **來源：** 2026-11-14 Wan 核准所有主機升級 Alloy（D28 A），硬性規則是只改 SkyEye 監控，絕不碰 Mac mini 上的交易程式。SkyEye task `SKYEYE-ALLOY-MACMINI-20261114`，manager PLAN_APPROVED（D1 A：已是 1.18.1 就不移動版本，只 `brew pin`；D4 rehearsal 測試；D5 預設由 operator agent 經 SSH 執行，先過 session gate）。
 >
-> **本文件是 operator 程序，repo 變更 merge 後不會自動生效。** `tests/trading/test-macmini-alloy-rollout.sh` 在假的 Mac mini 上演練這份文件：直接執行兩份 `helpers.sh` 的原文，包括 session gate、時間檢查、render 比對、Phase 3 的 `setup-macos.sh`、R3（成功之後退回、`rc=3` 之後恢復，以及拒絕執行的情況）、tnauqquant census 前後比對，還有 `log_evidence`／`loki_accept`。
+> **本文件是 operator 程序，repo 變更 merge 後不會自動生效。** `tests/trading/test-macmini-alloy-rollout.sh` 在假的 Mac mini 上演練這份文件：直接執行 Phase 0 的 staging 區塊與兩份 `helpers.sh` 的原文，包括 session gate、時間檢查、render 比對、Phase 3 的 `setup-macos.sh` 與 Loki 驗收起點、R2、R3（成功之後退回、`rc=3` 之後恢復，以及時窗內、session 不符等拒絕執行的情況）、tnauqquant census 前後比對，還有 `log_evidence`／`loki_accept`。
 >
 > **狀態：** 尚未執行。
 
@@ -40,7 +40,7 @@ Mac mini 上會變動的只有：
 
 ## 執行前必讀
 
-**預設執行者**是經 SSH 登入 Mac mini 的 operator agent，帳號是 Trading 使用者（`TQ_REPO_ROOT` 所在家目錄的擁有者）。Phase 1 的 session gate 證明這個 SSH session 能管理該使用者的 launchd `gui/` domain 與 `brew services`。**gate 失敗時，operator 只做唯讀的部分，Phase 2–3 由 Wan 在 Mac mini 的實體畫面（console 登入同一個帳號、在 Terminal 執行）照本文件操作。** 原因：從 SSH 執行、而 `/dev/console` 不屬於這個帳號時，`brew services` 會改用 `user/<uid>` domain，與 `setup-macos.sh` 使用的 `gui/<uid>` 不一致，restart 會落在另一個 domain。
+**預設執行者**是經 SSH 登入 Mac mini 的 operator agent，帳號是 Trading 使用者（`TQ_REPO_ROOT` 所在家目錄的擁有者）。Phase 1 的 session gate 證明這個 SSH session 能管理該使用者的 launchd `gui/` domain 與 `brew services`。**gate 失敗時，operator 只做唯讀的部分，Phase 2–3 與 rollback（R2、R3）都由 Wan 在 Mac mini 的實體畫面（console 登入同一個帳號、在 Terminal 執行）照本文件操作。** R3 自己會在還原任何檔案之前重新檢查 session，不符就停下。原因：從 SSH 執行、而 `/dev/console` 不屬於這個帳號時，`brew services` 會改用 `user/<uid>` domain，與 `setup-macos.sh` 使用的 `gui/<uid>` 不一致，restart 會落在另一個 domain。
 
 **Wan 必須事先同意或聯絡得到：**
 
@@ -51,7 +51,7 @@ Mac mini 上會變動的只有：
 
 - **不得 start、stop、restart、kill、signal、attach、編輯任何 tnauqquant 的 launchd job、tmux session／pane、程序、config、`.env`、run-state 或 log。** 本文件只讀取它們（`launchctl list`、`tmux list-panes`、`pgrep -lf`、`shasum`、`tail`）。只有下面這些會變動：`homebrew.mxcl.alloy`（只透過 `brew services restart` 與 `setup-macos.sh`）、`com.wanbrain.skyeye-trading-probe`、`com.wanbrain.skyeye-trading-pnl-history`，以及上面列出的 SkyEye 檔案。
 - **census 找到本文件沒有預期的 tnauqquant 程序、tmux session 或 launchd job 時，只記錄，絕不碰它。** Phase 5 的 census 必須與 Phase 1 完全相同。
-- **時間：** Phase 2 與 Phase 3 開始前都要跑 `outside_window`。它在 UTC 18:05–19:30 一律拒絕：18:15–19:30 是 tnauqquant 的每日重啟時窗，前面再留 10 分鐘，讓一次 CHANGE 不會跨進去。
+- **時間：** 每個 CHANGE（Phase 0 的 staging、Phase 2、Phase 3、R2、R3）在第一個變更之前都檢查時間，UTC 18:05–19:30 一律拒絕：18:15–19:30 是 tnauqquant 的每日重啟時窗，前面再留 10 分鐘，讓一次 CHANGE 不會跨進去。rollback 也一樣：時窗內 R2／R3 會印出 `STOP:` 而不做任何變更，等到 19:30 UTC 之後再執行。這段期間 Alloy 可能停在失敗的狀態（例如 Phase 3 `rc=3`），Trading 的 log 與 metrics 會中斷，所以要通知 Wan 與 manager。
 - 不印出 `config.env` 全文（內含 Cloudflare service token），只取 hash 與指定的非機密 key。
 - Mac mini 與 monitoring-prod 各只能有一位 operator 執行本文件，一次一位。換手時把 `$WORK`／`$CUT` 路徑與執行紀錄交給下一位，下一位從 `$WORK/vars` 繼續，不重做已完成的 Phase。
 - **不加 Alertmanager silence。** 所有 Trading 告警都是 `notification_mode="shadow"`，不會發 Telegram。
@@ -116,8 +116,10 @@ scp "$OUT/skyeye-alloy-$M7.tar" "$MAC:skyeye-alloy-$M7.tar"
 ```bash
 /bin/bash
 M7=<同上>; TAR_SHA=<上面記下的 TAR_SHA>; PROBE_SHA=<上面記下的 PROBE_SHA>
-S="$HOME/skyeye-staging/macmini-$M7"
-if [ -e "$S" ]; then
+S="$HOME/skyeye-staging/macmini-$M7"; T="$(date -u +%H%M)"
+if [ "$T" -ge 1805 ] && [ "$T" -lt 1930 ]; then
+  echo "STOP: it is $T UTC; no CHANGE between 18:05 and 19:30 UTC (tnauqquant daily restart 18:15-19:30)"
+elif [ -e "$S" ]; then
   echo "STOP: $S already exists"
 elif [ "$(shasum -a 256 "$HOME/skyeye-alloy-$M7.tar" | cut -c1-64)" != "$TAR_SHA" ]; then
   echo "STOP: $HOME/skyeye-alloy-$M7.tar does not match TAR_SHA"
@@ -133,6 +135,7 @@ fi
 整段一起貼上執行。結果：
 
 - `STAGED`：完成。
+- `STOP: it is … UTC`：什麼都沒寫入。Phase 1 的 helpers 還沒建立，所以這裡直接寫出與 `outside_window` 相同的時窗。等到 19:30 UTC 之後整段重貼。
 - `STOP: … already exists`：什麼都沒寫入。不覆蓋，改用新的 `MERGE`，或請 manager 確認舊目錄的來源。
 - `STOP: … does not match TAR_SHA`：什麼都沒寫入。從 operator 機器重新 `scp`，再跑一次。
 - 沒有 `STAGED` 也沒有 `STOP:`：解壓或 `probe.sh` 檢查失敗，`$S` 可能已部分建立。停下，把輸出交給 manager，不要使用 `$S`。
@@ -184,9 +187,11 @@ outside_window() {
   fi
   echo "CLOCK-OK $t UTC"
 }
-# 證明這個 session 能管理使用者的 gui/ launchd domain 與 brew services
+# 證明這個 session 能管理使用者的 gui/ launchd domain 與 brew services。
+# session_gate stopped-ok 是 R3 用的：Alloy 可以停止或沒有載入，console、domain 與 brew 的檢查不變
 session_gate() {
-  local rc=0 me owner
+  local rc=0 me owner mode="${1:-}" out
+  out="$WORK/brew-services${mode:+-$mode}"
   me="$(id -u)"
   owner="$(stat -f %u "$CONSOLE")"
   if [ "$owner" = "$me" ]; then
@@ -201,21 +206,26 @@ session_gate() {
     echo "STOP: launchctl print $DOMAIN failed"
     rc=1
   fi
-  if launchctl print "$DOMAIN/$ALLOY_LABEL" >/dev/null 2>&1; then
+  if [ "$mode" = stopped-ok ]; then
+    :
+  elif launchctl print "$DOMAIN/$ALLOY_LABEL" >/dev/null 2>&1; then
     echo ALLOY-IN-GUI-DOMAIN
   else
     echo "STOP: $ALLOY_LABEL is not loaded in $DOMAIN"
     rc=1
   fi
-  if ! brew services info "$FORMULA" --json >"$WORK/brew-services.json" 2>"$WORK/brew-services.err"; then
+  # 清空 HOMEBREW_SERVICES_NO_DOMAIN_WARNING：它會讓 brew 不印 user/* 的警告
+  if ! HOMEBREW_SERVICES_NO_DOMAIN_WARNING='' brew services info "$FORMULA" --json >"$out.json" 2>"$out.err"; then
     echo "STOP: brew services info $FORMULA --json failed"
     rc=1
-  elif grep -q 'instead of gui' "$WORK/brew-services.err"; then
+  elif grep -q 'instead of gui' "$out.err"; then
     echo "STOP: brew services uses the user/* domain in this session"
     rc=1
-  elif [ "$(plutil -extract 0.loaded raw -o - "$WORK/brew-services.json" 2>/dev/null)" != true ] ||
-    [ "$(plutil -extract 0.running raw -o - "$WORK/brew-services.json" 2>/dev/null)" != true ] ||
-    [ "$(plutil -extract 0.file raw -o - "$WORK/brew-services.json" 2>/dev/null)" != "$LA/$ALLOY_LABEL.plist" ]; then
+  elif [ "$mode" = stopped-ok ]; then
+    echo BREW-SERVICES-GUI
+  elif [ "$(plutil -extract 0.loaded raw -o - "$out.json" 2>/dev/null)" != true ] ||
+    [ "$(plutil -extract 0.running raw -o - "$out.json" 2>/dev/null)" != true ] ||
+    [ "$(plutil -extract 0.file raw -o - "$out.json" 2>/dev/null)" != "$LA/$ALLOY_LABEL.plist" ]; then
     echo "STOP: brew services does not report $ALLOY_LABEL loaded and running from $LA"
     rc=1
   else
@@ -411,11 +421,11 @@ rfc3339_ns() {
     $frac = substr((defined $frac ? $frac : "") . "000000000", 0, 9);
     printf "%d%s\n", $s, $frac;' "$1"
 }
-# 來源端 log 證據（只讀）：最新的 raw log 取倒數第二行（一定已經寫完整），
-# 它的 time= 不早於 SINCE（epoch 秒）時印出事件時間（epoch ns），否則印 none。
+# 來源端 log 證據（只讀）：最新的 raw log 取最後一個以換行結束的行（還沒寫完、
+# 沒有換行的尾行跳過），它的 time= 不早於 SINCE（epoch 秒）時印出事件時間（epoch ns），否則印 none。
 # 輸出是一行要原樣貼到 monitoring-prod 執行的：loki_accept STRATEGY EPOCH_NS|none SINCE
 log_evidence() {
-  local s="$1" since="$2" glob minutes f t ns=none
+  local s="$1" since="$2" glob minutes f line t ns=none
   if [ "$s" != "$(env_value TQ_STRATEGY)" ]; then
     echo "STOP: $s is not this host's TQ_STRATEGY"
     return 1
@@ -424,7 +434,12 @@ log_evidence() {
   minutes=$(( ($(date +%s) - since) / 60 + 1 ))
   f="$(find "${glob%/*}" -maxdepth 1 -type f -name "${glob##*/}" -mmin "-$minutes" -exec ls -1t {} + 2>/dev/null | head -n 1)"
   if [ -n "$f" ]; then
-    t="$(tail -n 2 "$f" | head -n 1 | grep -oE '(^|[[:space:]])time=[^[:space:]]+' | head -n 1 |
+    if [ -z "$(tail -c 1 "$f")" ]; then
+      line="$(tail -n 1 "$f")"
+    else
+      line="$(sed '$d' "$f" | tail -n 1)"
+    fi
+    t="$(printf '%s\n' "$line" | grep -oE '(^|[[:space:]])time=[^[:space:]]+' | head -n 1 |
       sed -E 's/^[[:space:]]*time=//; s/"//g')"
     if [ -n "$t" ] && ns="$(rfc3339_ns "$t")" && [ -n "$ns" ] &&
       [ "$(( ns / 1000000000 ))" -ge "$since" ]; then
@@ -437,9 +452,20 @@ log_evidence() {
 }
 # R3：照 setup record 還原 SkyEye 的檔案，restart Alloy，兩個 job 回到 Phase 1 的狀態。
 # 每一步失敗都印出 STOP 並回傳 1，之後的步驟不會執行。
+# 時間、session 與 record 的檢查都在第一個變更之前；它們失敗時什麼都沒還原。
 r3_rollback() {
   local record="$1" path label state
   date -u +%FT%TZ >"$WORK/r3-start"
+  if ! outside_window; then
+    echo "STOP: R3 waits until 19:30 UTC; nothing was restored"
+    return 1
+  fi
+  if ! session_gate stopped-ok >"$WORK/session-gate.r3"; then
+    cat "$WORK/session-gate.r3"
+    echo "STOP: this session cannot manage $DOMAIN; nothing was restored, Wan runs R3 at the console"
+    return 1
+  fi
+  echo SESSION-OK
   if [ -z "$record" ] || [ ! -f "$record/present.list" ] || [ ! -f "$record/absent.list" ] ||
     [ ! -f "$record/transaction.meta" ]; then
     echo "STOP: incomplete record '$record'; nothing was restored"
@@ -486,6 +512,21 @@ r3_rollback() {
   fi
   echo JOBS-AS-PHASE1
 }
+# R2：撤銷 Phase 2 的 pin。Phase 1 時本來就已經 pin 的，維持 pin
+r2_unpin() {
+  if ! outside_window; then
+    echo "STOP: R2 waits until 19:30 UTC; the pin was not changed"
+    return 1
+  fi
+  if [ "$(cat "$WORK/pinned.before")" = false ]; then
+    brew unpin "$FORMULA" || { echo "STOP: brew unpin $FORMULA failed"; return 1; }
+  fi
+  if ! alloy_pinned | cmp -s - "$WORK/pinned.before"; then
+    echo "STOP: the pin differs from Phase 1"
+    return 1
+  fi
+  echo PIN-AS-PHASE1
+}
 EOF
 . "$WORK/helpers.sh"
 date -u +%FT%TZ | tee "$WORK/phase1-start"
@@ -508,7 +549,7 @@ session_gate | tee "$WORK/session-gate"; echo "rc=${PIPESTATUS[0]}"
 - `homebrew.mxcl.alloy` 載入在那個 domain。
 - `brew services info grafana/grafana/alloy --json` 回報 loaded、running，plist 在 `~/Library/LaunchAgents`，而且沒有印出 `using user/* instead of gui/*`。
 
-任何一行是 `STOP:`：**operator 留在唯讀**，照常跑完 Phase 1 其餘的唯讀檢查，把結果交給 manager。Phase 2–3 由 Wan 在 Mac mini 的實體畫面上（同一個帳號登入 console，在 Terminal 執行 `/bin/bash`）從「斷線重連」那一行接手，先重跑 `session_gate`，必須是 `rc=0`。
+任何一行是 `STOP:`：**operator 留在唯讀**，照常跑完 Phase 1 其餘的唯讀檢查，把結果交給 manager。Phase 2–3，以及之後需要的 R2、R3，由 Wan 在 Mac mini 的實體畫面上（同一個帳號登入 console，在 Terminal 執行 `/bin/bash`）從「斷線重連」那一行接手，先重跑 `session_gate`，必須是 `rc=0`。Phase 4、5 的唯讀檢查仍可由 operator 做；判斷需要 R3 時，交給 Wan 執行。
 
 **Alloy 版本：**
 
@@ -625,6 +666,12 @@ mac_ages() {
 mac_alerts() { q 'ALERTS{product="tnauqquant",server_id="macmini-m2",alertstate="firing"}' \
   | jq -c '[.[].metric | {alertname, strategy}] | sort'; }
 mac_history_valid() { q 'tnauqquant_pnl_history_valid{product="tnauqquant",server_id="macmini-m2"}' | jq -c '[.[].value[1]]'; }
+# P&L history builder 的累積 metrics（沒有專用 dashboard，只能直接查）：valid、快取的完成週期數、
+# 最早的週期時間、目前的跨 run 累積 Real P&L
+mac_history() {
+  q '{__name__=~"tnauqquant_pnl_history_(valid|cached_cycles|first_supported_event_timestamp_seconds|current_value_usdt)",product="tnauqquant",server_id="macmini-m2"}' |
+    jq -S -c 'map({key: (.metric.__name__ | sub("^tnauqquant_pnl_history_"; "")), value: .value[1]}) | from_entries'
+}
 # Mac mini 的 log_evidence 印出的那一行：loki_accept STRATEGY EPOCH_NS|none SINCE。
 # 先要求 Loki 在該 strategy 的 stream 裡有時間戳剛好是 EPOCH_NS 的行（Alloy 用 log 的 time=
 # 當時間戳），找到之後 label 與 scrub 檢查才算數。空的 stream 永遠不會印出 LOKI-ACCEPTED。
@@ -665,6 +712,7 @@ targets | tee "$CUT/pre-targets.json"
 jq -e 'map(select(.server_id == "macmini-m2") | .strategy) == ["toobit-mexc-btc"]' "$CUT/pre-targets.json"   # true
 mac_ages | tee "$CUT/ages.pre.json"                  # probe 一筆 age < 60；history 一筆 age < 120
 mac_history_valid | tee "$CUT/history-valid.pre.json"
+mac_history | tee "$CUT/history.pre.json"            # valid、cached_cycles、first_supported_…、current_value_usdt
 mac_alerts | tee "$CUT/alerts.pre.json"
 ```
 
@@ -697,10 +745,13 @@ alloy_pid | cmp - "$WORK/alloy-pid.before" && echo ALLOY-PID-SAME
 
 ```bash
 if phase3_ready; then
-  date +%s >"$WORK/phase3-epoch"; date -u +%FT%TZ | tee "$WORK/phase3-start"
-  "$SETUP" </dev/null 2>&1 | tee "$WORK/setup.out"; echo "rc=${PIPESTATUS[0]}" | tee -a "$WORK/setup.out"
+  date -u +%FT%TZ | tee "$WORK/phase3-start"
+  "$SETUP" </dev/null 2>&1 | tee "$WORK/setup.out"; SETUP_RC=${PIPESTATUS[0]}; echo "rc=$SETUP_RC" | tee -a "$WORK/setup.out"
   RECORD="$(new_record)"; declare -p RECORD >>"$WORK/vars"; echo "RECORD=$RECORD"
   [ -z "$RECORD" ] || grep -E '^(alloy_action|start_inputs|status)=' "$RECORD/transaction.meta"
+  if [ "$SETUP_RC" = 0 ] && wait_ready; then
+    echo $(( $(date +%s) + 1 )) >"$WORK/loki-since"; echo "LOKI-SINCE $(cat "$WORK/loki-since")"
+  fi
 fi
 ```
 
@@ -722,6 +773,8 @@ rc=0
 ```
 
 `ENV-RECORD-PRESENT` 時，`Alloy action:` 會是 `reload (config.alloy changed; its environment did not)`，也是成功。`transaction.meta` 的 `status=committed`。
+
+`rc=0` 之後區塊會等 Alloy 連續兩次 ready，再印出 `LOKI-SINCE <epoch>`，把那一秒加 1 寫進 `$WORK/loki-since`：這是 Loki 驗收的起點，新的 `config.alloy` 一定已經生效。`phase3-start` 只是變更紀錄，不能拿來當 Loki 的起點，因為 installer 先 stage、驗證，之後才替換設定並 restart，這段期間舊的 Alloy 還在推送沒有新遮蔽的 log。加 1 秒是為了排除切換那一秒裡、切換之前寫出的行。
 
 依 `rc` 判斷：
 
@@ -746,7 +799,7 @@ sleep 30; textfile_values | tee "$WORK/textfile.after"
 echo "now=$(date +%s)"
 ```
 
-- `ETC-INPUTS-SAME`、`CONFIG-CURRENT`、`JOBS-AS-PHASE1`、`ENV-RECORDED` 都要印出，不能有 `STOP:`，ready 要成功。任何一項不符：執行 R3，然後 STOP。
+- Phase 3 區塊要印出 `LOKI-SINCE`；以下 `ETC-INPUTS-SAME`、`CONFIG-CURRENT`、`JOBS-AS-PHASE1`、`ENV-RECORDED` 都要印出，不能有 `STOP:`，ready 要成功。任何一項不符：執行 R3，然後 STOP。
 - `textfile.after` 的 `tnauqquant_probe_timestamp_seconds` 必須在 `now` 的 60 秒內，否則執行 R3，然後 STOP。
 - 其他 textfile 值和 `textfile.before` 不同時**不 rollback**：與 Phase 1 試跑的差異一致時，就是新 probe 報出的真實狀態。記錄下來，交給 tnauqquant manager。
 - `alloy-log.after` 的 warn／error 只做紀錄，判斷以 Phase 4 為準。
@@ -770,10 +823,10 @@ mac_alerts | tee "$CUT/alerts.post.json"; diff "$CUT/alerts.pre.json" "$CUT/aler
 **Loki（Mac mini 先取證據）：**
 
 ```bash
-log_evidence toobit-mexc-btc "$(cat "$WORK/phase3-epoch")" | tee "$WORK/loki-evidence.phase4"
+log_evidence toobit-mexc-btc "$(cat "$WORK/loki-since")" | tee "$WORK/loki-evidence.phase4"
 ```
 
-≥ 60 秒後，把那一行 `loki_accept …`（例：`loki_accept toobit-mexc-btc 1763107262345000000 1763107200`）原樣貼到 monitoring-prod 執行。`log_evidence` 取的是來源 raw log 裡一個已經寫完的事件，`loki_accept` 要求 Loki 有同一個時間戳的行，之後才檢查 label 與 scrub，所以沒有收到任何 log 時不會通過。`SINCE` 是 Phase 3 開始的時間，因此 scrub 檢查只看新的 `config.alloy` 生效之後的行。
+≥ 60 秒後，把那一行 `loki_accept …`（例：`loki_accept toobit-mexc-btc 1763107262345000000 1763107200`）原樣貼到 monitoring-prod 執行。`log_evidence` 取的是來源 raw log 最後一個以換行結束的事件，`loki_accept` 要求 Loki 有同一個時間戳的行，之後才檢查 label 與 scrub，所以沒有收到任何 log 時不會通過。`SINCE` 是 `loki-since`（新的 `config.alloy` 生效、Alloy ready 之後的下一秒），所以事件與 scrub 檢查都只看新 pipeline 送出的行。
 
 - `LOKI-ACCEPTED`：通過。
 - `LOKI-PENDING`、`LOKI-MISSING` 或 `LOKI-ERROR`：等 2 分鐘，在 Mac mini 重跑上面那一行 `log_evidence`，≥ 60 秒後再貼一次，最多共三次。
@@ -784,7 +837,7 @@ log_evidence toobit-mexc-btc "$(cat "$WORK/phase3-epoch")" | tee "$WORK/loki-evi
 
 **PENDING 的後續驗收：** tnauqquant manager 回報策略已經執行並寫出 raw log 之後 24 小時內，由 SkyEye operator 做一次，結果補進 `docs/work-log.md`：
 
-1. Mac mini：`/bin/bash`，`WORK=$(ls -d "$HOME"/skyeye-macmini-* | tail -n 1); . "$WORK/vars"; eval "$("$BREW_BIN" shellenv)"; . "$WORK/helpers.sh"`，執行 `log_evidence toobit-mexc-btc "$(cat "$WORK/phase3-epoch")"`。
+1. Mac mini：`/bin/bash`，`WORK=$(ls -d "$HOME"/skyeye-macmini-* | tail -n 1); . "$WORK/vars"; eval "$("$BREW_BIN" shellenv)"; . "$WORK/helpers.sh"`，執行 `log_evidence toobit-mexc-btc "$(cat "$WORK/loki-since")"`。`$WORK` 已經不在時（不應該發生，見收尾）：照 Phase 1 開頭那段建一個新的 `$WORK` 與 `helpers.sh`（`MERGE` 用執行紀錄裡的值），再把執行紀錄的 `loki-since` 寫回 `$WORK/loki-since`。`log_evidence` 只需要 `helpers.sh`、`config.env` 與這個值。
 2. ≥ 60 秒後在 monitoring-prod：`CUT="$HOME/macmini-rollout-<M7>"; . "$CUT/helpers.sh"`，貼上那一行。
 3. `LOKI-ACCEPTED` 才結案。仍是 `LOKI-PENDING`，就等策略下一次執行再做。其他結果交給 manager。
 
@@ -808,17 +861,21 @@ monitoring-prod：
 ```bash
 mac_ages                                                   # probe < 60，history < 120
 mac_alerts | tee "$CUT/alerts.final.json"                  # 與 Phase 4 判讀過的一致
+mac_history | tee "$CUT/history.final.json"
+jq -e -s '.[1].valid == .[0].valid and .[1].first_supported_event_timestamp_seconds == .[0].first_supported_event_timestamp_seconds and ((.[1].cached_cycles // "0") | tonumber) >= ((.[0].cached_cycles // "0") | tonumber)' "$CUT/history.pre.json" "$CUT/history.final.json" >/dev/null && echo HISTORY-KEPT
 ```
+
+`HISTORY-KEPT` 表示 P&L history 的累積沒有被重設：`valid` 與最早的週期時間不變，快取的完成週期數沒有變少。`current_value_usdt` 會隨新週期變動，只記錄。沒有 `HISTORY-KEPT`：不 rollback，把兩個 JSON 交給 manager。
 
 Grafana：
 
 - 「Trading · 策略總覽」（`https://grafana.wanbrain.com/d/trading-strategy-fleet`）的 `macmini-m2 / toobit-mexc-btc` 那一列有值，其他列不變。
-- 「Trading · 策略詳情」（`https://grafana.wanbrain.com/d/trading-strategy-detail?var-server_id=macmini-m2&var-strategy=toobit-mexc-btc`）各 panel 有值，30 日累積 Real P&L 曲線沒有斷掉。
+- 「Trading · 策略詳情」（`https://grafana.wanbrain.com/d/trading-strategy-detail?var-server_id=macmini-m2&var-strategy=toobit-mexc-btc`）的「本輪實現損益」、「最近完成週期」、「已完成週期」、「目前餘額」、「監控摘要」有值，「本輪實現損益 · 週期走勢」在 Phase 3 前後沒有斷掉，「最新策略日誌 · 已去識別」有 Phase 3 之後的行（策略沒在跑時可以是空的）。跨 run 的累積 P&L 不在任何 dashboard 上，以上面的 `HISTORY-KEPT` 為準。
 
 收尾：
 
 - 把執行紀錄（下表）與 shadow 排除時窗（`phase3-start` 到 `phase5-end`）寫進 `docs/work-log.md`。
-- `$WORK`、`$STAGE` 保留 7 天供 rollback，之後 `rm -rf "$WORK" "$STAGE"`。`$RECORD` 保留到下一次重跑 installer。
+- `$STAGE` 保留 7 天供 rollback，之後 `rm -rf "$STAGE"`。`$WORK` 保留到 7 天後**而且** Loki 驗收已結案（`LOKI-ACCEPTED`，或 manager 判定結案）才 `rm -rf "$WORK"`：PENDING 的後續驗收要用它的 `vars`、`helpers.sh` 與 `loki-since`。`$RECORD` 保留到下一次重跑 installer。
 - 回報 manager 與 tnauqquant manager：Alloy 版本與 pin、probe 值有沒有變化、Loki 驗收結果（ACCEPTED／PENDING／FAILED）、census 是否完全相同。
 
 ## Rollback
@@ -835,27 +892,28 @@ Grafana：
 ### R2 — 撤銷 pin
 
 ```bash
-if [ "$(cat "$WORK/pinned.before")" = false ]; then brew unpin "$FORMULA"; fi
-alloy_pinned | cmp - "$WORK/pinned.before" && echo PIN-AS-PHASE1
+r2_unpin; echo "rc=$?"
 ```
 
-Phase 1 時本來就已經 pin 的，維持 pin。`brew unpin` 只刪除 pin 紀錄，不碰 keg 與 service。
+成功時印出 `CLOCK-OK …`、`PIN-AS-PHASE1`、`rc=0`。Phase 1 時本來就已經 pin 的，維持 pin。`brew unpin` 只刪除 pin 紀錄，不碰 keg 與 service。`STOP: R2 waits until 19:30 UTC`：沒有任何變更，19:30 UTC 之後再執行。其他 `STOP:`：交給 manager。
 
 ### R3 — 退回 Phase 3
 
 把 Mac mini 還原成 Phase 2 結束時的狀態：Phase 3 前的 probe、P&L history、`config.alloy` 與 plist，Alloy 在這些檔案上重新啟動，兩個 SkyEye job 回到 `jobs.before` 的狀態。步驟寫在 Phase 1 的 `helpers.sh`（`r3_rollback`），`tests/trading/test-macmini-alloy-rollout.sh` 執行的就是同一段程式：
 
-1. record 必須有 `present.list`、`absent.list` 與 `transaction.meta`。
-2. `inputs_same`：`config.alloy` 以外的 `$ETC` 檔案（`config.env`、`extra-args.txt`…）必須與 Phase 1 相同，也沒有多出檔案。不符就停，一個檔案都沒還原，因為 restart 會套用沒人驗證過的內容。
-3. 照 record 刪除 `absent.list` 的檔案、從 `previous/` 複製回 `present.list` 的檔案，然後要求五個 SkyEye 檔案與 `skyeye.before` 完全相同。
-4. `alloy validate "$ETC"` 通過才 `brew services restart grafana/grafana/alloy`，並等連續兩次 ready。
-5. probe 與 history job 依 `jobs.before` 重新 bootout／bootstrap／enable，最後狀態必須與 `jobs.before` 相同。
+1. `outside_window`：UTC 18:05–19:30 停下，什麼都不做。
+2. `session_gate stopped-ok`：`/dev/console` 屬於這個帳號、看得到 `gui/<uid>`、`brew services` 沒有改用 `user/*`。Alloy 這時可以是停止的（例如 Phase 3 `rc=3` 之後），所以不要求它已載入或 running。不符就停，交給 Wan 在 console 執行 R3。
+3. record 必須有 `present.list`、`absent.list` 與 `transaction.meta`。
+4. `inputs_same`：`config.alloy` 以外的 `$ETC` 檔案（`config.env`、`extra-args.txt`…）必須與 Phase 1 相同，也沒有多出檔案。不符就停，一個檔案都沒還原，因為 restart 會套用沒人驗證過的內容。
+5. 照 record 刪除 `absent.list` 的檔案、從 `previous/` 複製回 `present.list` 的檔案，然後要求五個 SkyEye 檔案與 `skyeye.before` 完全相同。
+6. `alloy validate "$ETC"` 通過才 `brew services restart grafana/grafana/alloy`，並等連續兩次 ready。
+7. probe 與 history job 依 `jobs.before` 重新 bootout／bootstrap／enable，最後狀態必須與 `jobs.before` 相同。
 
 ```bash
 r3_rollback "$RECORD" 2>&1 | tee "$WORK/r3.log"; echo "rc=${PIPESTATUS[0]}"
 ```
 
-成功時依序印出 `status=committed`（`rc=3` 之後是 `status=rollback_incomplete`）、`restored <RECORD>`、`FILES-AS-PHASE1`、`ALLOY-RESTARTED`、`JOBS-AS-PHASE1`、`rc=0`。接著：
+成功時依序印出 `CLOCK-OK …`、`SESSION-OK`、`status=committed`（`rc=3` 之後是 `status=rollback_incomplete`）、`restored <RECORD>`、`FILES-AS-PHASE1`、`ALLOY-RESTARTED`、`JOBS-AS-PHASE1`、`rc=0`。接著：
 
 ```bash
 hash_skyeye | cmp - "$WORK/skyeye.before" && echo SKYEYE-RESTORED
@@ -867,6 +925,8 @@ monitoring-prod：`mac_ages` 回到 probe < 60、history < 120，`mac_alerts` �
 
 `rc` 不是 0 時，`r3.log` 最後一行的 `STOP:` 說明停在哪裡。停手，執行 `jobs_state | tee "$WORK/jobs.r3-stop"`，把 `$WORK` 交給 manager 與 Wan：
 
+- `STOP: R3 waits until 19:30 UTC …`：**什麼都沒做。** 19:30 UTC 之後重跑同一行。Alloy 若停在失敗狀態，通知 Wan 與 manager 監控會中斷到那時。
+- `STOP: this session cannot manage …`：**什麼都沒做。** 上面印出的 session gate 說明哪一項不符。交給 Wan 在 Mac mini 的 console 從「斷線重連」那一行接手，再跑同一行 R3。
 - `STOP: incomplete record …` 或 `STOP: a file in … differs from Phase 1 …`：**一個檔案都沒還原**，Alloy 與 job 沒有被碰。等 manager 判斷。
 - 其他 `STOP:`（檔案還原、`alloy validate`、restart、ready 或 job 載入失敗）：檔案已部分或全部還原。**不要重跑**，等 manager 判斷。
 
@@ -879,7 +939,7 @@ R3 不刪除 Phase 3 寫入的 `installed-env.sha256`。它記錄的是沒有變
 | Phase 0 staging | | `MERGE`、`TAR_SHA`、`PROBE_SHA`、`STAGE` |
 | Phase 1 前置檢查 | | `WORK`、`CUT`、執行者（SSH operator 或 Wan 在 console）、`session-gate`、Alloy 版本、`pinned.before`、`env-keys.before` 與預期不同的地方、`render-compare`、census 裡本文件沒有預期的項目 |
 | Phase 2 pin | | `ALREADY-PINNED` 或 pin 的時間 |
-| Phase 3 setup-macos.sh | | `rc`、`RECORD`、`Alloy action`、`alloy-pid.before` → `alloy-pid.after`、textfile 差異 |
+| Phase 3 setup-macos.sh | | `rc`、`RECORD`、`Alloy action`、`loki-since`、`alloy-pid.before` → `alloy-pid.after`、textfile 差異 |
 | Phase 4 中央與 Loki | | `ages.post.json`、告警差異、`loki_accept` 結果 |
 | Phase 5 最終核對 | | `TNAUQQUANT-SAME`、Grafana 畫面、Loki 驗收：ACCEPTED／PENDING／FAILED |
 | PENDING 後續驗收 | | `loki_accept` 的那一行與結果 |
