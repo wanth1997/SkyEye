@@ -149,20 +149,23 @@ alloy --version | head -1
 
 If it is not in the table, stop and report the version instead of running the installer. `SKYEYE_ALLOY_UNTESTED_VERSION=<exact version>` lets an installer continue on an unlisted version with a warning; it exists for development and must name exactly the installed version, so a value left over from another host cannot let a different version through. Do not use it on a production host.
 
-**To move a host to another Alloy version:** first add the version in the repository. Pull its image by digest, add it to `SKYEYE_ALLOY_TEST_IMAGES` and the platform list in `alloy-versions.env`, and merge once `scripts/verify-all` passes. Then on the host:
+**To move a host to another Alloy version:** first add the version in the repository. Pull its image by digest, add it to `SKYEYE_ALLOY_TEST_IMAGES` and the platform list in `alloy-versions.env`, and merge once `scripts/verify-all` passes. Then on the host, from a checkout of that merge:
 
 ```bash
-sudo apt-mark unhold alloy
-sudo apt-get install alloy=<version>-1
-sudo apt-mark hold alloy
 alloy --version | head -1
+sudo agents/alloy/upgrade-linux.sh --to <version> --check
+sudo agents/alloy/upgrade-linux.sh --to <version>
 ```
+
+`upgrade-linux.sh` refuses, with nothing changed, unless it runs as root and holds the host lock, `<version>` is listed for linux (there is no override), the `alloy` package is installed and its binary reports the same version, and apt offers exactly one `<version>-*` package and still offers the installed one. It downloads both packages, checks their names and versions, and validates the live `CONFIG_FILE` with the new binary; `--check` stops there and deletes the download. Otherwise it unholds, runs `dpkg --force-confold -i`, requires `/etc/default/alloy` and every file in `/etc/alloy` to be byte-identical (with the same mode and owner), restarts Alloy if it was running and the package scripts did not already restart it, then requires one main process for 5 seconds, `/-/ready` within 60 seconds (at the `--server.http.listen-addr` in `CUSTOM_ARGS`, `127.0.0.1:12345` by default) and the new version, and holds the package. The restart interrupts every pipeline on the host once.
+
+Any failure reinstalls the previous package, restores those files and the hold, brings Alloy back as it was, and exits 1. If that cannot finish, it exits 3 with `CRITICAL: rollback_incomplete` and the checks to run. Each run keeps `/var/lib/skyeye-alloy/upgrade/<UTC>-<pid>/` (mode 0700) with both packages and `upgrade.meta`; during the run it also holds a copy of the config files, which hold credentials, deleted once the run succeeds or rolls back. `sudo agents/alloy/upgrade-linux.sh --rollback <record>` moves back to the package that record replaced, with the same checks and automatic rollback, and restores the hold state from before the upgrade. Exit codes: 0 done or nothing to do, 1 refused or rolled back, 2 usage, 3 rollback incomplete.
 
 On macOS, `brew upgrade grafana/grafana/alloy` installs the tap's current version. `setup-macos.sh` refuses to install Alloy when the tap's version is not listed.
 
 ## One run at a time
 
-`setup.sh`, `trading/setup-linux.sh` (`add` and the flag form), `trading/setup-linux.sh retire` and `uninstall.sh` share `/run/skyeye-alloy.lock`. While one of them runs, the others stop before reading or changing anything and name the lock file. Nothing needs cleaning up after a crash: the kernel releases the lock when the run's last process exits. A child process the run started that is still running keeps the lock until it exits. To see whether a run holds the lock:
+`setup.sh`, `upgrade-linux.sh`, `trading/setup-linux.sh` (`add` and the flag form), `trading/setup-linux.sh retire` and `uninstall.sh` share `/run/skyeye-alloy.lock`. While one of them runs, the others stop before reading or changing anything and name the lock file. Nothing needs cleaning up after a crash: the kernel releases the lock when the run's last process exits. A child process the run started that is still running keeps the lock until it exits. To see whether a run holds the lock:
 
 ```bash
 sudo sh -c 'test ! -e /run/skyeye-alloy.lock || flock -n /run/skyeye-alloy.lock true' \
