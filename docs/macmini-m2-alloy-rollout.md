@@ -421,11 +421,12 @@ rfc3339_ns() {
     $frac = substr((defined $frac ? $frac : "") . "000000000", 0, 9);
     printf "%d%s\n", $s, $frac;' "$1"
 }
-# 來源端 log 證據（只讀）：最新的 raw log 取最後一個以換行結束的行（還沒寫完、
-# 沒有換行的尾行跳過），它的 time= 不早於 SINCE（epoch 秒）時印出事件時間（epoch ns），否則印 none。
+# 來源端 log 證據（只讀）：最新的 raw log 只讀一次最後 64 KiB，從同一份內容取最後一個以換行
+# 結束的行（還沒寫完、沒有換行的尾行跳過；讀取期間追加的內容不影響結果），
+# 它的 time= 不早於 SINCE（epoch 秒）時印出事件時間（epoch ns），否則印 none。
 # 輸出是一行要原樣貼到 monitoring-prod 執行的：loki_accept STRATEGY EPOCH_NS|none SINCE
 log_evidence() {
-  local s="$1" since="$2" glob minutes f line t ns=none
+  local s="$1" since="$2" glob minutes f bytes line t ns=none
   if [ "$s" != "$(env_value TQ_STRATEGY)" ]; then
     echo "STOP: $s is not this host's TQ_STRATEGY"
     return 1
@@ -434,11 +435,15 @@ log_evidence() {
   minutes=$(( ($(date +%s) - since) / 60 + 1 ))
   f="$(find "${glob%/*}" -maxdepth 1 -type f -name "${glob##*/}" -mmin "-$minutes" -exec ls -1t {} + 2>/dev/null | head -n 1)"
   if [ -n "$f" ]; then
-    if [ -z "$(tail -c 1 "$f")" ]; then
-      line="$(tail -n 1 "$f")"
-    else
-      line="$(sed '$d' "$f" | tail -n 1)"
-    fi
+    # 結尾加一個 . 再去掉，保留 $(...) 會吃掉的結尾換行
+    bytes="$(tail -c 65536 "$f"; echo .)"
+    bytes="${bytes%.}"
+    case "$bytes" in
+      *$'\n') line="${bytes%$'\n'}" ;;
+      *$'\n'*) line="${bytes%$'\n'*}" ;;
+      *) line="" ;;
+    esac
+    line="${line##*$'\n'}"
     t="$(printf '%s\n' "$line" | grep -oE '(^|[[:space:]])time=[^[:space:]]+' | head -n 1 |
       sed -E 's/^[[:space:]]*time=//; s/"//g')"
     if [ -n "$t" ] && ns="$(rfc3339_ns "$t")" && [ -n "$ns" ] &&
@@ -862,10 +867,16 @@ monitoring-prod：
 mac_ages                                                   # probe < 60，history < 120
 mac_alerts | tee "$CUT/alerts.final.json"                  # 與 Phase 4 判讀過的一致
 mac_history | tee "$CUT/history.final.json"
-jq -e -s '.[1].valid == .[0].valid and .[1].first_supported_event_timestamp_seconds == .[0].first_supported_event_timestamp_seconds and ((.[1].cached_cycles // "0") | tonumber) >= ((.[0].cached_cycles // "0") | tonumber)' "$CUT/history.pre.json" "$CUT/history.final.json" >/dev/null && echo HISTORY-KEPT
+jq -r -s 'def ok: type == "object" and has("valid") and has("cached_cycles") and (.valid != "1" or has("first_supported_event_timestamp_seconds")); if length != 2 or (map(ok) | all | not) then "HISTORY-UNVERIFIED" elif .[1].valid == .[0].valid and .[1].first_supported_event_timestamp_seconds == .[0].first_supported_event_timestamp_seconds and (.[1].cached_cycles | tonumber) >= (.[0].cached_cycles | tonumber) then "HISTORY-KEPT" else "HISTORY-CHANGED" end' "$CUT/history.pre.json" "$CUT/history.final.json" 2>/dev/null || echo HISTORY-UNVERIFIED
 ```
 
-`HISTORY-KEPT` 表示 P&L history 的累積沒有被重設：`valid` 與最早的週期時間不變，快取的完成週期數沒有變少。`current_value_usdt` 會隨新週期變動，只記錄。沒有 `HISTORY-KEPT`：不 rollback，把兩個 JSON 交給 manager。
+這一行只會印出一個結果：
+
+- `HISTORY-KEPT`：P&L history 的累積沒有被重設。兩份 snapshot 都有 `valid` 與 `cached_cycles`（`valid` 是 `1` 時也要有最早的週期時間），`valid` 與最早的週期時間不變，快取的完成週期數沒有變少。`current_value_usdt` 會隨新週期變動，只記錄。
+- `HISTORY-CHANGED`：兩份都完整，但上面的條件不成立。
+- `HISTORY-UNVERIFIED`：任一份是空的（查詢失敗，或 Prometheus 沒有 history 資料）或缺少必要欄位，無法證明累積被保留。
+
+`HISTORY-CHANGED` 與 `HISTORY-UNVERIFIED` 都不 rollback，把兩個 JSON 交給 manager。
 
 Grafana：
 

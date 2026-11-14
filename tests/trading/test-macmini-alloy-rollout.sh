@@ -105,11 +105,11 @@ PHASE0_BLOCK="$(runbook_block 'S="$HOME/skyeye-staging/macmini-$M7"')"
 PHASE2_BLOCK="$(runbook_block 'if outside_window; then')"
 PHASE3_BLOCK="$(runbook_block 'if phase3_ready; then')"
 PHASE4_EVIDENCE="$(grep -m 1 '^log_evidence toobit-mexc-btc ' "$RUNBOOK")"
-HISTORY_KEPT="$(grep -m 1 '^jq -e -s ' "$RUNBOOK")"
+HISTORY_KEPT="$(grep -m 1 '^jq -r -s ' "$RUNBOOK")"
 [[ "$PHASE0_BLOCK" == *'tar -x -f'* && "$PHASE0_BLOCK" == *$'\nfi' ]] || \
   fail 'the runbook Phase 0 staging block was not found'
 [[ -n "$PHASE4_EVIDENCE" ]] || fail 'the runbook Phase 4 log_evidence line was not found'
-[[ "$HISTORY_KEPT" == *HISTORY-KEPT ]] || fail 'the runbook Phase 5 HISTORY-KEPT line was not found'
+[[ "$HISTORY_KEPT" == *HISTORY-KEPT*HISTORY-UNVERIFIED ]] || fail 'the runbook Phase 5 HISTORY-KEPT line was not found'
 [[ "$PHASE2_BLOCK" == *'brew pin "$FORMULA"'* && "$PHASE2_BLOCK" == *$'\nfi' ]] || \
   fail 'the runbook Phase 2 block was not found'
 [[ "$PHASE3_BLOCK" == *'"$SETUP" </dev/null'* && "$PHASE3_BLOCK" == *$'\nfi' ]] || \
@@ -794,6 +794,33 @@ printf 'time=%s.5+08:00 level=INFO msg=partial' "$(local_time "$((now - 1))")" \
   >>"$BOX/repo/logs/live-runs/20261114_000200_toobit-mexc.raw.log"
 mac_sh "log_evidence $STRATEGY $((now - 60))"
 check 'an unfinished tail is skipped' out_line "loki_accept $STRATEGY $((now - 30))750000000 $((now - 60))"
+# An unfinished line appended while log_evidence reads the file does not
+# replace the finished line it saw.
+rm -f "$BOX"/repo/logs/live-runs/*.raw.log
+printf 'time=%s.75+08:00 level=INFO msg=newer\n' "$(local_time "$((now - 30))")" \
+  >"$BOX/repo/logs/live-runs/20261114_000250_toobit-mexc.raw.log"
+printf 'time=%s.5+08:00 level=INFO msg=partial' "$(local_time "$((now - 1))")" >"$BOX/ctl/append-after-tail"
+rm -f "$BOX/bin/tail"
+{
+  printf '#!/bin/bash\n'
+  printf '"%s" "$@"\nrc=$?\n' "$(command -v tail)"
+  cat <<'EOF'
+# After the first read of a raw log, the strategy appends an unfinished line.
+if [ -e "$BOX/ctl/append-after-tail" ]; then
+  for last; do :; done
+  case "$last" in
+    *.raw.log) cat "$BOX/ctl/append-after-tail" >>"$last"; rm -f "$BOX/ctl/append-after-tail" ;;
+  esac
+fi
+exit "$rc"
+EOF
+} >"$BOX/bin/tail"
+chmod 755 "$BOX/bin/tail"
+mac_sh "log_evidence $STRATEGY $((now - 60))"
+check 'an unfinished line appended between reads is skipped' out_line "loki_accept $STRATEGY $((now - 30))750000000 $((now - 60))"
+check 'the unfinished line was appended during the read' bash -c '! test -e "$1"' _ "$BOX/ctl/append-after-tail"
+rm -f "$BOX/bin/tail"
+ln -s "$(command -v tail)" "$BOX/bin/tail"
 # A file holding only an unfinished line has no evidence.
 rm -f "$BOX"/repo/logs/live-runs/*.raw.log
 printf 'time=%s.5+08:00 level=INFO msg=partial' "$(local_time "$((now - 1))")" \
@@ -884,7 +911,7 @@ prom_history() {
 }
 mac_history_to() {
   : >"$LOKI/calls.log"
-  central_run mac_history >"$CUT_DIR/$1"
+  central_run mac_history >"$CUT_DIR/$1" 2>/dev/null
 }
 history_kept() { CUT="$CUT_DIR" bash -c "$HISTORY_KEPT" >"$BOX/log/out" 2>&1; }
 prom_history 42 1762000000 12.5
@@ -899,11 +926,34 @@ check 'one more cycle: history kept' out_line HISTORY-KEPT
 prom_history 41 1762000000 12.5
 mac_history_to history.final.json
 history_kept
-check 'fewer cycles: history not kept' out_lacks HISTORY-KEPT
+check 'fewer cycles: history changed' out_line HISTORY-CHANGED
 prom_history 42 1762500000 12.5
 mac_history_to history.final.json
 history_kept
-check 'a later first cycle: history not kept' out_lacks HISTORY-KEPT
+check 'a later first cycle: history changed' out_line HISTORY-CHANGED
+# Empty or failed snapshots prove nothing.
+empty_prom='{"status":"success","data":{"resultType":"vector","result":[]}}'
+printf '%s\n' "$empty_prom" >"$LOKI/prom.json"
+mac_history_to history.pre.json
+mac_history_to history.final.json
+history_kept
+check 'two empty snapshots: unverified' out_line HISTORY-UNVERIFIED
+prom_history 42 1762000000 12.5
+mac_history_to history.pre.json
+printf '%s\n' "$empty_prom" >"$LOKI/prom.json"
+mac_history_to history.final.json
+history_kept
+check 'an empty final snapshot: unverified' out_line HISTORY-UNVERIFIED
+rm -f "$LOKI/prom.json"
+mac_history_to history.final.json
+history_kept
+check 'a failed final query: unverified' out_line HISTORY-UNVERIFIED
+printf '{"cached_cycles":"42","valid":"1"}\n' >"$CUT_DIR/history.final.json"
+history_kept
+check 'valid=1 without the first cycle time: unverified' out_line HISTORY-UNVERIFIED
+printf '{"cached_cycles":"0","valid":"0"}\n' | tee "$CUT_DIR/history.pre.json" >"$CUT_DIR/history.final.json"
+history_kept
+check 'valid=0 on both sides without a first cycle time: kept' out_line HISTORY-KEPT
 
 # ──────────── Loki acceptance start: old lines during the installer ─────────
 
