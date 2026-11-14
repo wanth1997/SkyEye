@@ -293,6 +293,11 @@ waitfor() { # waitfor SECONDS COMMAND...
 }
 answered() { tail -n "+$((seen + 1))" /tmp/status.log | grep -q "^$code "; }
 counted() { [ "$(webhook failed_)" -gt "$failed" ]; }
+settled() { # the failure count has held for longer than one flush and its retries
+  now=$(webhook failed_)
+  if [ "$now" != "$last" ]; then last=$now; since=$(date +%s); fi
+  [ $(($(date +%s) - since)) -ge 15 ]
+}
 delivered() { grep -q "^POST telegram-high .*\"product\":\"fixture-$code\"" /tmp/sink.log; }
 
 cp /tmp/w/regress.yml /etc/alertmanager/alertmanager.yml
@@ -305,15 +310,24 @@ ready 20 || echo 'not ok  Alertmanager does not become ready for the status case
 amtool alert add --alertmanager.url=$URL $(cat /tmp/w/watchdog.txt) --annotation=summary=fixture >/dev/null || \
   echo 'not ok  the watchdog cannot be sent for the status cases'
 for code in 404 503 200; do
+  if [ "$code" = 200 ]; then
+    # A 503 flush retries until its timeout (10s at least) and counts its failure
+    # only then. Silence the watchdog so no new flush starts, and wait for the
+    # count to hold, so the baseline below holds no 503 failure still to come.
+    sid=$(amtool silence add --alertmanager.url=$URL alertname=SkyEyeWatchdog \
+      --comment=settle --duration=10m) || echo "not ok  $code: the watchdog cannot be silenced"
+    last=-1; since=$(date +%s)
+    waitfor 60 settled || echo "not ok  $code: the 503 failures do not settle"
+  fi
   seen=$(wc -l </tmp/status.log)
   failed=$(webhook failed_)
   printf '%s\n' "$code" >/tmp/status.tmp && mv /tmp/status.tmp /tmp/status
+  [ "$code" != 200 ] || amtool silence expire --alertmanager.url=$URL "$sid" || \
+    echo "not ok  $code: the settle silence cannot be expired"
   waitfor 20 answered || echo "not ok  $code: no ping reached the endpoint"
   if [ "$code" = 200 ]; then
-    # The group flushes one at a time, so once a 2xx is answered no failure from
-    # an earlier code is still in flight.
-    failed=$(webhook failed_)
-    sleep 2
+    # Let the 200 complete and one more flush pass.
+    sleep 6
     [ "$(webhook failed_)" -eq "$failed" ] || echo "not ok  $code: a 2xx answer is counted as a failure"
   else
     waitfor 25 counted || echo "not ok  $code: the failed ping is not counted under the webhook integration"

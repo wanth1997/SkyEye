@@ -114,11 +114,18 @@ Ping 一直失敗、log 是 `unexpected status code` 之類的錯誤，代表網
 | 401、403 | `authError` | 不重試。每次 flush 一行 `level=ERROR … after 1 attempts: unexpected status code 401: <回應內容>` |
 | 404（網址錯、check 被刪） | `clientError` | 同上，`unexpected status code 404` |
 | 429 | `rateLimited` | 同上，不重試，下一次 flush（1 分鐘後）再送 |
-| 500、503 | `serverError` | 同一次 flush 內重試，每次一行 `level=WARN msg="Notify attempt failed, will retry later"`，flush 結束時一行 `level=ERROR … notify retry canceled after N attempts` |
+| 500、503 | `serverError` | 同一次 flush 內一直重試到逾時（離線測試用 5s group_interval，10 秒內 7 次）。相同的重試錯誤只記一次：第一次失敗、或錯誤內容改變時才有一行 `level=WARN msg="Notify attempt failed, will retry later"`，所以 WARN 沒再出現不代表停止重試。Flush 結束時一行 `level=ERROR … notify retry canceled after N attempts`，N 是這次 flush 的總嘗試次數 |
 | `deadman_url` 不存在 | `other` | 不重試，`read url_file: … no such file or directory` |
 | 逾時 | `contextDeadlineExceeded` | 這一列沒有實測，只確認 `/metrics` 有這個 label |
 
-Log 只會出現回應內容，不會出現網址。以上任何一種 Alertmanager 都照常運作，其他 route 不受影響。`AlertmanagerNotifyFailures` 依 `integration` 加總，且排除 webhook，所以不會因此送 Telegram。
+連線、DNS、TLS 這類傳輸錯誤，log 裡的網址會被遮掉（`RedactURL`）。但非 2xx 回應的 body 會原封不動寫進 log，不會過濾網址；端點如果在回應裡帶出 ping URL，log 裡就會有它。**要分享 Alertmanager log 之前，先確認裡面沒有 ping URL**（只印筆數，不印網址）：
+
+```bash
+cd /home/ubuntu/SkyEye
+sudo docker compose logs alertmanager | grep -cF -f alertmanager/secrets/deadman_url   # 預期 0
+```
+
+以上任何一種 Alertmanager 都照常運作，其他 route 不受影響。`AlertmanagerNotifyFailures` 依 `integration` 加總，且排除 webhook，所以不會因此送 Telegram。
 
 ### 6. 一次性 20 分鐘 Alertmanager 停止測試
 
