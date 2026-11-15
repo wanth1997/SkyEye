@@ -44,7 +44,7 @@ The scripts are plain ASCII and run under Windows PowerShell 5.1 and PowerShell 
 | 3 | One run at a time: `C:\ProgramData\SkyEye\alloy-install.lock` | STOP |
 | 4 | Alloy: service exists, runs as LocalSystem, loads a single config file, version is listed | STOP |
 | 5 | Secret files: both exist, plausible size, ACL and owner limited to SYSTEM and Administrators. Read from metadata only | STOP |
-| 6 | No `config.alloy.rollback` left by a killed run; the live config's `product` and `server_id` equal the parameters, or it sets none. Every `external_labels` map is read, in one line or several and in any order. One that cannot be read for certain (a value that is not a plain string, a label set twice, not a literal map) is refused, not taken for unset | STOP |
+| 6 | No `config.alloy.rollback` left by a killed run; the live config's `product` and `server_id` equal the parameters, or it sets none. Every `external_labels` map is read, in one line or several and in any order. One that cannot be read for certain (a value that is not a plain string, a label set twice, not a literal map, or a literal map with more after its closing brace such as `{...}.field`, `{...}["key"]` or an operator) is refused, not taken for unset | STOP |
 | 7 | Render, then `alloy validate` | STOP |
 | 8 | Smoke run: a real `alloy run` of the render on its own port and storage path, with only the push URLs pointed at a closed local port. Catches what validate accepts, such as a secret used as a header | STOP |
 | 9 | Swap: `File.Replace`, the old config becomes `config.alloy.rollback`; restart | STOP if the swap itself fails |

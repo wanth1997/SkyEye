@@ -180,15 +180,23 @@ function New-SkyEyeConfigText {
 
 # Alloy source as tokens: ident, string (text between the quotes, escapes left
 # as written), raw (text between backquotes), newline, and other (one
-# character). Comments and blanks are left out. $null when a string or a block
-# comment never ends, because nothing after it can be trusted.
+# character, or one of == != <= >=, so that a lone = is always an assignment).
+# Blanks and comments are left out, except that a block comment with a line
+# break in it ends the line for Alloy and so counts as a newline. $null when a
+# string or a block comment never ends, because nothing after it can be trusted.
 function Get-SkyEyeAlloyTokens {
     param([string]$Text)
     $pattern = '\G(?:(?<comment>//[^\n]*|/\*[\s\S]*?\*/)|(?<string>"(?:[^"\\\n]|\\[^\n])*")|(?<raw>`[^`]*`)' +
-        '|(?<ident>[A-Za-z_][A-Za-z0-9_]*)|(?<newline>\n)|(?<blank>[^\S\n]+)|(?<other>[\s\S]))'
+        '|(?<ident>[A-Za-z_][A-Za-z0-9_]*)|(?<newline>\n)|(?<blank>[^\S\n]+)|(?<other>[=!<>]=|[\s\S]))'
     $tokens = New-Object System.Collections.ArrayList
     foreach ($match in [regex]::Matches([string]$Text, $pattern)) {
-        if ($match.Groups['comment'].Success -or $match.Groups['blank'].Success) {
+        if ($match.Groups['blank'].Success) {
+            continue
+        }
+        if ($match.Groups['comment'].Success) {
+            if ($match.Value.Contains("`n")) {
+                [void]$tokens.Add(@{ Kind = 'newline'; Text = "`n" })
+            }
             continue
         }
         $value = $match.Value
@@ -237,10 +245,23 @@ function Skip-SkyEyeAlloyNewlines {
     return $Index
 }
 
+# True when nothing more of an expression follows at Tokens[Index]: the line or
+# the file ends there, or a comma or a closing brace does. Alloy does not carry
+# an expression over a line break that comes after a closing brace.
+function Test-SkyEyeAlloyValueEnd {
+    param($Tokens, [int]$Index)
+    if ($Index -ge $Tokens.Count) {
+        return $true
+    }
+    return ((Test-SkyEyeAlloyToken $Tokens $Index 'newline') -or (Test-SkyEyeAlloyToken $Tokens $Index 'other' ',') -or
+        (Test-SkyEyeAlloyToken $Tokens $Index 'other' '}'))
+}
+
 # Reads the map that starts at Tokens[Start] into Entry and returns the index
 # after it. Entries may be separated by commas, by line breaks or by both, the
 # keys may be quoted, and they may come in any order. Entry.unreadable is set,
 # and reading stops, as soon as product or server_id cannot be read for certain.
+# Whether the map is the whole value is for the caller to check.
 function Read-SkyEyeLabelMap {
     param($Tokens, [int]$Start, [hashtable]$Entry)
     $index = Skip-SkyEyeAlloyNewlines $Tokens $Start
@@ -280,9 +301,11 @@ function Read-SkyEyeLabelMap {
 
         # The value runs to the next comma or to the closing brace of the map.
         # A line break ends it only when a new entry or the end of the map
-        # follows, so an expression may span lines.
+        # follows, so an expression may span lines. $closers holds the bracket
+        # each open one is waiting for; outside all of them the value is at
+        # the level of the map.
         $value = New-Object System.Collections.ArrayList
-        $depth = 0
+        $closers = New-Object System.Collections.ArrayList
         while ($true) {
             if ($index -ge $Tokens.Count) {
                 $Entry.unreadable = 'the external_labels map never closes'
@@ -293,25 +316,39 @@ function Read-SkyEyeLabelMap {
                 $after = Skip-SkyEyeAlloyNewlines $Tokens $index
                 $entryFollows = ((Test-SkyEyeAlloyToken $Tokens $after 'ident') -or (Test-SkyEyeAlloyToken $Tokens $after 'string')) -and
                     (Test-SkyEyeAlloyToken $Tokens ($after + 1) 'other' '=')
-                if ($depth -eq 0 -and $value.Count -gt 0 -and ($entryFollows -or (Test-SkyEyeAlloyToken $Tokens $after 'other' '}'))) {
+                if ($closers.Count -eq 0 -and $value.Count -gt 0 -and ($entryFollows -or (Test-SkyEyeAlloyToken $Tokens $after 'other' '}'))) {
                     break
                 }
                 $index = $index + 1
                 continue
             }
             if ($token.Kind -ceq 'other') {
-                if ($depth -eq 0 -and ($token.Text -ceq ',' -or $token.Text -ceq '}')) {
+                if ($closers.Count -eq 0 -and ($token.Text -ceq ',' -or $token.Text -ceq '}')) {
                     break
                 }
-                if ($token.Text -ceq '{' -or $token.Text -ceq '[' -or $token.Text -ceq '(') {
-                    $depth = $depth + 1
+                if ($closers.Count -eq 0 -and $token.Text -ceq '=') {
+                    # No expression has a lone =. Another entry has begun
+                    # inside this value, and it may be product or server_id.
+                    $Entry.unreadable = ('the value of ' + $key + ' in external_labels runs into another entry')
+                    return $index
+                }
+                if ($token.Text -ceq '{') {
+                    [void]$closers.Add('}')
+                }
+                elseif ($token.Text -ceq '[') {
+                    [void]$closers.Add(']')
+                }
+                elseif ($token.Text -ceq '(') {
+                    [void]$closers.Add(')')
                 }
                 elseif ($token.Text -ceq '}' -or $token.Text -ceq ']' -or $token.Text -ceq ')') {
-                    $depth = $depth - 1
-                    if ($depth -lt 0) {
+                    # Counting alone would let `( ... }` close on the wrong
+                    # bracket and hide the entries in between.
+                    if ($closers.Count -eq 0 -or $closers[$closers.Count - 1] -cne $token.Text) {
                         $Entry.unreadable = 'the external_labels map has unbalanced brackets'
                         return $index
                     }
+                    $closers.RemoveAt($closers.Count - 1)
                 }
             }
             [void]$value.Add($token)
@@ -365,14 +402,22 @@ function Get-SkyEyeExternalLabels {
         if (-not (Test-SkyEyeAlloyToken $tokens $here 'ident' 'external_labels')) {
             continue
         }
-        # a.external_labels is a reference to one, not the attribute itself.
-        if (Test-SkyEyeAlloyToken $tokens ($here - 1) 'other' '.') {
-            continue
-        }
         $assign = Skip-SkyEyeAlloyNewlines $tokens ($here + 1)
         $entry = @{ product = $null; server_id = $null; unreadable = '' }
         if (Test-SkyEyeAlloyToken $tokens $assign 'other' '=') {
+            # Read it whatever comes before the name. Nothing valid is written
+            # `a.external_labels = ...`, and after `x = 1.` the name starts an
+            # attribute; skipping either as a reference would read it as unset.
             $index = Read-SkyEyeLabelMap -Tokens $tokens -Start ($assign + 1) -Entry $entry
+            # The map says what is sent only when it is the whole value.
+            # `{ a = { ... } }.a` and `{ ... } == { ... }` start with a map too.
+            if (-not $entry.unreadable -and -not (Test-SkyEyeAlloyValueEnd $tokens $index)) {
+                $entry.unreadable = 'the external_labels map is followed by more of an expression'
+            }
+        }
+        elseif (Test-SkyEyeAlloyToken $tokens ($here - 1) 'other' '.') {
+            # a.external_labels with no = after it reads one and sets none.
+            continue
         }
         else {
             $entry.unreadable = 'external_labels is not written as an attribute'

@@ -468,6 +468,41 @@ foreach ($form in $labelForms.Keys) {
     Assert-True ((Get-SkyEyeLabelConflict $text 'other-product' 'existing-windows') -match 'product="github-runner"') ('external_labels, ' + $form + ': another product is a conflict')
 }
 
+# The map is still the whole value when only these follow its closing brace: a
+# comment, the end of the line, the brace that closes the block, a comma, the
+# end of the file. (A comma follows only inside another map, and a file that
+# ends there is not valid Alloy; both are read rather than guessed at.)
+$wholeMap = '{ product = "github-runner", server_id = "existing-windows" }'
+$writeHead = 'loki.write "central" {' + "`n" + '  endpoint { url = "https://example.invalid/l" }' + "`n" + '  external_labels = '
+$wholeValueForms = [ordered]@{
+    'a line comment after the map'                      = $writeHead + $wholeMap + ' // labels' + "`n}`n"
+    'a block comment after the map'                     = $writeHead + $wholeMap + ' /* labels */' + "`n}`n"
+    'a comment over two lines, then the next attribute' = $writeHead + $wholeMap + ' /* labels' + "`n" + '  end here */ max_streams = 5' + "`n}`n"
+    'the block closes on the same line'                 = $writeHead + $wholeMap + ' }' + "`n"
+    'the file ends after the block closes'              = $writeHead + $wholeMap + '}'
+    'the file ends after the map'                       = $writeHead + $wholeMap
+    'a comma after the map, inside another map'         = 'x "y" {' + "`n" + '  z = { external_labels = ' + $wholeMap + ', other = 1 }' + "`n}`n"
+    'the map on the line after the equals sign'         = $writeHead + "`n`n    " + $wholeMap + "`n}`n"
+    'a comment over two lines before the map'           = $writeHead + '/* the' + "`n" + '  labels */ ' + $wholeMap + "`n}`n"
+}
+foreach ($form in $wholeValueForms.Keys) {
+    $text = $wholeValueForms[$form]
+    $labels = Get-SkyEyeExternalLabels $text
+    Assert-True ($labels.Count -eq 1 -and $labels[0].product -ceq 'github-runner' -and
+        $labels[0].server_id -ceq 'existing-windows' -and -not $labels[0].unreadable) ('external_labels, ' + $form + ': both labels read')
+    Assert-Equal (Get-SkyEyeLabelConflict $text 'github-runner' 'existing-windows') '' ('external_labels, ' + $form + ': same values are no conflict')
+    Assert-True ((Get-SkyEyeLabelConflict $text 'github-runner' 'different-windows') -match 'server_id="existing-windows"') ('external_labels, ' + $form + ': another server_id is a conflict')
+}
+
+# An attribute right after a number that ends in a dot. The comment ends the
+# line for Alloy, so this is an attribute and not a reference to x.external_labels.
+$afterDot = 'loki.write "central" {' + "`n" + '  endpoint { url = "https://example.invalid/l" }' + "`n" +
+    '  max_streams = 1. /* streams' + "`n" + '  */ external_labels = ' + $wholeMap + "`n}`n"
+Assert-True ((Get-SkyEyeLabelConflict $afterDot 'github-runner' 'different-windows') -match 'server_id="existing-windows"') 'external_labels after a number that ends in a dot is read'
+Assert-True ((Get-SkyEyeLabelConflict ('x "y" {' + "`n" + '  n = 1.' + "`n" + '  external_labels = ' + $wholeMap + "`n}`n") 'github-runner' 'different-windows') -match 'server_id="existing-windows"') 'external_labels on the line after a number that ends in a dot is read'
+# Not valid Alloy, but a name with = after it is read and never skipped as a reference.
+Assert-True ((Get-SkyEyeLabelConflict ('x "y" { n = 1. /* one */ external_labels = ' + $wholeMap + ' }') 'github-runner' 'different-windows') -match 'server_id="existing-windows"') 'external_labels with a dot before it and = after it is read'
+
 # A second map that disagrees is found even when the first one agrees.
 $twoMaps = (New-LabelConfig '{ product = "github-runner", server_id = "wans-windows" }') +
     'loki.write "central" {' + "`n" + '  external_labels = { server_id = "old-name", product = "github-runner" }' + "`n" + '}' + "`n"
@@ -493,6 +528,31 @@ $unreadableForms = [ordered]@{
     'a reference, not a map'     = 'local.file.labels.content'
     'a function around the map'  = 'coalesce({ product = "github-runner" }, {})'
     'a string that never closes' = '{ product = "github-runner, server_id = "wans-windows" }'
+    # A literal map with more of an expression around it, where what Alloy
+    # sends is whatever the rest makes of it, and label names this guard does
+    # not read. `alloy validate` accepts all of these.
+    'a field of the map'                = '{ selected = { product = "github-runner", server_id = "wans-windows" } }.selected'
+    'an index into the map'             = '{ selected = { product = "github-runner", server_id = "wans-windows" } }["selected"]'
+    'a field of a map with the labels'  = '{ product = "github-runner", server_id = "wans-windows" }.product'
+    'a field after a comment'           = '{ selected = { product = "github-runner" } } /* which */ .selected'
+    'a field name on the next line'     = "{ selected = { product = `"github-runner`" } } .`n    selected"
+    'an index after a field'            = '{ a = [{ product = "github-runner" }] }.a[0]'
+    'a comparison with another map'     = '{ product = "github-runner", server_id = "wans-windows" } == { product = "github-runner", server_id = "wans-windows" }'
+    'an inequality'                     = '{ product = "github-runner" } != {}'
+    'an addition'                       = '{ product = "github-runner" } + { server_id = "wans-windows" }'
+    'a logical operator'                = '{ product = "github-runner" } || true'
+    'an arithmetic operator'            = '{ product = "github-runner" } * 2'
+    'a call'                            = '{ product = "github-runner" }("x")'
+    'a map in parentheses'              = '({ product = "github-runner", server_id = "wans-windows" })'
+    'an operator before the map'        = '!{ product = "github-runner", server_id = "wans-windows" }'
+    'a raw string as the label name'    = '{ product = "github-runner", `server_id` = "wans-windows" }'
+    'a label name with an escape'       = '{ "pro\u0064uct" = "github-runner", server_id = "wans-windows" }'
+    'a label name outside ASCII'        = ('{ env' + [char]0xE9 + ' = "prod", server_id = "wans-windows" }')
+    # Not valid Alloy, and refused all the same.
+    'a map as the value of a label'     = '{ product = { name = "github-runner" }, server_id = "wans-windows" }'
+    'a word after the map'              = '{ product = "github-runner" } server_id'
+    'two entries with nothing between'  = '{ env = "prod" server_id = "wans-windows" }'
+    'brackets that do not pair up'      = '{ env = ( server_id = "wans-windows" }'
 }
 foreach ($form in $unreadableForms.Keys) {
     $text = New-LabelConfig $unreadableForms[$form]
@@ -662,6 +722,16 @@ Test-TakeoverRefused 'takeover, a label that is not a plain string' `
     (New-LabelConfig '{ product = "github-runner", server_id = sys.env("COMPUTERNAME") }') 'cannot tell which product and server_id'
 Test-TakeoverRefused 'takeover, external_labels that is not a literal map' `
     (New-LabelConfig 'local.file.labels.content') 'cannot tell which product and server_id'
+# A literal map that is not the whole value. Alloy sends server_id
+# "existing-windows" for the first two; `alloy validate` accepts all three.
+Test-TakeoverRefused 'takeover, a field selected from a literal map' `
+    (New-LabelConfig '{ selected = { product = "github-runner", server_id = "existing-windows" } }.selected') 'cannot tell which product and server_id'
+Test-TakeoverRefused 'takeover, an index into a literal map' `
+    (New-LabelConfig '{ selected = { product = "github-runner", server_id = "existing-windows" } }["selected"]') 'cannot tell which product and server_id'
+Test-TakeoverRefused 'takeover, an operator after a literal map with the same labels' `
+    (New-LabelConfig '{ product = "github-runner", server_id = "wans-windows" } == { product = "github-runner", server_id = "wans-windows" }') 'cannot tell which product and server_id'
+Test-TakeoverRefused 'takeover, another server_id after a number that ends in a dot' `
+    $afterDot 'server_id="existing-windows"'
 
 # The same forms with the values of this run are taken over.
 New-FakeHost | Out-Null

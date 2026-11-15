@@ -74,7 +74,7 @@ SkyEye installer canary: Windows Event Log to Loki delivery check. Safe to ignor
 
 `SkyEye` 這個 event source 在第一次 Install 時註冊，之後一直留著（解除安裝也不移除）。
 
-**標籤衝突。** 現行 config 已經有 `product` / `server_id`，而且跟這次的參數不同時，安裝器會拒絕（`label_takeover`）：已經在中央的 series 不能因為接手而換標籤。`external_labels` 寫成一行、多行或欄位順序不同都會被讀到。讀不出確定值的寫法（值不是單純的字串，例如 `sys.env(...)` 或字串相加；同一個標籤寫兩次；`external_labels` 不是直接寫出來的 map）一律拒絕，`message` 以 `cannot tell which product and server_id` 開頭。這時先把現行 config 的標籤改成直接寫出的字串，再重跑。
+**標籤衝突。** 現行 config 已經有 `product` / `server_id`，而且跟這次的參數不同時，安裝器會拒絕（`label_takeover`）：已經在中央的 series 不能因為接手而換標籤。`external_labels` 寫成一行、多行或欄位順序不同都會被讀到。讀不出確定值的寫法（值不是單純的字串，例如 `sys.env(...)` 或字串相加；同一個標籤寫兩次；`external_labels` 不是直接寫出來的 map；map 的 `}` 後面還接著東西，例如 `{...}.欄位`、`{...}["key"]` 或運算子）一律拒絕，`message` 以 `cannot tell which product and server_id` 開頭。這時先把現行 config 的標籤改成直接寫出的字串，再重跑。
 
 ## 4. 中央端驗證
 
