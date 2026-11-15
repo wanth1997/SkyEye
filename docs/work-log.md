@@ -15,6 +15,25 @@
 ---
 -->
 
+## 2026-11-16 00:01 — Windows 主機監控（第一台 wans-windows）
+
+**改動摘要：** SkyEye 新增 Windows 主機的正式支援：Alloy config 範本、PowerShell 安裝器與解除安裝器、5 條 shadow 告警、dashboard「主機 — Windows」與 runbook，並全部納入 `scripts/verify-all`。這次只 merge；尚未部署到 wans-windows，runner 也還沒安裝。
+
+**修改的檔案：**
+- `agents/alloy/windows/config.alloy.tmpl`、`config-runner-diag.alloy.tmpl`：windows exporter（cpu、logical_disk、memory、net、os、service、system、time）、Alloy 自身的 17 個推送指標、System／Application Event Log，以及選用的 `Runner_*.log`。Secret 以 `local.file`（`is_secret = true`）讀取，header 經 `convert.nonsensitive`。`windows_os_info` 自帶的 `product` 改名為 `os_product`；丟棄 18 個每核心明細與帶有序號、路徑、帳號、IP、MAC 的 info 指標。Log 只留 `job`、`channel`、`level`、`product`、`server_id` 五個標籤，離開主機前去識別化；profile 路徑與帳號名稱含空白時整段遮蔽。
+- `agents/alloy/windows/install.ps1`、`uninstall.ps1`、`SkyEyeAlloy.ps1`：Check（預設，不改任何東西）／Install／Rollback。不提示、不以參數收憑證、不開 secret 檔。換 config 前先 validate 並在獨立 port 與暫存目錄實跑一次；換上後 120 秒 health gate，失敗自動換回。Health gate 以 `queue_highest_sent_timestamp_seconds` 與 Loki 收下 canary 為準；看到重試或非 2xx 之後，要再確實送達並連續 35 秒沒有失敗才通過。現行 config 的 `external_labels` 讀不出確定值時拒絕接手，包含 map 後面還接著 `.欄位`、索引或運算子的寫法。原本停止的服務在檢查失敗後會停回去。結果寫到 `C:\ProgramData\SkyEye\reports\`。
+- `agents/alloy/alloy-versions.env`：`SKYEYE_ALLOY_WINDOWS_VERSIONS="1.18.1"`。
+- `prometheus/rules/windows.yml`、`prometheus/rules/tests/windows.test.yml`：`WindowsHostStale`、`WindowsDiskLow`、`WindowsDiskCritical`、`WindowsClockSkew`、`AlloyAgentPushFailing`，全部 shadow。
+- `prometheus/rules/stack-health.yml`、`prometheus/rules/tests/stack-health.test.yml`：`AllRemoteAgentsSilent` 不變（不計 Windows），補上「Windows agent 還在送不能掩蓋共用 token 失效」的測試。
+- `grafana/dashboards/Hosts/hosts-windows.json`：uid `hosts-windows`。數值卡是 instant query，主機停止回報後顯示「無資料」；折線圖保留歷史。
+- `tests/windows/`、`tests/fixtures/windows/`：installer（fake host，679 項）、config（validate、實跑、secret 變異、標籤契約）、scrub（Event Log 33 例、runner log 16 例，經真的 Loki）、central（shadow 路由、metric 白名單、dashboard 查詢，含「曾回報、現已停止」的主機）。
+- `scripts/verify-all`、`tests/alloy/test-alloy-versions.sh`：`pwsh` 列為必要工具，Windows 範本納入 `alloy validate` 與版本矩陣。
+- `runbooks/windows-host-onboarding.md`、`agents/alloy/windows/README.md`：新增。`runbooks/README.md`、`runbooks/all-remote-agents-silent.md`、`agents/alloy/README.md`、`docs/onboarding-new-product.md`、`docs/grafana-conventions.md`、`README.md`、`AGENTS.md`：更新。
+
+**原因/備註：** `alloy validate` 會放過「secret 直接當 header」的 config，Alloy 啟動時才以 `secrets may not be converted into strings` 退出，所以測試與安裝器都實際跑一次。`prometheus_remote_storage_samples_total` 只算嘗試次數，端點壞掉照樣上升，不能當送達證明；重試計數暫時不動也不算恢復，因為兩次重試之間最長會等 30 秒。名稱的結尾看不出來時（例如帳號後面接一般文字），scrub 會多遮掉後面幾個字，不留半個名字。接手保護只讀現行 config 檔裡的 `external_labels`；用 relabel 規則或 `import.*` module 設定的標籤讀不到。Windows 專用的兩個 Alloy 元件在 macOS／Linux 上不做事，PowerShell 5.1 與真正的服務、registry、ACL、Event Log 呼叫也無法在 macOS 測，第一次實跑是主機上的 Check 模式。驗證機器新裝 pwsh 7.7.0（連帶 dotnet 11.0.100、icu4c@79）。`scripts/verify-all` rc=0（38 步、無 SKIP）；拿掉 `convert.nonsensitive`、改壞 scrub 規則或把 health gate 改回只看計數時，對應的套件會失敗。Dashboard 尚未在 Grafana 用真實資料看過。
+
+---
+
 ## 2026-11-14 21:28 — Alertmanager 升到 v0.34.2
 
 **改動摘要：** Alertmanager 從 `prom/alertmanager:v0.27.0` 升到 `v0.34.2`，修掉 `url_file` webhook 收到非 2xx 回應就 nil-pointer panic 的問題（upstream #3800，v0.28.0 起修正），這是放 `deadman_url` 的前提。新增升級與 rollback runbook，並補上回歸測試。這次只 merge，部署要照 runbook 手動 pull／recreate。
