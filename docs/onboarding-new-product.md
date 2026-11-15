@@ -4,6 +4,8 @@ Target: new service up and visible in central Grafana in **< 30 minutes**.
 
 This assumes the central SkyEye stack (monitoring-prod EC2) is already running and the service team has shell access to their own host.
 
+This page is for Linux hosts. A Windows host uses a different installer, its own Access service token and its own dashboard: follow [`runbooks/windows-host-onboarding.md`](../runbooks/windows-host-onboarding.md).
+
 ## Who does what
 
 | Role | Platform | Does |
