@@ -100,6 +100,7 @@ TODO (low priority): add a pre-commit hook that runs `jq` against every dashboar
 |---|---|---|---|
 | Overview | Overview — All products | `overview-all` | Built in-house |
 | Hosts | Hosts — Node exporter | `hosts-node-exporter` | grafana.com ID 1860, rewritten for pinned UID + `$product` variable |
+| Hosts | 主機 — Windows | `hosts-windows` | Built in-house — Windows exporter host metrics, Alloy push health, Event Log and runner log, by `$product` / `$server_id`. Queries are held to what the Windows agent sends by `tests/windows/test-windows-central.sh`. |
 | PPClub | PPClub — Backend overview | `ppclub-backend-overview` | Built in-house (replaces grafana.com 18739; queries adapted to our `product` / `status` label shape) |
 | PPClub | PPClub — Business | `ppclub-business` | Built in-house — payment / refund / external API / scheduler heartbeats |
 | SkyEye | SkyEye — Stack health | `skyeye-stack-health` | Built in-house — meta-monitoring: Prom TSDB / Loki ingest / AM notifications / Grafana HTTP / blackbox |

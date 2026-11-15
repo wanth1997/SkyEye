@@ -6,6 +6,10 @@ For tnauqquant on macOS, use the dedicated parameterized agent under
 `agents/alloy/trading/`. It tails raw log files and runs a read-only launchd
 probe; it does not use the Linux journald installer documented below.
 
+For a Windows host, use `agents/alloy/windows/` (PowerShell installer, Windows
+exporter and Event Log). See [`windows/README.md`](./windows/README.md) and
+[`runbooks/windows-host-onboarding.md`](../../runbooks/windows-host-onboarding.md).
+
 ## What it does
 
 | Phase | Enabled by | Collected |
@@ -136,6 +140,7 @@ The next successful run overwrites this file, and it holds the credentials of th
 |---|---|
 | `setup.sh`, `trading/setup-linux.sh` | 1.16.3, 1.18.1 |
 | `trading/setup-macos.sh` | 1.18.1 (1.16.3 rejects the macOS template) |
+| `windows/install.ps1` | 1.18.1 (`SKYEYE_ALLOY_WINDOWS_VERSIONS`; validated and run by `tests/windows/test-windows-config.sh`) |
 
 Every installer reads `alloy --version` before it changes anything and stops on any other version, including a different patch release such as 1.16.0. `tests/alloy/test-alloy-versions.sh` validates every template against every listed version, using digest-pinned images, as part of `scripts/verify-all`. `trading/setup-linux.sh retire` and `uninstall.sh` work with any version.
 

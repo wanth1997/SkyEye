@@ -1,0 +1,49 @@
+# One Windows host as central stores it, for tests/windows/test-windows-central.sh:
+# every Prometheus query of the Windows dashboard must return data on these
+# series, and none for a host that is not here. Format: series<TAB>values, in
+# promtool's notation. Label names are the ones windows_exporter v0.31.3 and
+# Alloy 1.18 use; the values are made up.
+up{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	1x20
+up{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	1x20
+windows_system_boot_time_timestamp{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	100x20
+windows_cpu_time_total{core="0,0",mode="idle",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+50x20
+windows_cpu_time_total{core="0,0",mode="user",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+6x20
+windows_cpu_time_total{core="0,0",mode="privileged",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+4x20
+windows_cpu_time_total{core="0,1",mode="idle",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+55x20
+windows_cpu_time_total{core="0,1",mode="user",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+5x20
+windows_memory_available_bytes{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	8e9x20
+windows_memory_physical_total_bytes{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	32e9x20
+windows_memory_committed_bytes{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	20e9x20
+windows_memory_commit_limit{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	40e9x20
+windows_logical_disk_free_bytes{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	7e11x20
+windows_logical_disk_size_bytes{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	1e12x20
+windows_logical_disk_idle_seconds_total{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+57x20
+windows_logical_disk_read_bytes_total{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+4096x20
+windows_logical_disk_write_bytes_total{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+8192x20
+windows_logical_disk_requests_queued{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+windows_time_computed_time_offset_seconds{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	-0.002x20
+windows_os_info{os_product="Windows 11 Home",version="10.0.26300",major_version="10",minor_version="0",build_number="26300",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	1x20
+windows_system_processor_queue_length{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+windows_system_processes{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	210x20
+windows_system_threads{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	3100x20
+windows_net_bytes_received_total{nic="Fake Ethernet Controller",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+1000x20
+windows_net_bytes_sent_total{nic="Fake Ethernet Controller",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+500x20
+windows_net_packets_received_errors_total{nic="Fake Ethernet Controller",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+windows_net_packets_outbound_errors_total{nic="Fake Ethernet Controller",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+windows_net_packets_received_discarded_total{nic="Fake Ethernet Controller",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+windows_net_packets_outbound_discarded_total{nic="Fake Ethernet Controller",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+windows_service_state{name="Alloy",state="running",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	1x20
+windows_service_state{name="Alloy",state="stopped",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+alloy_build_info{version="v1.18.1",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	1x20
+alloy_component_controller_running_components{controller_id="",controller_path="/",health_type="healthy",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	14x20
+alloy_resources_process_resident_memory_bytes{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	2e8x20
+alloy_resources_process_cpu_seconds_total{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+1x20
+prometheus_remote_storage_queue_highest_sent_timestamp_seconds{remote_name="central",url="https://prom-push.invalid/api/v1/write",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+60x20
+prometheus_remote_storage_samples_total{remote_name="central",url="https://prom-push.invalid/api/v1/write",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+1700x20
+prometheus_remote_storage_samples_failed_total{remote_name="central",url="https://prom-push.invalid/api/v1/write",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+prometheus_remote_storage_samples_retried_total{remote_name="central",url="https://prom-push.invalid/api/v1/write",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+prometheus_remote_storage_samples_dropped_total{remote_name="central",url="https://prom-push.invalid/api/v1/write",reason="too_old",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+loki_write_sent_entries_total{host="loki-push.invalid",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0+3x20
+loki_write_dropped_entries_total{host="loki-push.invalid",reason="ingester_error",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+loki_write_batch_retries_total{host="loki-push.invalid",job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	0x20
+ALERTS{alertname="WindowsDiskLow",alertstate="firing",severity="Medium",notification_mode="shadow",volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}	1x20

@@ -1,0 +1,82 @@
+
+////////////////////////////////////////////////////////////////////////////////
+// GitHub Actions runner listener log (appended by install.ps1 -RunnerDiagDir)
+////////////////////////////////////////////////////////////////////////////////
+
+// Runner_*.log only. Worker_*.log holds the whole job message (steps,
+// variables, context) and the job log already lives on GitHub.
+local.file_match "runner_diag" {
+  path_targets = [
+    {
+      __path__ = "@@RUNNER_DIAG_GLOB@@",
+      job      = "github-runner-diag",
+    },
+  ]
+  sync_period       = "30s"
+  ignore_older_than = "24h"
+}
+
+// Each file is read from its start: the runner opens a new log every time it
+// starts, and tailing from the end would lose the first lines of each. Old
+// history stays out through ignore_older_than above and the 24h drop below.
+loki.source.file "runner_diag" {
+  targets       = local.file_match.runner_diag.targets
+  forward_to    = [loki.process.runner_diag.receiver]
+  tail_from_end = false
+}
+
+loki.process "runner_diag" {
+  // A line starts with [2026-11-15 12:00:00Z INFO Component]. What follows
+  // without that prefix, such as a stack trace, belongs to the same entry and
+  // is scrubbed with it.
+  stage.multiline {
+    firstline     = `^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z `
+    max_wait_time = "3s"
+    max_lines     = 200
+  }
+
+  stage.regex {
+    expression = `^\[(?P<diag_time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z) (?P<diag_level>[A-Z]+)\s`
+  }
+
+  stage.timestamp {
+    source = "diag_time"
+    format = "2006-01-02 15:04:05Z07:00"
+  }
+
+  stage.drop {
+    older_than          = "24h"
+    drop_counter_reason = "runner_diag_too_old"
+  }
+
+  stage.drop {
+    source              = "diag_level"
+    value               = "VERB"
+    drop_counter_reason = "runner_diag_verbose"
+  }
+
+  stage.template {
+    source   = "level"
+    template = `{{ if or (eq .diag_level "ERR") (eq .diag_level "CRIT") }}error{{ else if eq .diag_level "WARN" }}warning{{ else }}info{{ end }}`
+  }
+
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
+  // filename is the absolute path of the log, and a new one on every runner
+  // restart.
+  stage.label_drop {
+    values = ["filename"]
+  }
+
+  stage.limit {
+    rate  = 10
+    burst = 500
+    drop  = true
+  }
+
+  forward_to = [loki.process.scrub.receiver]
+}

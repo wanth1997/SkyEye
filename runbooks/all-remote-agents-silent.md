@@ -10,7 +10,7 @@ absent(up{job="integrations/unix"} == 1)   # for: 5m, severity High
 
 > No remote agent is delivering metrics — check cloudflared and the Access service token
 
-所有遠端 Alloy agent 同時停止送 metrics。中央自己的 node-exporter（`job="monitoring-host"`）不算在內。通常每台主機的告警也會同時出現；這條告警指出它們的共同原因，不必逐台查。
+所有遠端 Alloy agent 同時停止送 metrics。中央自己的 node-exporter（`job="monitoring-host"`）不算在內。Windows 主機（`job="integrations/windows"`）也不算：它們各自用專屬的 Access token，不能代表 Linux agents 共用的那一個。通常每台主機的告警也會同時出現；這條告警指出它們的共同原因，不必逐台查。
 
 ## Likely causes
 
@@ -36,6 +36,15 @@ curl -fsS 'http://127.0.0.1:9090/api/v1/query' \
 curl -fsS 'http://127.0.0.1:9090/api/v1/query' \
   --data-urlencode 'query=sum(rate(loki_distributor_lines_received_total[5m]))'
 ```
+
+先用 Windows 主機分辨是 tunnel 還是共用 token（Windows 主機走同一條 tunnel，但 token 不同）：
+
+```bash
+curl -fsS 'http://127.0.0.1:9090/api/v1/query' --data-urlencode 'query=up{job="integrations/windows"} == 1'
+```
+
+- 有結果：tunnel、Access application 與 Prometheus 都正常，問題在 Linux agents 共用的 token `skyeye-agent-push`（到期、撤銷或被移出 policy）。直接看下面第二項。
+- 沒有結果：Windows 主機也斷了（或本來就關機），照下面從 cloudflared 開始查。
 
 判讀：
 
