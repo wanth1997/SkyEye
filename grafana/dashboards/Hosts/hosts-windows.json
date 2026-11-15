@@ -1,7 +1,7 @@
 {
   "uid": "hosts-windows",
   "title": "主機 — Windows",
-  "description": "Windows 主機：Alloy 內建 windows exporter 的主機指標、Alloy 自身的推送狀態、Event Log 與 runner 日誌。告警皆為 shadow。上線與處理步驟見 runbooks/windows-host-onboarding.md。",
+  "description": "Windows 主機：Alloy 內建 windows exporter 的主機指標、Alloy 自身的推送狀態、Event Log 與 runner 日誌。告警皆為 shadow。上方的數值卡是現況，主機停止回報時顯示「無資料」；折線圖保留歷史。上線與處理步驟見 runbooks/windows-host-onboarding.md。",
   "tags": [
     "layer:host",
     "source:windows-exporter",
@@ -110,7 +110,7 @@
     {
       "type": "stat",
       "title": "主機回報",
-      "description": "Alloy 內建 windows exporter 的 scrape 結果。「無資料」代表這台主機目前沒有送任何 metrics 到中央。",
+      "description": "Alloy 內建 windows exporter 的 scrape 結果。現況值：只看最近 5 分鐘內送到中央的資料，主機停止回報後顯示「無資料」，不會停在最後一次的值。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -124,8 +124,9 @@
           "expr": "up{job=\"integrations/windows\",product=\"$product\",server_id=\"$server_id\"}",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -195,7 +196,7 @@
     {
       "type": "stat",
       "title": "開機至今",
-      "description": "",
+      "description": "現況值：只看最近 5 分鐘內送到中央的資料，主機停止回報後顯示「無資料」，不會停在最後一次的值。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -209,8 +210,9 @@
           "expr": "time() - windows_system_boot_time_timestamp{product=\"$product\",server_id=\"$server_id\"}",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -261,7 +263,7 @@
     {
       "type": "gauge",
       "title": "CPU 使用率",
-      "description": "",
+      "description": "最近 5 分鐘的平均。現況值：只看最近 5 分鐘內送到中央的資料，主機停止回報後顯示「無資料」，不會停在最後一次的值。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -272,11 +274,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 * (1 - avg(rate(windows_cpu_time_total{mode=\"idle\",product=\"$product\",server_id=\"$server_id\"}[$__rate_interval])))",
+          "expr": "100 * (1 - avg(rate(windows_cpu_time_total{mode=\"idle\",product=\"$product\",server_id=\"$server_id\"}[5m])))",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -336,7 +339,7 @@
     {
       "type": "gauge",
       "title": "記憶體使用率",
-      "description": "以 available（含 standby cache）計算，不是 free。",
+      "description": "以 available（含 standby cache）計算，不是 free。現況值：只看最近 5 分鐘內送到中央的資料，主機停止回報後顯示「無資料」，不會停在最後一次的值。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -350,8 +353,9 @@
           "expr": "100 * (1 - windows_memory_available_bytes{product=\"$product\",server_id=\"$server_id\"} / windows_memory_physical_total_bytes{product=\"$product\",server_id=\"$server_id\"})",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -411,7 +415,7 @@
     {
       "type": "gauge",
       "title": "磁碟使用率（最滿的磁碟）",
-      "description": "WindowsDiskLow 在剩餘 < 10%、WindowsDiskCritical 在剩餘 < 5% 觸發。",
+      "description": "WindowsDiskLow 在剩餘 < 10%、WindowsDiskCritical 在剩餘 < 5% 觸發。現況值：只看最近 5 分鐘內送到中央的資料，主機停止回報後顯示「無資料」，不會停在最後一次的值。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -425,8 +429,9 @@
           "expr": "max(100 * (1 - windows_logical_disk_free_bytes{volume=~\"[A-Z]:\",product=\"$product\",server_id=\"$server_id\"} / windows_logical_disk_size_bytes{volume=~\"[A-Z]:\",product=\"$product\",server_id=\"$server_id\"}))",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -490,7 +495,7 @@
     {
       "type": "stat",
       "title": "時鐘偏移",
-      "description": "Windows Time 相對於時間來源的偏移（絕對值）。超過 5 秒達 30 分鐘觸發 WindowsClockSkew。",
+      "description": "Windows Time 相對於時間來源的偏移（絕對值）。超過 5 秒達 30 分鐘觸發 WindowsClockSkew。現況值：只看最近 5 分鐘內送到中央的資料，主機停止回報後顯示「無資料」，不會停在最後一次的值。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -504,8 +509,9 @@
           "expr": "abs(windows_time_computed_time_offset_seconds{product=\"$product\",server_id=\"$server_id\"})",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -2153,7 +2159,7 @@
     {
       "type": "stat",
       "title": "Metrics 推送落後",
-      "description": "現在時間減去 Alloy 最後成功送出的 sample 時間。這是送達的證明；samples_total 只算嘗試次數，端點壞掉時照樣上升。",
+      "description": "現在時間減去 Alloy 最後成功送出的 sample 時間。這是送達的證明；samples_total 只算嘗試次數，端點壞掉時照樣上升。現況值：只看最近 5 分鐘內送到中央的資料，主機停止回報後顯示「無資料」，不會停在最後一次的值。歷史請看下方「Metrics 推送」圖。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2167,8 +2173,9 @@
           "expr": "time() - prometheus_remote_storage_queue_highest_sent_timestamp_seconds{job=\"integrations/self\",product=\"$product\",server_id=\"$server_id\"}",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -2227,7 +2234,7 @@
     {
       "type": "stat",
       "title": "Metrics 推送失敗 (1h)",
-      "description": "",
+      "description": "最近 1 小時被中央拒收的 samples。Alloy 自己停止回報時顯示「無資料」。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2238,11 +2245,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(prometheus_remote_storage_samples_failed_total{job=\"integrations/self\",product=\"$product\",server_id=\"$server_id\"}[1h]))",
+          "expr": "sum(increase(prometheus_remote_storage_samples_failed_total{job=\"integrations/self\",product=\"$product\",server_id=\"$server_id\"}[1h])) and on() up{job=\"integrations/self\",product=\"$product\",server_id=\"$server_id\"}",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -2297,7 +2305,7 @@
     {
       "type": "stat",
       "title": "Logs 丟棄 (1h)",
-      "description": "loki_write_dropped_entries_total 在第一次丟棄前不存在，所以沒有資料時顯示 0。",
+      "description": "loki_write_dropped_entries_total 在第一次丟棄前不存在，所以 Alloy 有回報而沒有這個指標時顯示 0；Alloy 停止回報時顯示「無資料」。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2308,11 +2316,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(loki_write_dropped_entries_total{job=\"integrations/self\",product=\"$product\",server_id=\"$server_id\"}[1h])) or vector(0)",
+          "expr": "(sum(increase(loki_write_dropped_entries_total{job=\"integrations/self\",product=\"$product\",server_id=\"$server_id\"}[1h])) or vector(0)) and on() up{job=\"integrations/self\",product=\"$product\",server_id=\"$server_id\"}",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -2367,7 +2376,7 @@
     {
       "type": "stat",
       "title": "Alloy 元件數",
-      "description": "",
+      "description": "現況值：只看最近 5 分鐘內送到中央的資料，主機停止回報後顯示「無資料」，不會停在最後一次的值。",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -2381,8 +2390,9 @@
           "expr": "sum(alloy_component_controller_running_components{job=\"integrations/self\",product=\"$product\",server_id=\"$server_id\"})",
           "refId": "A",
           "legendFormat": "",
-          "range": true,
-          "editorMode": "code"
+          "range": false,
+          "editorMode": "code",
+          "instant": true
         }
       ],
       "fieldConfig": {

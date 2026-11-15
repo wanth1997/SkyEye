@@ -444,6 +444,30 @@ def dashboard_targets(dashboard):
             yield panel, target
 
 
+def dashboard_window(dashboard):
+    """The default time range as a PromQL duration, e.g. 3h for now-3h to now."""
+    span = dashboard.get("time", {})
+    found = re.fullmatch(r"now-(\d+[smhdw])", str(span.get("from", "")))
+    return found.group(1) if found and span.get("to") == "now" else None
+
+
+def shows_one_value(panel):
+    """Stat, gauge and bar gauge: one number, picked by a reducer from what the query returned."""
+    return "reduceOptions" in panel.get("options", {})
+
+
+def shown_now(target, expr, window):
+    """PromQL for the number a one-value panel displays at the right edge of the dashboard.
+
+    An instant query is evaluated once, at "now". A range query returns every
+    step of the dashboard's time range and the reducer takes the last one that
+    has a value, however old it is: last_over_time over that range.
+    """
+    if target.get("instant") and not target.get("range"):
+        return expr
+    return f"last_over_time(({expr})[{window}:1m])"
+
+
 def check_dashboard(args):
     """Static checks on the Windows dashboard, and a promtool test that runs its queries."""
     failures = []
@@ -486,7 +510,7 @@ def check_dashboard(args):
             continue
         expr = target["expr"]
         if sources == {"prometheus"}:
-            prom.append((where, expr))
+            prom.append((where, expr, panel, target))
             selectors = promql_selectors(expr)
             if not selectors:
                 failures.append(f"{where}: no metric found in {expr}")
@@ -512,6 +536,18 @@ def check_dashboard(args):
                 failures.append(f"{where}: uses labels {sorted(labels | grouped)}, the stream has {sorted(budget)}")
     if len(prom) < 20 or len(loki) < 3:
         failures.append(f"only {len(prom)} Prometheus and {len(loki)} Loki queries found; the dashboard was not read")
+    window = dashboard_window(dashboard)
+    if window is None:
+        failures.append(f"cannot read the default time range: {dashboard.get('time')}")
+        window = "3h"
+    for where, _, panel, _ in prom:
+        calcs = panel.get("options", {}).get("reduceOptions", {}).get("calcs")
+        if shows_one_value(panel) and calcs != ["lastNotNull"]:
+            failures.append(f"{where}: reducer {calcs} is not modelled by this test; use lastNotNull")
+    current = [row for row in prom if shows_one_value(row[2])]
+    history = [row for row in prom if not shows_one_value(row[2]) and row[3].get("range")]
+    if len(current) < 10 or len(history) < 15:
+        failures.append(f"only {len(current)} current-state and {len(history)} history queries found")
 
     # Every Prometheus query runs on fixture series: it must return something for
     # the selected host and nothing for a host that does not exist.
@@ -521,6 +557,9 @@ def check_dashboard(args):
             continue
         selector, values = raw.split("\t")
         name = selector.split("{")[0]
+        # The stopped-host case below relies on every series ending at 20 minutes.
+        if not values.endswith("x20"):
+            failures.append(f"the dashboard fixture must hold 20 minutes of each series: {name} has {values}")
         if name not in allowed:
             failures.append(f"the dashboard fixture invents a metric: {name}")
         series.append((selector, values))
@@ -530,20 +569,40 @@ def check_dashboard(args):
         for selector, values in series:
             lines += [f"      - series: {json.dumps(selector)}", f"        values: {json.dumps(values)}"]
         lines.append("    promql_expr_test:")
-        for where, expr in prom:
+        for where, expr, _, _ in prom:
             query = f"count({substitute(expr, args.product, server)}) > bool 0"
             lines += [f"      # {where}", f"      - expr: {json.dumps(query)}", "        eval_time: 10m"]
-            if expect or "vector(0)" in expr:
+            if expect:
                 lines += ["        exp_samples:", "          - labels: '{}'", "            value: 1"]
             else:
                 lines.append("        exp_samples: []")
+
+    # The host reported for twenty minutes and then stopped: the same series,
+    # which end there. Forty minutes later, well past the five minutes
+    # Prometheus looks back and well inside the dashboard's time range, a panel
+    # that shows the current state must show nothing, while the graphs still
+    # hold what was sent before.
+    lines += [f"  - name: current-state panels 40 minutes after {args.server} stopped reporting", "    interval: 1m",
+              "    input_series:"]
+    for selector, values in series:
+        lines += [f"      - series: {json.dumps(selector)}", f"        values: {json.dumps(values)}"]
+    lines.append("    promql_expr_test:")
+    for where, expr, _, target in current:
+        query = f"count({shown_now(target, substitute(expr, args.product, args.server), window)}) > bool 0"
+        lines += [f"      # {where}: must show no data", f"      - expr: {json.dumps(query)}", "        eval_time: 60m",
+                  "        exp_samples: []"]
+    for where, expr, _, target in history:
+        query = f"count(last_over_time(({substitute(expr, args.product, args.server)})[{window}:1m])) > bool 0"
+        lines += [f"      # {where}: history stays", f"      - expr: {json.dumps(query)}", "        eval_time: 60m",
+                  "        exp_samples:", "          - labels: '{}'", "            value: 1"]
     pathlib.Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     for failure in sorted(set(failures)):
         print(f"FAIL dashboard: {failure}")
     if failures:
         return 1
-    print(f"ok: dashboard has {len(prom)} Prometheus and {len(loki)} Loki queries, all scoped and on sent metrics")
+    print(f"ok: dashboard has {len(prom)} Prometheus and {len(loki)} Loki queries, all scoped and on sent metrics; "
+          f"{len(current)} show the current state")
     return 0
 
 

@@ -14,6 +14,11 @@ set -euo pipefail
 #      streams have.
 #   4. Every Prometheus query of the dashboard runs on fixture series: it
 #      returns data for the selected host and nothing for another one.
+#   5. A host that reported and then stopped: the stat and gauge panels, which
+#      say how the host is now, show no data instead of its last value, and the
+#      graphs still show what it sent before. The test asks Prometheus for the
+#      number each panel would display: an instant query as it is, a range
+#      query as the last value inside the dashboard's time range.
 #
 # The dashboard's Loki queries run against real stored entries in
 # tests/windows/test-windows-scrub.sh. The rule semantics are in
@@ -56,8 +61,8 @@ URL=http://127.0.0.1:9090
 if promtool test rules dashboard.test.yml >dashboard.log 2>&1; then
   echo "ok  dashboard queries"
 else
-  echo "not ok  a dashboard query returns no data for the host, or data for another host:"
-  grep -E 'expr:|name:' dashboard.log | head -n 20
+  echo "not ok  a dashboard query returns no data for the host, data for another host, or a value for a host that stopped reporting:"
+  grep -E 'expr:|name:' dashboard.log | head -n 30
 fi
 printf 'global:\n  evaluation_interval: 1m\nrule_files:\n  - /tmp/w/windows.yml\n' >prometheus.yml
 prometheus --config.file=prometheus.yml --storage.tsdb.path=/tmp/tsdb \
