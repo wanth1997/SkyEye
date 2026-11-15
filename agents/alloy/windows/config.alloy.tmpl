@@ -1,0 +1,436 @@
+// Rendered by agents/alloy/windows/install.ps1 for server_id=@@SERVER_ID@@.
+// Windows host: metrics from the embedded windows_exporter and Alloy itself,
+// System and Application Event Log, all pushed to central SkyEye through the
+// Cloudflare tunnel. Logs are scrubbed here, before they leave the host.
+//
+// The file holds no credential. The Access token is read at run time from
+// @@SECRETS_DIR@@, which only SYSTEM and Administrators can open.
+
+////////////////////////////////////////////////////////////////////////////////
+// 1. Cloudflare Access service token
+////////////////////////////////////////////////////////////////////////////////
+
+local.file "cf_id" {
+  filename = "@@SECRETS_DIR@@/cf-access-client-id"
+}
+
+local.file "cf_secret" {
+  filename  = "@@SECRETS_DIR@@/cf-access-client-secret"
+  is_secret = true
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 2. Host metrics
+////////////////////////////////////////////////////////////////////////////////
+
+prometheus.exporter.windows "host" {
+  enabled_collectors = ["cpu", "logical_disk", "memory", "net", "os", "service", "system", "time"]
+
+  // Only Alloy and GitHub runner services: every other service would add 12
+  // series for nothing. A runner service shows up by itself once it exists.
+  service {
+    include = "^(Alloy|actions\\.runner\\..*)$"
+  }
+
+  // The NIC info metrics carry IP addresses, MAC addresses and routes.
+  net {
+    enabled_list = ["metrics"]
+  }
+
+  // Hidden recovery and EFI partitions.
+  logical_disk {
+    exclude = "HarddiskVolume.+"
+  }
+}
+
+// No job_name and no relabel of job or instance: the series keep
+// job="integrations/windows" and instance=<hostname> exactly as the exporter
+// sets them. Dashboards, alerts and the series already on central rely on it.
+prometheus.scrape "windows" {
+  targets         = prometheus.exporter.windows.host.targets
+  forward_to      = [prometheus.relabel.windows.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+}
+
+prometheus.relabel "windows" {
+  forward_to = [prometheus.remote_write.central.receiver]
+
+  // windows_os_info has its own product label ("Windows 11 Home"), which would
+  // win over the external label. It moves to os_product, for this metric and
+  // for any later collector with the same clash.
+  rule {
+    source_labels = ["product"]
+    regex         = "(.+)"
+    target_label  = "os_product"
+    replacement   = "$1"
+  }
+
+  rule {
+    action = "labeldrop"
+    regex  = "product"
+  }
+
+  // Per-core detail no panel or alert reads (about 14 series per logical CPU),
+  // and info metrics whose labels are a disk serial number, a binary path, the
+  // service account or a process id.
+  rule {
+    source_labels = ["__name__"]
+    regex         = "windows_cpu_(cstate_seconds_total|interrupts_total|dpcs_total|clock_interrupts_total|idle_break_events_total|parking_status|core_frequency_mhz|processor_performance_total|processor_mperf_total|processor_rtc_total|processor_utility_total|processor_privileged_utility_total)|windows_logical_disk_info|windows_net_(nic_address_info|nic_info|route_info)|windows_service_(info|process)"
+    action        = "drop"
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 3. Alloy's own metrics, so a failing push is visible on central
+////////////////////////////////////////////////////////////////////////////////
+
+prometheus.exporter.self "alloy" { }
+
+prometheus.scrape "alloy" {
+  targets         = prometheus.exporter.self.alloy.targets
+  forward_to      = [prometheus.relabel.alloy.receiver]
+  scrape_interval = "15s"
+  scrape_timeout  = "10s"
+}
+
+// Alloy exposes about 400 series. These are the ones the dashboard, the alert
+// and the installer's health gate read.
+prometheus.relabel "alloy" {
+  forward_to = [prometheus.remote_write.central.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "up|scrape_duration_seconds|scrape_samples_scraped|alloy_build_info|alloy_component_controller_running_components|alloy_resources_process_resident_memory_bytes|alloy_resources_process_cpu_seconds_total|prometheus_remote_storage_samples_total|prometheus_remote_storage_samples_failed_total|prometheus_remote_storage_samples_retried_total|prometheus_remote_storage_samples_dropped_total|prometheus_remote_storage_samples_pending|prometheus_remote_storage_queue_highest_sent_timestamp_seconds|loki_write_sent_entries_total|loki_write_dropped_entries_total|loki_write_batch_retries_total|loki_write_request_duration_seconds_count"
+    action        = "keep"
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 4. Sink: central Prometheus
+////////////////////////////////////////////////////////////////////////////////
+
+prometheus.remote_write "central" {
+  endpoint {
+    url = "@@PROM_PUSH_URL@@"
+
+    // A header cannot take a secret: Alloy refuses to load the config with
+    // "secrets may not be converted into strings", and `alloy validate` does
+    // not notice. The file stays is_secret; only the header value is converted.
+    headers = {
+      "CF-Access-Client-Id"     = local.file.cf_id.content,
+      "CF-Access-Client-Secret" = convert.nonsensitive(local.file.cf_secret.content),
+    }
+
+    queue_config {
+      max_samples_per_send = 2000
+      batch_send_deadline  = "5s"
+      min_backoff          = "500ms"
+      max_backoff          = "30s"
+    }
+  }
+
+  external_labels = {
+    product   = "@@PRODUCT@@",
+    server_id = "@@SERVER_ID@@",
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 5. Windows Event Log
+////////////////////////////////////////////////////////////////////////////////
+
+// Critical, Error and Warning. System also takes the few Information events
+// that say why the host went away or changed: 12 and 13 kernel start and stop,
+// 42 and 107 sleep and resume, 1074 power-off or restart request, 6005, 6006
+// and 6008 event log start, stop and unexpected stop, 7045 service installed.
+//
+// With no bookmark the source starts at new events, so a first start sends
+// nothing until something is logged.
+loki.source.windowsevent "system" {
+  eventlog_name          = "System"
+  xpath_query            = "*[System[(Level=1 or Level=2 or Level=3) or (EventID=12 or EventID=13 or EventID=42 or EventID=107 or EventID=1074 or EventID=6005 or EventID=6006 or EventID=6008 or EventID=7045)]]"
+  use_incoming_timestamp = true
+  exclude_event_data     = true
+  exclude_user_data      = true
+  forward_to             = [loki.process.windows_eventlog.receiver]
+  labels                 = {
+    job     = "windows-eventlog",
+    channel = "System",
+  }
+}
+
+loki.source.windowsevent "application" {
+  eventlog_name          = "Application"
+  xpath_query            = "*[System[(Level=1 or Level=2 or Level=3)]]"
+  use_incoming_timestamp = true
+  exclude_event_data     = true
+  exclude_user_data      = true
+  forward_to             = [loki.process.windows_eventlog.receiver]
+  labels                 = {
+    job     = "windows-eventlog",
+    channel = "Application",
+  }
+}
+
+loki.process "windows_eventlog" {
+  // The source adds computer=<hostname>: mixed case, and server_id already
+  // names the host.
+  stage.label_drop {
+    values = ["computer"]
+  }
+
+  // levelText is in the host's language, so the label comes from the number:
+  // 1 critical, 2 error, 3 warning, anything else (4, 0, missing) info.
+  stage.json {
+    expressions = {
+      event_level = "level",
+    }
+  }
+
+  stage.template {
+    source   = "level"
+    template = `{{ $n := printf "%v" .event_level }}{{ if eq $n "1" }}critical{{ else if eq $n "2" }}error{{ else if eq $n "3" }}warning{{ else }}info{{ end }}`
+  }
+
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
+  // Defence in depth: a lost bookmark must not replay old history, and an
+  // event storm must not flood Loki.
+  stage.drop {
+    older_than          = "24h"
+    drop_counter_reason = "eventlog_too_old"
+  }
+
+  stage.limit {
+    rate  = 5
+    burst = 200
+    drop  = true
+  }
+
+  // The line is JSON, so line breaks and tabs inside message are the two
+  // characters \r, \n or \t. They become one space: the scrub rules below
+  // read \s and \b, which a letter glued to the text would defeat. Only an
+  // escape after an even number of backslashes counts, so the n of C:\\new
+  // stays.
+  stage.replace {
+    expression = `(?:^|[^\\])(?:\\\\)*((?:\\[rnt])+)`
+    replace    = " "
+  }
+
+  forward_to = [loki.process.scrub.receiver]
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 6. Scrub: every log line passes here before it is pushed
+////////////////////////////////////////////////////////////////////////////////
+
+loki.process "scrub" {
+  // stage.replace rewrites the text of the capture groups and nothing else. An
+  // expression with no group replaces nothing.
+  //
+  // The first block of rules is the scrub of agents/alloy/config-logs.alloy.tmpl,
+  // copied verbatim and in order. tests/windows/test-windows-scrub.sh fails if
+  // the two drift apart. Edit them there first.
+
+  // Taiwan mobile: 09xxxxxxxx or 09xx-xxx-xxx. Word boundaries stop the rule
+  // from rewriting longer digit runs such as epoch milliseconds.
+  stage.replace {
+    expression = "\\b(09\\d{2}-?\\d{3}-?\\d{3})\\b"
+    replace    = "[PHONE]"
+  }
+
+  // Broad email sweep
+  stage.replace {
+    expression = "([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})"
+    replace    = "[EMAIL]"
+  }
+
+  // Chinese 姓名 value — handles both quoted 'X' and unquoted X forms.
+  // Outer '? quotes are OUTSIDE the capture group so they survive; capture
+  // contains only the name chars.
+  stage.replace {
+    expression = "'?姓名'?\\s*[:：=]\\s*'?([^\\s,}'\"]+)'?"
+    replace    = "[NAME]"
+  }
+
+  // NewebPay-style 'Email': 'x@y.com' — backup rule in case the broad sweep
+  // misses (e.g. someone puts an email-like string in an Email key that
+  // doesn't match the broad regex). Captures only the value.
+  stage.replace {
+    expression = "'Email'\\s*:\\s*'([^']+)'"
+    replace    = "[REDACTED]"
+  }
+
+  // stage.replace rewrites capture groups and nothing else, so a group wraps a value and
+  // never its key. A branch with no group matches text that must stay: RE2 has no
+  // lookahead, and this is how an expression says "not this". Where an expression has
+  // two groups they are alternatives, and only one takes part in a match.
+  //
+  // A value is tried as an escaped \"...\", a "..." that may run to the end of the line,
+  // a '...', a [...] or {...} composite, then a bare word. A bare word stops at a quote:
+  // eating it would swallow the rest of the line, msg included.
+  //
+  // A quote followed by a space usually closes an enclosing value, as in
+  // err="bad token: " detail=x. It opens a value only when the next quote is followed by
+  // a delimiter, as in token=" x".
+  //
+  // Composites balance up to four levels, spelled out because RE2 cannot recurse. A value
+  // nested deeper, or never closed, is redacted through the last ] or } on the line, or
+  // to the end of the line when there is none, and a quote followed by a space stops it
+  // either way. A ] or } inside the data closes a composite early.
+  //
+  // The next field is a lowercase key, =, and a value. It stays after key= and a space,
+  // and after a bare scheme such as Bearer. A credential ending in = padding is not one.
+
+  // Python header tuples, ('Authorization', 'Basic x'). The opening ( keeps this off
+  // JSON, where "token","next" is a value followed by the next key.
+  stage.replace {
+    expression = `(?i)[(\[]\s*\\*["'][\w.\-]*(?:authorization|token|cookie|api[_-]?key|secret(?:[_-]?key)?|passw(?:or)?d|passphrase|private[_-]?key|signature)\\*["']\s*,\s*(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`
+    replace    = "[SECRET]"
+  }
+
+  // Scheme plus credential: redact both words, not just the scheme. Tried in order: a
+  // comma separated parameter list (Digest, AWS4-HMAC-SHA256), the next field, which
+  // stays, then a credential with any further scheme and credential pairs after it.
+  stage.replace {
+    expression = `(?i)authorization(?:\\*["'])?\s*[=:]\s*\[?(?:([A-Za-z][A-Za-z0-9_.+\-]*\s+[A-Za-z0-9_.\-]+=(?:\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|[^\s",\\]*)\s*,\s*[A-Za-z0-9_.\-]+=(?:\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|[^\s",\\]*)(?:\s*,\s*[A-Za-z0-9_.\-]+=(?:\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|[^\s",\\]*))*)|[A-Za-z][A-Za-z0-9_.+\-]*\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|([A-Za-z][A-Za-z0-9_.+\-]*\s+(?:[^\s"\\,]|\\[^"])+(?:\s*,\s*(?:bearer|basic|token|digest|negotiate|apikey)\s+(?:[^\s"\\,]|\\[^"])+|,(?:[^\s"\\,]|\\[^"])+)*))`
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = `(?i)authorization(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
+    replace    = "[TOKEN]"
+  }
+
+  // Bare bearer credential. It runs before the token rule so that X-Auth-Token: Bearer x
+  // cannot redact the scheme and leave the credential.
+  stage.replace {
+    expression = `(?i)\bbearer\s+(?:(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|((?:[^\s"\\]|\\[^"])+))`
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = `(?i)token(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
+    replace    = "[TOKEN]"
+  }
+
+  stage.replace {
+    expression = `(?i)(?:api[_-]?secret|client[_-]?secret|secret[_-]?key|secret|passw(?:or)?d|passphrase|private[_-]?key|signature)(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|&?(?:map)?[\[{](?:[^\s"\]}]|"\S)(?:(?:[^"]|"\S)*[\]}]|(?:[^"]|"\S)*)|(?:[^\s"\\]|\\[^"])+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
+    replace    = "[SECRET]"
+  }
+
+  // At least 12 characters: loki/rules/fake/zenincome.yml alerts on the literal text
+  // of an invalid-key error, which this rule must leave readable.
+  stage.replace {
+    expression = `(?i)api[_-]?key(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\]){12,}\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.){11,}(?:"|$)|'(?:[^'\\]|\\.){12,}'|(?:[\w.&*]*[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{](?:[^\[\]{}]|[\[{][^\[\]{}]*[\]}])*[\]}])*[\]}])*[\]}])+[^\s"\\]*|(?:[^\s"\\]|\\[^"]){12,})|("\s(?:[^"\\]|\\.){11,}")(?:[\s,;)}\]]|$)))`
+    replace    = "[SECRET]"
+  }
+
+  stage.replace {
+    expression = `(?i)cookie(?:\\*["'])?\s*(?:=\s+(?-i:[a-z_][a-z0-9_.]*)=(?:[^\s='"\\,;)}\]]|["'][^\s,;)}\]])|[=:]\s*(?:(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^\s"\\]|\\.)(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*'|(?:[^\s;"\\]+;\s*)*[^\s"\\]+)|("\s(?:[^"\\]|\\.)*")(?:[\s,;)}\]]|$)))`
+    replace    = "[SECRET]"
+  }
+
+  // ── Windows and GitHub runner rules ────────────────────────────────────────
+  // In an Event Log line a backslash is written twice (JSON); in a runner log
+  // it is written once. \\{1,2} takes both.
+
+  // W1: the user name in a profile path, C:\Users\<name>\...
+  stage.replace {
+    expression = `(?i)[a-z]:(?:\\{1,2}|/)users(?:\\{1,2}|/)([^\\/"'\s<>|:*?,;]+)`
+    replace    = "[USER]"
+  }
+
+  // W2: the account of the event's security block. exclude_event_data does not
+  // remove it.
+  stage.replace {
+    expression = `"userName":"((?:[^"\\]|\\.)+)"`
+    replace    = "[USER]"
+  }
+
+  // W3: account SIDs. Well-known ones such as S-1-5-18 say nothing about a
+  // person and stay.
+  stage.replace {
+    expression = `(S-1-5-21(?:-\d+){3,5})`
+    replace    = "[SID]"
+  }
+
+  // W4a: the account an event names in words, in English and in zh-TW.
+  stage.replace {
+    expression = `(?i)(?:on behalf of user|代表使用者|使用者|\buser(?: ?name)?:?)\s+((?:NT )?[^\s"\\,;()]+\\{1,2}[^\s"\\,;()]+)`
+    replace    = "[USER]"
+  }
+
+  // W4b: any other DOMAIN\user standing alone. A path does not match: its
+  // first part ends in a colon or it goes on with another backslash.
+  stage.replace {
+    expression = `(?:^|[\s("'=])((?:NT )?[A-Za-z][A-Za-z0-9-]{0,14}\\{1,2}[^\s\\"',;()]+)(?:[\s)"',;]|$)`
+    replace    = "[USER]"
+  }
+
+  // W5: GitHub tokens, wherever they stand.
+  stage.replace {
+    expression = `(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})`
+    replace    = "[TOKEN]"
+  }
+
+  // W6: a credential given as the next argument. The shared token rule needs
+  // = or : between the name and the value.
+  stage.replace {
+    expression = `(?i)--(?:token|pat|password)\s+(\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"[^"]*"|'[^']*'|[^\s"'\\]+)`
+    replace    = "[TOKEN]"
+  }
+
+  // W7: JSON web tokens.
+  stage.replace {
+    expression = `(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})`
+    replace    = "[TOKEN]"
+  }
+
+  // W8: credentials inside a URL, scheme://user:password@host
+  stage.replace {
+    expression = `[A-Za-z][A-Za-z0-9+.-]*://([^/\s:@"']+:[^/\s@"']+)@`
+    replace    = "[SECRET]"
+  }
+
+  // W9: signed-URL query values.
+  stage.replace {
+    expression = `(?i)[?&](?:sig|access_token)=([^&\s"'\\]+)`
+    replace    = "[SECRET]"
+  }
+
+  forward_to = [loki.write.central.receiver]
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// 7. Sink: central Loki
+////////////////////////////////////////////////////////////////////////////////
+
+loki.write "central" {
+  endpoint {
+    url = "@@LOKI_PUSH_URL@@"
+    headers = {
+      "CF-Access-Client-Id"     = local.file.cf_id.content,
+      "CF-Access-Client-Secret" = convert.nonsensitive(local.file.cf_secret.content),
+    }
+  }
+
+  external_labels = {
+    product   = "@@PRODUCT@@",
+    server_id = "@@SERVER_ID@@",
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Diagnostics
+////////////////////////////////////////////////////////////////////////////////
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
