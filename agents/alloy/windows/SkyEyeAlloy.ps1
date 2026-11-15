@@ -30,6 +30,11 @@ $script:SkyEyeCanaryText = 'SkyEye installer canary: Windows Event Log to Loki d
 $script:SkyEyeDiscardProm = 'http://127.0.0.1:9/api/v1/write'
 $script:SkyEyeDiscardLoki = 'http://127.0.0.1:9/loki/api/v1/push'
 $script:SkyEyeStubMarker = '// SkyEye agent uninstalled'
+# How long the health gate waits after a retry or a failed request before it
+# trusts a delivery again. It must be longer than the max_backoff of
+# prometheus.remote_write in config.alloy.tmpl (30s) by at least one poll, so
+# that a sender still failing shows its next retry inside the window.
+$script:SkyEyeGateQuietSeconds = 35
 
 # ------------------------------------------------------------------ logging
 
@@ -173,20 +178,204 @@ function New-SkyEyeConfigText {
     return $text
 }
 
-# product and server_id of every external_labels block in a config.
+# Alloy source as tokens: ident, string (text between the quotes, escapes left
+# as written), raw (text between backquotes), newline, and other (one
+# character). Comments and blanks are left out. $null when a string or a block
+# comment never ends, because nothing after it can be trusted.
+function Get-SkyEyeAlloyTokens {
+    param([string]$Text)
+    $pattern = '\G(?:(?<comment>//[^\n]*|/\*[\s\S]*?\*/)|(?<string>"(?:[^"\\\n]|\\[^\n])*")|(?<raw>`[^`]*`)' +
+        '|(?<ident>[A-Za-z_][A-Za-z0-9_]*)|(?<newline>\n)|(?<blank>[^\S\n]+)|(?<other>[\s\S]))'
+    $tokens = New-Object System.Collections.ArrayList
+    foreach ($match in [regex]::Matches([string]$Text, $pattern)) {
+        if ($match.Groups['comment'].Success -or $match.Groups['blank'].Success) {
+            continue
+        }
+        $value = $match.Value
+        if ($match.Groups['string'].Success) {
+            [void]$tokens.Add(@{ Kind = 'string'; Text = $value.Substring(1, $value.Length - 2) })
+        }
+        elseif ($match.Groups['raw'].Success) {
+            [void]$tokens.Add(@{ Kind = 'raw'; Text = $value.Substring(1, $value.Length - 2) })
+        }
+        elseif ($match.Groups['ident'].Success) {
+            [void]$tokens.Add(@{ Kind = 'ident'; Text = $value })
+        }
+        elseif ($match.Groups['newline'].Success) {
+            [void]$tokens.Add(@{ Kind = 'newline'; Text = $value })
+        }
+        else {
+            # A quote or a comment opener that reached here has no end.
+            if ($value -ceq '"' -or $value -ceq '`') {
+                return $null
+            }
+            if ($value -ceq '/' -and ($match.Index + 1) -lt $Text.Length -and $Text.Substring($match.Index + 1, 1) -ceq '*') {
+                return $null
+            }
+            [void]$tokens.Add(@{ Kind = 'other'; Text = $value })
+        }
+    }
+    return , $tokens.ToArray()
+}
+
+function Test-SkyEyeAlloyToken {
+    param($Tokens, [int]$Index, [string]$Kind, [string]$Text = '')
+    if ($Index -lt 0 -or $Index -ge $Tokens.Count) {
+        return $false
+    }
+    if ($Tokens[$Index].Kind -cne $Kind) {
+        return $false
+    }
+    return (-not $Text -or $Tokens[$Index].Text -ceq $Text)
+}
+
+function Skip-SkyEyeAlloyNewlines {
+    param($Tokens, [int]$Index)
+    while (Test-SkyEyeAlloyToken $Tokens $Index 'newline') {
+        $Index = $Index + 1
+    }
+    return $Index
+}
+
+# Reads the map that starts at Tokens[Start] into Entry and returns the index
+# after it. Entries may be separated by commas, by line breaks or by both, the
+# keys may be quoted, and they may come in any order. Entry.unreadable is set,
+# and reading stops, as soon as product or server_id cannot be read for certain.
+function Read-SkyEyeLabelMap {
+    param($Tokens, [int]$Start, [hashtable]$Entry)
+    $index = Skip-SkyEyeAlloyNewlines $Tokens $Start
+    if (-not (Test-SkyEyeAlloyToken $Tokens $index 'other' '{')) {
+        $Entry.unreadable = 'external_labels is not written as a literal map'
+        return $index
+    }
+    $index = $index + 1
+    $seen = New-Object System.Collections.ArrayList
+    while ($true) {
+        while ((Test-SkyEyeAlloyToken $Tokens $index 'newline') -or (Test-SkyEyeAlloyToken $Tokens $index 'other' ',')) {
+            $index = $index + 1
+        }
+        if ($index -ge $Tokens.Count) {
+            $Entry.unreadable = 'the external_labels map never closes'
+            return $index
+        }
+        if (Test-SkyEyeAlloyToken $Tokens $index 'other' '}') {
+            return ($index + 1)
+        }
+        $keyToken = $Tokens[$index]
+        if ($keyToken.Kind -cne 'ident' -and $keyToken.Kind -cne 'string') {
+            $Entry.unreadable = 'the external_labels map has something that is not a label name'
+            return $index
+        }
+        if ($keyToken.Kind -ceq 'string' -and $keyToken.Text.Contains('\')) {
+            $Entry.unreadable = 'a label name in external_labels is written with an escape'
+            return $index
+        }
+        $key = [string]$keyToken.Text
+        $index = Skip-SkyEyeAlloyNewlines $Tokens ($index + 1)
+        if (-not (Test-SkyEyeAlloyToken $Tokens $index 'other' '=')) {
+            $Entry.unreadable = ('the label ' + $key + ' in external_labels has no value')
+            return $index
+        }
+        $index = $index + 1
+
+        # The value runs to the next comma or to the closing brace of the map.
+        # A line break ends it only when a new entry or the end of the map
+        # follows, so an expression may span lines.
+        $value = New-Object System.Collections.ArrayList
+        $depth = 0
+        while ($true) {
+            if ($index -ge $Tokens.Count) {
+                $Entry.unreadable = 'the external_labels map never closes'
+                return $index
+            }
+            $token = $Tokens[$index]
+            if ($token.Kind -ceq 'newline') {
+                $after = Skip-SkyEyeAlloyNewlines $Tokens $index
+                $entryFollows = ((Test-SkyEyeAlloyToken $Tokens $after 'ident') -or (Test-SkyEyeAlloyToken $Tokens $after 'string')) -and
+                    (Test-SkyEyeAlloyToken $Tokens ($after + 1) 'other' '=')
+                if ($depth -eq 0 -and $value.Count -gt 0 -and ($entryFollows -or (Test-SkyEyeAlloyToken $Tokens $after 'other' '}'))) {
+                    break
+                }
+                $index = $index + 1
+                continue
+            }
+            if ($token.Kind -ceq 'other') {
+                if ($depth -eq 0 -and ($token.Text -ceq ',' -or $token.Text -ceq '}')) {
+                    break
+                }
+                if ($token.Text -ceq '{' -or $token.Text -ceq '[' -or $token.Text -ceq '(') {
+                    $depth = $depth + 1
+                }
+                elseif ($token.Text -ceq '}' -or $token.Text -ceq ']' -or $token.Text -ceq ')') {
+                    $depth = $depth - 1
+                    if ($depth -lt 0) {
+                        $Entry.unreadable = 'the external_labels map has unbalanced brackets'
+                        return $index
+                    }
+                }
+            }
+            [void]$value.Add($token)
+            $index = $index + 1
+        }
+
+        if ($key -cne 'product' -and $key -cne 'server_id') {
+            continue
+        }
+        if ($seen -ccontains $key) {
+            $Entry.unreadable = ($key + ' is set twice in one external_labels map')
+            return $index
+        }
+        [void]$seen.Add($key)
+        # One plain string and nothing else. An escape, an env() call or a
+        # concatenation would have to be evaluated the way Alloy does.
+        $plain = ($value.Count -eq 1 -and ($value[0].Kind -ceq 'raw' -or
+                ($value[0].Kind -ceq 'string' -and -not $value[0].Text.Contains('\'))))
+        if (-not $plain) {
+            $Entry.unreadable = ('the value of ' + $key + ' in external_labels is not one plain string')
+            return $index
+        }
+        if ($key -ceq 'product') {
+            $Entry.product = [string]$value[0].Text
+        }
+        else {
+            $Entry.server_id = [string]$value[0].Text
+        }
+    }
+}
+
+# product and server_id of every external_labels attribute in a config.
+#
+# Each entry is @{ product; server_id; unreadable }. A label the map does not
+# set is $null. unreadable is the reason the map could not be read for certain;
+# the caller must refuse on it and never take it for "not set".
 function Get-SkyEyeExternalLabels {
     param([string]$ConfigText)
     $found = New-Object System.Collections.ArrayList
-    foreach ($block in [regex]::Matches($ConfigText, 'external_labels\s*=\s*\{([^}]*)\}')) {
-        $body = $block.Groups[1].Value
-        $entry = @{ product = $null; server_id = $null }
-        $product = [regex]::Match($body, '(?m)^\s*"?product"?\s*=\s*"([^"]*)"')
-        if ($product.Success) {
-            $entry.product = $product.Groups[1].Value
+    $tokens = Get-SkyEyeAlloyTokens $ConfigText
+    if ($null -eq $tokens) {
+        if ([string]$ConfigText -cmatch 'external_labels') {
+            [void]$found.Add(@{ product = $null; server_id = $null; unreadable = 'the config has a string or a comment that never ends' })
         }
-        $server = [regex]::Match($body, '(?m)^\s*"?server_id"?\s*=\s*"([^"]*)"')
-        if ($server.Success) {
-            $entry.server_id = $server.Groups[1].Value
+        return , $found.ToArray()
+    }
+    $index = 0
+    while ($index -lt $tokens.Count) {
+        $here = $index
+        $index = $index + 1
+        if (-not (Test-SkyEyeAlloyToken $tokens $here 'ident' 'external_labels')) {
+            continue
+        }
+        # a.external_labels is a reference to one, not the attribute itself.
+        if (Test-SkyEyeAlloyToken $tokens ($here - 1) 'other' '.') {
+            continue
+        }
+        $assign = Skip-SkyEyeAlloyNewlines $tokens ($here + 1)
+        $entry = @{ product = $null; server_id = $null; unreadable = '' }
+        if (Test-SkyEyeAlloyToken $tokens $assign 'other' '=') {
+            $index = Read-SkyEyeLabelMap -Tokens $tokens -Start ($assign + 1) -Entry $entry
+        }
+        else {
+            $entry.unreadable = 'external_labels is not written as an attribute'
         }
         [void]$found.Add($entry)
     }
@@ -194,9 +383,14 @@ function Get-SkyEyeExternalLabels {
 }
 
 # Empty when the labels in ConfigText agree with the parameters, else why not.
+# A map that cannot be read for certain is a reason too: the labels it sends
+# are unknown, so taking over could change them.
 function Get-SkyEyeLabelConflict {
     param([string]$ConfigText, [string]$Product, [string]$ServerId)
     foreach ($entry in (Get-SkyEyeExternalLabels $ConfigText)) {
+        if ($entry.unreadable) {
+            return ('cannot tell which product and server_id the live config sends: ' + $entry.unreadable)
+        }
         if ($null -ne $entry.product -and $entry.product -cne $Product) {
             return ('the live config sends product="' + $entry.product + '", this run was given "' + $Product + '"')
         }
@@ -311,13 +505,16 @@ function ConvertFrom-SkyEyeMetricsText {
 }
 
 function Get-SkyEyeMetricSum {
-    param($Samples, [string]$Name, [string]$ExcludeLabelPattern = '')
+    param($Samples, [string]$Name, [string]$ExcludeLabelPattern = '', [string]$IncludeLabelPattern = '')
     $sum = 0.0
     foreach ($sample in @($Samples)) {
         if ($sample.Name -cne $Name) {
             continue
         }
         if ($ExcludeLabelPattern -and $sample.Labels -match $ExcludeLabelPattern) {
+            continue
+        }
+        if ($IncludeLabelPattern -and $sample.Labels -notmatch $IncludeLabelPattern) {
             continue
         }
         $sum = $sum + $sample.Value
@@ -351,11 +548,15 @@ function Get-SkyEyeDeliverySnapshot {
         LokiSent        = (Get-SkyEyeMetricSum $samples 'loki_write_sent_entries_total')
         LokiDropped     = (Get-SkyEyeMetricSum $samples 'loki_write_dropped_entries_total')
         LokiNot2xx      = (Get-SkyEyeMetricSum $samples 'loki_write_request_duration_seconds_count' 'status_code="2[0-9][0-9]"')
+        Loki2xx         = (Get-SkyEyeMetricSum $samples 'loki_write_request_duration_seconds_count' '' 'status_code="2[0-9][0-9]"')
     }
 }
 
 function New-SkyEyeZeroSnapshot {
-    return @{ PromAttempted = 0.0; PromFailed = 0.0; PromRetried = 0.0; PromHighestSent = 0.0; LokiSent = 0.0; LokiDropped = 0.0; LokiNot2xx = 0.0 }
+    return @{
+        PromAttempted = 0.0; PromFailed = 0.0; PromRetried = 0.0; PromHighestSent = 0.0
+        LokiSent = 0.0; LokiDropped = 0.0; LokiNot2xx = 0.0; Loki2xx = 0.0
+    }
 }
 
 # ------------------------------------------------------------------ ACL
@@ -823,6 +1024,18 @@ function Wait-SkyEyeServiceReady {
 #
 # Restarted: the counters started at zero, so any failure counts. Otherwise the
 # first reading is the baseline and only what happens during the gate counts.
+#
+# A retry (Prometheus) or a request that was not 2xx (Loki) is remembered
+# together with what had been delivered when it was seen. After one, the
+# endpoint is believed again only when both hold:
+#   - something was delivered later than that reading: the highest sent
+#     timestamp moved past it, or Loki counted more sent entries or 2xx
+#     requests than it had then;
+#   - SkyEyeGateQuietSeconds went by without another one.
+# A counter that merely stopped rising proves nothing: between two retries the
+# sender waits, up to max_backoff, and the counters stand still while it does.
+# loki.write may wait longer than the quiet window; it sends its batches one
+# after another, so there the later delivery is the proof.
 function Invoke-SkyEyeHealthGate {
     param(
         [string]$ListenAddress,
@@ -844,6 +1057,10 @@ function Invoke-SkyEyeHealthGate {
     $previous = $null
     $canaryAt = 0
     $waitingFor = 'service'
+    $quiet = $script:SkyEyeGateQuietSeconds
+    # The last reading that showed trouble; At is 0 while there was none.
+    $promTrouble = @{ At = 0; HighestSent = 0.0 }
+    $lokiTrouble = @{ At = 0; Sent = 0.0; Ok2xx = 0.0 }
 
     while ($true) {
         $now = Get-SkyEyeHostNow
@@ -878,15 +1095,34 @@ function Invoke-SkyEyeHealthGate {
                 $promFailed = $snapshot.PromFailed - $baseline.PromFailed
                 $lokiDropped = $snapshot.LokiDropped - $baseline.LokiDropped
                 $lokiSent = $snapshot.LokiSent - $baseline.LokiSent
+
+                # Compared with the reading before this one; the first reading
+                # after a restart is compared with zero.
+                $reference = $previous
+                if ($null -eq $reference) {
+                    $reference = $baseline
+                }
+                if ($snapshot.PromRetried -gt $reference.PromRetried) {
+                    $promTrouble.At = $now
+                    $promTrouble.HighestSent = $snapshot.PromHighestSent
+                }
+                if ($snapshot.LokiNot2xx -gt $reference.LokiNot2xx) {
+                    $lokiTrouble.At = $now
+                    $lokiTrouble.Sent = $snapshot.LokiSent
+                    $lokiTrouble.Ok2xx = $snapshot.Loki2xx
+                }
+
                 $gate.Delivery = [ordered]@{
-                    prom_samples_attempted = $snapshot.PromAttempted
-                    prom_samples_failed    = $promFailed
-                    prom_samples_retried   = $snapshot.PromRetried
-                    prom_highest_sent_age  = $(if ($snapshot.PromHighestSent -gt 0) { [int64]($now - $snapshot.PromHighestSent) } else { -1 })
-                    loki_entries_sent      = $lokiSent
-                    loki_entries_dropped   = $lokiDropped
-                    loki_requests_not_2xx  = ($snapshot.LokiNot2xx - $baseline.LokiNot2xx)
-                    canary_events_written  = $gate.Canaries
+                    prom_samples_attempted     = $snapshot.PromAttempted
+                    prom_samples_failed        = $promFailed
+                    prom_samples_retried       = $snapshot.PromRetried
+                    prom_highest_sent_age      = $(if ($snapshot.PromHighestSent -gt 0) { [int64]($now - $snapshot.PromHighestSent) } else { -1 })
+                    prom_seconds_since_retry   = $(if ($promTrouble.At -gt 0) { [int64]($now - $promTrouble.At) } else { -1 })
+                    loki_entries_sent          = $lokiSent
+                    loki_entries_dropped       = $lokiDropped
+                    loki_requests_not_2xx      = ($snapshot.LokiNot2xx - $baseline.LokiNot2xx)
+                    loki_seconds_since_not_2xx = $(if ($lokiTrouble.At -gt 0) { [int64]($now - $lokiTrouble.At) } else { -1 })
+                    canary_events_written      = $gate.Canaries
                 }
                 if ($RequireProm -and $promFailed -gt 0) {
                     $gate.Reason = 'central Prometheus rejected samples (4xx): check the Access token and its policy on prom-push'
@@ -898,13 +1134,21 @@ function Invoke-SkyEyeHealthGate {
                 }
 
                 $settled = ($null -ne $previous)
+                $promRecovered = ($promTrouble.At -eq 0 -or
+                    ($snapshot.PromHighestSent -gt $promTrouble.HighestSent -and ($now - $promTrouble.At) -ge $quiet))
                 $promOk = $true
                 if ($RequireProm) {
-                    $promOk = ($snapshot.PromHighestSent -ge $since -and $settled -and $snapshot.PromRetried -eq $previous.PromRetried)
+                    $promOk = ($snapshot.PromHighestSent -ge $since -and $settled -and $promRecovered)
                 }
+                $lokiDeliveredSince = ($lokiTrouble.At -eq 0 -or $snapshot.LokiSent -gt $lokiTrouble.Sent -or
+                    $snapshot.Loki2xx -gt $lokiTrouble.Ok2xx)
+                $lokiRecovered = ($lokiDeliveredSince -and ($lokiTrouble.At -eq 0 -or ($now - $lokiTrouble.At) -ge $quiet))
                 $lokiOk = $true
                 if ($RequireLoki) {
-                    if ($promOk -and $gate.Canaries -lt 3 -and ($canaryAt -eq 0 -or ($now - $canaryAt) -ge 20) -and $lokiSent -lt 1) {
+                    # A canary gives Loki something to deliver: the first entry,
+                    # and after a failed request the one that proves it is back.
+                    if ($promOk -and $gate.Canaries -lt 3 -and ($canaryAt -eq 0 -or ($now - $canaryAt) -ge 20) -and
+                        ($lokiSent -lt 1 -or -not $lokiDeliveredSince)) {
                         try {
                             Write-SkyEyeHostCanaryEvent
                             $gate.Canaries = $gate.Canaries + 1
@@ -916,7 +1160,7 @@ function Invoke-SkyEyeHealthGate {
                         }
                         $canaryAt = $now
                     }
-                    $lokiOk = ($lokiSent -ge 1 -and $settled -and $snapshot.LokiNot2xx -eq $previous.LokiNot2xx)
+                    $lokiOk = ($lokiSent -ge 1 -and $settled -and $lokiRecovered)
                 }
                 $stable = (($now - $pidSince) -ge 10)
                 if ($promOk -and $lokiOk -and $stable) {
@@ -925,9 +1169,15 @@ function Invoke-SkyEyeHealthGate {
                 }
                 if (-not $promOk) {
                     $waitingFor = 'a batch acknowledged by central Prometheus'
+                    if ($promTrouble.At -gt 0) {
+                        $waitingFor = ('a batch acknowledged by central Prometheus after its last retry, and ' + $quiet + 's without another retry')
+                    }
                 }
                 elseif (-not $lokiOk) {
                     $waitingFor = 'a log entry acknowledged by central Loki'
+                    if ($lokiTrouble.At -gt 0) {
+                        $waitingFor = ('a log entry acknowledged by central Loki after its last failed request, and ' + $quiet + 's without another failure')
+                    }
                 }
                 else {
                     $waitingFor = 'ten seconds on one process'
@@ -976,6 +1226,35 @@ function Invoke-SkyEyeRestore {
         $Result.rollback.detail = ('rollback did not finish: ' + $_.Exception.Message + '. By hand: compare ' +
             $Context.ConfigPath + ' with ' + $Context.RollbackPath + ' (the config from before this run, if it still exists), ' +
             'put the right one in place, then restart the Alloy service.')
+        Write-SkyEyeLog ('CRITICAL: ' + $Result.rollback.detail)
+    }
+}
+
+# Stops the service that this run started on a config it did not change, so a
+# failed run leaves it as it was found. Never throws; the outcome is in
+# Result.rollback.
+function Invoke-SkyEyeStopStartedService {
+    param($Result)
+    $Result.rollback.attempted = $true
+    Write-SkyEyeLog 'ROLLBACK: stopping the Alloy service this run started'
+    try {
+        $service = Get-SkyEyeHostAlloy
+        if ($service.State -ne 'Stopped') {
+            Stop-SkyEyeHostService
+        }
+        $service = Get-SkyEyeHostAlloy
+        if ($service.State -ne 'Stopped') {
+            throw ('the service is ' + $service.State + ' after the stop')
+        }
+        $Result.rollback.ok = $true
+        $Result.rollback.detail = 'the Alloy service was stopped again; the config was never changed'
+        Write-SkyEyeLog 'ROLLBACK: done'
+    }
+    catch {
+        $Result.rollback.ok = $false
+        $Result.rollback.detail = ('could not stop the Alloy service again: ' + $_.Exception.Message +
+            '. It was stopped before this run and this run started it. By hand: Stop-Service -Name ' +
+            $script:SkyEyeServiceName + ' -Force, then check that it is Stopped. The config was never changed.')
         Write-SkyEyeLog ('CRITICAL: ' + $Result.rollback.detail)
     }
 }
@@ -1328,27 +1607,58 @@ function Invoke-SkyEyeInstall {
         }
 
         # 9 and 10. Already current: no swap and no restart, but still prove
-        # that it delivers.
+        # that it delivers. A service found stopped is started for that, and
+        # stopped again unless the check passes.
         if ($current) {
-            if (-not $context.WasRunning) {
-                Start-SkyEyeHostService
+            $startedHere = $false
+            $failure = ''
+            try {
+                if (-not $context.WasRunning) {
+                    # Set first: a start that throws may still leave it starting.
+                    $startedHere = $true
+                    Start-SkyEyeHostService
+                }
+                $gate = Invoke-SkyEyeHealthGate -ListenAddress $context.ListenAddress -Restarted (-not $context.WasRunning) `
+                    -RequireProm $true -RequireLoki $true `
+                    -TimeoutSeconds $Options.HealthTimeoutSeconds -PollMilliseconds $Options.PollMilliseconds
+                $result.delivery = $gate.Delivery
+                if (-not $gate.Ok) {
+                    $failure = $gate.Reason
+                }
             }
-            $gate = Invoke-SkyEyeHealthGate -ListenAddress $context.ListenAddress -Restarted (-not $context.WasRunning) `
-                -RequireProm $true -RequireLoki $true `
-                -TimeoutSeconds $Options.HealthTimeoutSeconds -PollMilliseconds $Options.PollMilliseconds
-            $result.delivery = $gate.Delivery
-            if ($gate.Ok) {
+            catch {
+                $failure = ('the check could not finish: ' + $_.Exception.Message)
+            }
+            $result.alloy.service_started_by_this_run = $startedHere
+
+            if (-not $failure) {
                 Add-SkyEyeCheck $result 'health_gate' 'passed' ''
                 $result.status = 'already_current'
                 $result.exit_code = 0
-                $result.message = 'The live config already equals the render and is delivering. Nothing was changed.'
+                if ($startedHere) {
+                    $result.message = 'The live config already equals the render and is delivering. The Alloy service was stopped and has been started; the config was not changed.'
+                }
+                else {
+                    $result.message = 'The live config already equals the render and is delivering. Nothing was changed.'
+                }
+                return $result
             }
-            else {
-                Add-SkyEyeCheck $result 'health_gate' 'failed' $gate.Reason
-                $result.status = 'unhealthy_no_change'
-                $result.stop_point = 'health_gate'
-                $result.exit_code = 1
-                $result.message = ('The live config already equals the render but is not delivering: ' + $gate.Reason)
+
+            Add-SkyEyeCheck $result 'health_gate' 'failed' $failure
+            $result.status = 'unhealthy_no_change'
+            $result.stop_point = 'health_gate'
+            $result.exit_code = 1
+            $result.message = ('The live config already equals the render but is not delivering: ' + $failure)
+            if ($startedHere) {
+                Invoke-SkyEyeStopStartedService -Result $result
+                if ($result.rollback.ok) {
+                    $result.message = ($result.message + '. The Alloy service was stopped before this run and has been stopped again.')
+                }
+                else {
+                    $result.status = 'rollback_incomplete'
+                    $result.exit_code = 3
+                    $result.message = ('CRITICAL: ' + $result.message + '. ' + $result.rollback.detail)
+                }
             }
             return $result
         }
