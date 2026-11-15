@@ -340,9 +340,18 @@ loki.process "scrub" {
   // In an Event Log line a backslash is written twice (JSON); in a runner log
   // it is written once. \\{1,2} takes both.
 
-  // W1: the user name in a profile path, C:\Users\<name>\...
+  // A name may contain spaces ("Jane Doe"), so no rule below ends one at a
+  // space. Where the text shows the end of the name, exactly the name goes.
+  // Where it does not, everything that could still be the name goes with it, up
+  // to a fixed length and to the end of that word: a few words too many are
+  // lost, never half a name left.
+
+  // W1: the user name in a profile path, C:\Users\<name>\... The whole path
+  // component goes, up to the separator after it, which stays. When no
+  // separator follows, the name runs to the first character a quoted or listed
+  // path ends with, at most 40 characters and the rest of that word.
   stage.replace {
-    expression = `(?i)[a-z]:(?:\\{1,2}|/)users(?:\\{1,2}|/)([^\\/"'\s<>|:*?,;]+)`
+    expression = `(?i)[a-z]:(?:\\{1,2}|/)users(?:\\{1,2}|/)(?:([^\\/:*?"<>|\x00-\x1f]{1,64}?)(?:\\{1,2}|/)|([^\\/:*?"<>|\x00-\x1f'(),;]{1,40}[^\\/:*?"<>|\x00-\x1f'(),;\s]*))`
     replace    = "[USER]"
   }
 
@@ -360,16 +369,21 @@ loki.process "scrub" {
     replace    = "[SID]"
   }
 
-  // W4a: the account an event names in words, in English and in zh-TW.
+  // W4a: the account an event names in words, in English and in zh-TW. Tried
+  // in order: a built-in account, which is matched exactly; an account
+  // followed by the words Windows puts after it in events 10016 and 1074,
+  // which end the name; any other, where the name is taken to be as long as
+  // Windows allows, 20 characters, and the rest of that word.
   stage.replace {
-    expression = `(?i)(?:on behalf of user|代表使用者|使用者|\buser(?: ?name)?:?)\s+((?:NT )?[^\s"\\,;()]+\\{1,2}[^\s"\\,;()]+)`
+    expression = `(?i)(?:on behalf of user|代表使用者|使用者|\buser(?: ?name)?:?)\s+(?:(NT AUTHORITY\\{1,2}(?:SYSTEM|LOCAL SERVICE|NETWORK SERVICE))|((?:NT )?[^\s"\\,;()]+\\{1,2}[^\x00-\x1f"'\\/,;()\[\]<>|:=*?@+]{1,20}?)(?:\s+SID\b|\s+for the following reason|\s+啟動)|((?:NT )?[^\s"\\,;()]+\\{1,2}[^\x00-\x1f"'\\/,;()\[\]<>|:=*?@+]{1,20}[^\s"'\\/,;()\[\]<>|:=*?@+]*))`
     replace    = "[USER]"
   }
 
-  // W4b: any other DOMAIN\user standing alone. A path does not match: its
-  // first part ends in a colon or it goes on with another backslash.
+  // W4b: any other DOMAIN\user standing alone, tried in the same order. A
+  // path does not match: its first part ends in a colon or it goes on with
+  // another backslash or a slash.
   stage.replace {
-    expression = `(?:^|[\s("'=])((?:NT )?[A-Za-z][A-Za-z0-9-]{0,14}\\{1,2}[^\s\\"',;()]+)(?:[\s)"',;]|$)`
+    expression = `(?:^|[\s("'=])(?:(NT AUTHORITY\\{1,2}(?:SYSTEM|LOCAL SERVICE|NETWORK SERVICE))|((?:NT )?[A-Za-z][A-Za-z0-9-]{0,14}\\{1,2}[^\x00-\x1f"'\\/,;()\[\]<>|:=*?@+]{1,20}?)(?:\s+SID\b|\s+for the following reason|\s+啟動)|((?:NT )?[A-Za-z][A-Za-z0-9-]{0,14}\\{1,2}[^\x00-\x1f"'\\/,;()\[\]<>|:=*?@+]{1,20}[^\s"'\\/,;()\[\]<>|:=*?@+]*)(?:[\s"',;()\[\]<>|:=*?@+]|$))`
     replace    = "[USER]"
   }
 
@@ -394,7 +408,8 @@ loki.process "scrub" {
 
   // W8: credentials inside a URL, scheme://user:password@host. The shared email
   // rule already takes them when the host looks like a mail domain, and the
-  // host name with them; this covers an IP address or a bare host name.
+  // host name with them; this covers an IP address or a bare host name. A URL
+  // has no space in it: one in a password is written %20 and goes with the rest.
   stage.replace {
     expression = `[A-Za-z][A-Za-z0-9+.-]*://([^/\s:@"']+:[^/\s@"']+)@`
     replace    = "[SECRET]"
