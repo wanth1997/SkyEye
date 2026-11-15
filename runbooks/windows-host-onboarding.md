@@ -59,10 +59,12 @@ Get-Content C:\ProgramData\SkyEye\reports\windows-agent-install-latest-admin.jso
 | `checked` / `restored_previous` | 0 | Check 模式跑完（沒有改任何東西）；`-Mode Rollback` 換回上一份 config 且通過 health gate |
 | `refused` / `failed_validate` / `failed_smoke` | 1 | 換 config 之前就停了，主機沒有任何改變。`stop_point` 與 `message` 說明原因 |
 | `rolled_back` | 1 | 換了之後 health gate 沒過，已換回舊 config 並確認服務正常 |
-| `unhealthy_no_change` | 1 | config 沒變，但目前的服務不健康 |
-| `rollback_incomplete` | 3 | 換回舊 config 沒有完成。照 `message` 的指示手動處理，並回報 |
+| `unhealthy_no_change` | 1 | config 沒變，但目前的服務不健康。服務原本是停止的話，安裝器為了檢查而啟動它，檢查沒過會再把它停回去 |
+| `rollback_incomplete` | 3 | 換回舊 config 沒有完成，或沒能把這次啟動的服務停回去。照 `message` 的指示手動處理，並回報 |
 
 Install 會先用獨立的 port 與暫存目錄真的跑一次 render 出來的 config（push URL 指向關閉的本機 port），不碰現行服務的 `127.0.0.1:12345`、data 目錄與 Event Log bookmark。這一步能抓到 `alloy validate` 抓不到的「secret 不能轉成字串」錯誤。換上去之後，health gate 要求 120 秒內 Prometheus 確實收下一批資料（看 `queue_highest_sent_timestamp_seconds`，不是只會算嘗試次數的 `samples_total`）、沒有失敗的 sample，並且 Loki 收下至少一筆 log。
+
+期間只要看到 Prometheus 重試或 Loki 回了非 2xx，就要等到「在那之後又確實送達一批」而且「連續 35 秒沒有再失敗」才算通過；重試計數暫時不動不算恢復（兩次重試之間最長會等 30 秒）。120 秒內看不到就 rollback，等端點穩定後重跑 Install 即可。
 
 **Canary。** 這台主機的 token 從沒推過 log，安靜的桌機也可能好幾分鐘沒有 Warning 以上的事件，所以安裝器會寫一筆 Warning 到 Application log：來源 `SkyEye`、Event ID `4242`，內文固定為
 
@@ -72,7 +74,7 @@ SkyEye installer canary: Windows Event Log to Loki delivery check. Safe to ignor
 
 `SkyEye` 這個 event source 在第一次 Install 時註冊，之後一直留著（解除安裝也不移除）。
 
-**標籤衝突。** 現行 config 已經有 `product` / `server_id`，而且跟這次的參數不同時，安裝器會拒絕（`label_takeover`）：已經在中央的 series 不能因為接手而換標籤。
+**標籤衝突。** 現行 config 已經有 `product` / `server_id`，而且跟這次的參數不同時，安裝器會拒絕（`label_takeover`）：已經在中央的 series 不能因為接手而換標籤。`external_labels` 寫成一行、多行或欄位順序不同都會被讀到。讀不出確定值的寫法（值不是單純的字串，例如 `sys.env(...)` 或字串相加；同一個標籤寫兩次；`external_labels` 不是直接寫出來的 map）一律拒絕，`message` 以 `cannot tell which product and server_id` 開頭。這時先把現行 config 的標籤改成直接寫出的字串，再重跑。
 
 ## 4. 中央端驗證
 
@@ -86,6 +88,7 @@ time() - prometheus_remote_storage_queue_highest_sent_timestamp_seconds{job="int
 {job="windows-eventlog", server_id="wans-windows"} |= "SkyEye installer canary"
 ```
 
+- **Dashboard 上方的數值卡是現況，不是最後一次的值。** 主機停止回報約 5 分鐘後，「主機回報」「Metrics 推送落後」等卡片會顯示「無資料」，折線圖則保留之前的歷史。看到「無資料」就是主機現在沒有在送，不是 dashboard 壞了。
 - **第一次啟動沒有 bookmark，Alloy 只收之後的新事件，不回補歷史。** 所以剛裝好時 Loki 裡只有 canary；看不到其他 log 不代表壞了。
 - **`windows_os_info` 是唯一刻意改標籤的 series。** 它自帶的 `product`（例如 `Windows 11 Home`）原本會蓋掉 SkyEye 的產品標籤；現在 `product="github-runner"`，舊值移到 `os_product`。接手前的那條舊 series 會自然過期。其他 series 的 `job`、`instance`、`product`、`server_id` 都不變。
 - 接手後不再送的指標：每核心的 C-state / 頻率 / 中斷明細，以及標籤帶有磁碟序號、執行檔路徑、服務帳號、IP、MAC 的 info 指標。完整清單在 `tests/fixtures/windows/windows-exporter-v0.31.3-metrics.txt`（標 `drop` 的 18 個）。
