@@ -1,0 +1,24 @@
+# Fed through the template's prometheus.relabel "windows" by
+# tests/windows/test-windows-config.sh. Label values are made up; the label
+# names are the ones windows_exporter v0.31.3 uses.
+windows_os_info{product="Windows 11 Home",version="10.0.26300",major_version="10",minor_version="0",build_number="26300"} 1
+windows_os_hostname{hostname="fake-host",domain="WORKGROUP",fqdn="fake-host"} 1
+windows_cpu_time_total{core="0,0",mode="idle"} 100
+windows_cpu_logical_processor 32
+windows_cpu_cstate_seconds_total{core="0,0",state="c1"} 5
+windows_cpu_processor_utility_total{core="0,0"} 5
+windows_cpu_core_frequency_mhz{core="0,0"} 3200
+windows_logical_disk_free_bytes{volume="C:"} 7e+11
+windows_logical_disk_size_bytes{volume="C:"} 1e+12
+windows_logical_disk_info{disk="0",filesystem="NTFS",serial_number="FAKE-SERIAL",volume="C:",volume_name="",type="fixed"} 1
+windows_net_bytes_received_total{nic="Fake Ethernet Controller"} 10
+windows_net_nic_address_info{nic="Fake Ethernet Controller",address="192.0.2.10",family="ipv4"} 1
+windows_net_nic_info{nic="Fake Ethernet Controller",friendly_name="Ethernet",mac="00:00:5e:00:53:01"} 1
+windows_net_route_info{nic="Fake Ethernet Controller",src="192.0.2.10",dest="0.0.0.0/0",metric="25"} 1
+windows_service_state{name="Alloy",state="running"} 1
+windows_service_start_mode{name="Alloy",start_mode="auto"} 1
+windows_service_info{name="Alloy",display_name="Alloy",path_name="C:\\Fake\\alloy-service.exe",run_as="LocalSystem"} 1
+windows_service_process{name="Alloy",process_id="4242"} 1.7947e+09
+windows_system_boot_time_timestamp 1.7947e+09
+windows_time_computed_time_offset_seconds 0.002
+windows_memory_available_bytes 1.6e+10

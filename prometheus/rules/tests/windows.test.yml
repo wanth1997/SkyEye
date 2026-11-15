@@ -1,0 +1,268 @@
+rule_files:
+  - ../windows.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ─────────────────────────────── WindowsHostStale ─────────────────────────
+  - name: a Windows host that stops delivering fires after 1h, in shadow
+    interval: 1m
+    input_series:
+      - series: 'up{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1x30 _x120'
+      # Still delivering: never part of the alert.
+      - series: 'up{job="integrations/windows",instance="OTHER-HOST",product="github-runner",server_id="other-windows"}'
+        values: '1x150'
+      # A Linux agent going quiet is not this alert's business.
+      - series: 'up{job="integrations/unix",instance="linux-a",product="alpha",server_id="linux-a"}'
+        values: '1x30 _x120'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: WindowsHostStale
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: WindowsHostStale
+        exp_alerts: []
+      - eval_time: 97m
+        alertname: WindowsHostStale
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              job: integrations/windows
+              instance: FAKE-HOST
+              product: github-runner
+              server_id: fake-windows
+            exp_annotations:
+              summary: "fake-windows has delivered no Windows metrics for 1h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+  - name: a Windows host that comes back within the hour does not fire
+    interval: 1m
+    input_series:
+      - series: 'up{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1x30 _x40 1x80'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: WindowsHostStale
+        exp_alerts: []
+      - eval_time: 140m
+        alertname: WindowsHostStale
+        exp_alerts: []
+
+  - name: an exporter that fails its scrape while Alloy still delivers counts as stale
+    interval: 1m
+    input_series:
+      - series: 'up{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1x10 0x100'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: WindowsHostStale
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: WindowsHostStale
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              job: integrations/windows
+              instance: FAKE-HOST
+              product: github-runner
+              server_id: fake-windows
+            exp_annotations:
+              summary: "fake-windows has delivered no Windows metrics for 1h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+  - name: a host gone for more than 7 days is forgotten
+    interval: 1h
+    input_series:
+      - series: 'up{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1x2 _x200'
+    alert_rule_test:
+      - eval_time: 100h
+        alertname: WindowsHostStale
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              job: integrations/windows
+              instance: FAKE-HOST
+              product: github-runner
+              server_id: fake-windows
+            exp_annotations:
+              summary: "fake-windows has delivered no Windows metrics for 1h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+      - eval_time: 172h
+        alertname: WindowsHostStale
+        exp_alerts: []
+
+  # ─────────────────────────────── Disk ─────────────────────────────────────
+  - name: 8% free is WindowsDiskLow after 30m and not WindowsDiskCritical
+    interval: 1m
+    input_series:
+      - series: 'windows_logical_disk_free_bytes{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '80x60'
+      - series: 'windows_logical_disk_size_bytes{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1000x60'
+      # A healthy drive on the same host.
+      - series: 'windows_logical_disk_free_bytes{volume="D:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '500x60'
+      - series: 'windows_logical_disk_size_bytes{volume="D:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1000x60'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: WindowsDiskLow
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: WindowsDiskLow
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              volume: "C:"
+              job: integrations/windows
+              instance: FAKE-HOST
+              product: github-runner
+              server_id: fake-windows
+            exp_annotations:
+              summary: "fake-windows drive C: has less than 10% free"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+      - eval_time: 45m
+        alertname: WindowsDiskCritical
+        exp_alerts: []
+
+  - name: 3% free is WindowsDiskCritical after 15m, High and still in shadow
+    interval: 1m
+    input_series:
+      - series: 'windows_logical_disk_free_bytes{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '30x40'
+      - series: 'windows_logical_disk_size_bytes{volume="C:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1000x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: WindowsDiskCritical
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: WindowsDiskCritical
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              notification_mode: shadow
+              volume: "C:"
+              job: integrations/windows
+              instance: FAKE-HOST
+              product: github-runner
+              server_id: fake-windows
+            exp_annotations:
+              summary: "fake-windows drive C: has less than 5% free"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+  - name: a full recovery partition and an empty card reader fire nothing
+    interval: 1m
+    input_series:
+      - series: 'windows_logical_disk_free_bytes{volume="HarddiskVolume1",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1x60'
+      - series: 'windows_logical_disk_size_bytes{volume="HarddiskVolume1",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1000x60'
+      - series: 'windows_logical_disk_free_bytes{volume="E:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '0x60'
+      - series: 'windows_logical_disk_size_bytes{volume="E:",job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 50m
+        alertname: WindowsDiskLow
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: WindowsDiskCritical
+        exp_alerts: []
+
+  # ─────────────────────────────── Clock ────────────────────────────────────
+  - name: a clock 7s behind fires WindowsClockSkew after 30m, 2s ahead does not
+    interval: 1m
+    input_series:
+      - series: 'windows_time_computed_time_offset_seconds{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '-7x60'
+      - series: 'windows_time_computed_time_offset_seconds{job="integrations/windows",instance="OTHER-HOST",product="github-runner",server_id="other-windows"}'
+        values: '2x60'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: WindowsClockSkew
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: WindowsClockSkew
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              job: integrations/windows
+              instance: FAKE-HOST
+              product: github-runner
+              server_id: fake-windows
+            exp_annotations:
+              summary: "fake-windows clock is more than 5s from its time source"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+  # ─────────────────────────────── Push ─────────────────────────────────────
+  - name: dropped log entries fire AlloyAgentPushFailing while metrics still arrive
+    interval: 1m
+    input_series:
+      - series: 'loki_write_dropped_entries_total{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows",reason="ingester_error",host="loki-push.invalid"}'
+        values: '0x10 0+5x50'
+      - series: 'prometheus_remote_storage_samples_failed_total{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows",remote_name="central",url="https://prom-push.invalid/api/v1/write"}'
+        values: '0x60'
+      # A healthy agent.
+      - series: 'loki_write_dropped_entries_total{job="integrations/self",instance="OTHER-HOST",product="github-runner",server_id="other-windows",reason="ingester_error",host="loki-push.invalid"}'
+        values: '3x60'
+      - series: 'prometheus_remote_storage_samples_failed_total{job="integrations/self",instance="OTHER-HOST",product="github-runner",server_id="other-windows",remote_name="central",url="https://prom-push.invalid/api/v1/write"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AlloyAgentPushFailing
+        exp_alerts: []
+      - eval_time: 28m
+        alertname: AlloyAgentPushFailing
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              product: github-runner
+              server_id: fake-windows
+            exp_annotations:
+              summary: "Alloy on fake-windows is failing to push metrics or dropping logs"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+  - name: failed samples fire AlloyAgentPushFailing once, even with logs dropping too
+    interval: 1m
+    input_series:
+      - series: 'prometheus_remote_storage_samples_failed_total{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows",remote_name="central",url="https://prom-push.invalid/api/v1/write"}'
+        values: '0+100x40'
+      - series: 'loki_write_dropped_entries_total{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows",reason="ingester_error",host="loki-push.invalid"}'
+        values: '0+5x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: AlloyAgentPushFailing
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: AlloyAgentPushFailing
+        exp_alerts:
+          - exp_labels:
+              severity: Medium
+              notification_mode: shadow
+              product: github-runner
+              server_id: fake-windows
+            exp_annotations:
+              summary: "Alloy on fake-windows is failing to push metrics or dropping logs"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+  - name: one burst of failures that ends does not fire AlloyAgentPushFailing
+    interval: 1m
+    input_series:
+      - series: 'prometheus_remote_storage_samples_failed_total{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows",remote_name="central",url="https://prom-push.invalid/api/v1/write"}'
+        values: '0x5 0+100x3 300x60'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AlloyAgentPushFailing
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: AlloyAgentPushFailing
+        exp_alerts: []

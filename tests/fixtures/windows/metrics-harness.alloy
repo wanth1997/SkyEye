@@ -1,0 +1,21 @@
+// Loaded beside the unmodified render by tests/windows/test-windows-config.sh.
+//
+// prometheus.exporter.windows does nothing outside Windows, so this serves
+// label-contract.prom through a textfile collector and scrapes it into the
+// template's own prometheus.relabel.windows. Everything after that receiver is
+// the template.
+
+prometheus.exporter.unix "fixture" {
+  set_collectors = ["textfile"]
+
+  textfile {
+    directory = "/samples/textfile"
+  }
+}
+
+prometheus.scrape "fixture" {
+  targets         = prometheus.exporter.unix.fixture.targets
+  forward_to      = [prometheus.relabel.windows.receiver]
+  scrape_interval = "5s"
+  scrape_timeout  = "4s"
+}

@@ -1,0 +1,22 @@
+# Alloy's own metric names the Windows template sends to central. Everything
+# else prometheus.exporter.self exposes (about 220 names) stays on the host.
+# tests/windows/test-windows-config.sh holds the template's keep rule to this
+# list, and tests/windows/test-windows-central.sh lets the dashboard and the
+# alert rules use these names.
+up
+scrape_duration_seconds
+scrape_samples_scraped
+alloy_build_info
+alloy_component_controller_running_components
+alloy_resources_process_resident_memory_bytes
+alloy_resources_process_cpu_seconds_total
+prometheus_remote_storage_samples_total
+prometheus_remote_storage_samples_failed_total
+prometheus_remote_storage_samples_retried_total
+prometheus_remote_storage_samples_dropped_total
+prometheus_remote_storage_samples_pending
+prometheus_remote_storage_queue_highest_sent_timestamp_seconds
+loki_write_sent_entries_total
+loki_write_dropped_entries_total
+loki_write_batch_retries_total
+loki_write_request_duration_seconds_count

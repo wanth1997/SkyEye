@@ -27,12 +27,14 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 | `SchedulerNoHeartbeat` | [scheduler-dead.md](./scheduler-dead.md) | High |
 | `SkyEyeWatchdog` / `AlertmanagerDown` | [skyeye-watchdog.md](./skyeye-watchdog.md) | None (external dead man's switch) / High |
 | `AllRemoteAgentsSilent` | [all-remote-agents-silent.md](./all-remote-agents-silent.md) | High (shadow) |
+| `WindowsHostStale` / `WindowsDiskLow` / `WindowsDiskCritical` / `WindowsClockSkew` / `AlloyAgentPushFailing` | [windows-host-onboarding.md](./windows-host-onboarding.md#7-告警處理) | Medium / Medium / High / Medium / Medium (all shadow) |
 
 Add a row + a runbook here every time you add a rule with `severity: High` or `Medium`.
 
 ## Procedures
 
 - [`trading-alert-promotion.md`](./trading-alert-promotion.md) — Trading silence rule, SMTP fill-in, real canary and the promotion checklist.
+- [`windows-host-onboarding.md`](./windows-host-onboarding.md) — Windows host: pinned Alloy, token placement, Check, elevated Install, central verification, rollback, uninstall, adding a runner.
 - [`alertmanager-upgrade.md`](./alertmanager-upgrade.md) — Manual Alertmanager image upgrade (v0.27.0 → v0.34.2): pre-pull, `up -d`, `--manual-applied`, post-checks and rollback.
 - [`skyeye-watchdog.md`](./skyeye-watchdog.md) — External dead man's switch: hosted check, `deadman_url` secret, deploy, the one-time Alertmanager stop test and planned-downtime pauses.
 

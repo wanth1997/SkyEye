@@ -18,6 +18,7 @@ SkyEye 是 wanbrain 各產品共用的自架監控平台。它集中接收遠端
 
 - 中央端以 Docker Compose 執行 Prometheus、Loki、Grafana、Alertmanager、Blackbox Exporter、Node Exporter（`monitoring-host` job）與 Cloudflare Tunnel。
 - 被監控主機執行 Grafana Alloy，透過 Cloudflare Access Service Token 將 metrics remote-write 到 Prometheus、將 logs push 到 Loki。
+- Windows 主機用 `agents/alloy/windows/` 的 PowerShell 安裝器，每台有自己專屬的 Access token（檔案在 `C:\ProgramData\SkyEye\secrets\`），series 是 `job="integrations/windows"`。流程見 `runbooks/windows-host-onboarding.md`。
 - Prometheus rules 位於 `prometheus/rules/`；Loki ruler 目前使用單一 tenant directory `/loki/rules/fake/`。
 - Grafana dashboard 由 `grafana/dashboards/` 的 JSON provisioning，datasource UID 固定為 `prometheus`、`loki`、`alertmanager`。
 - High alerts 目前實際只送 Telegram。已決定補 email，`email-high` 休眠路由已 merge，但它只收 `notification_mode="page"`，目前沒有這種告警，`alertmanager.yml` 的 SMTP 也還是 `example.invalid` placeholder，所以不會寄信。啟用流程見 `runbooks/trading-alert-promotion.md`。
@@ -37,6 +38,7 @@ scripts/verify-all --list   # 只列出會跑的 suite 與 rule test
 - `rg`：必須是 PATH 上的執行檔，shell function 不算。
 - `lokitool`：版本必須等於 `docker-compose.yml` 釘的 `grafana/loki`，目前是 3.1.1。
 - `alloy`（要有 `validate` 子命令）、可連線的 Docker daemon 與 compose plugin。
+- `pwsh`（PowerShell 7，`brew install powershell`）：Windows 安裝器的 render 與測試用。
 - `plutil`、`ioreg`：只有 macOS 有，所以這個 gate 目前只能在 macOS 跑。
 
 開發中只想跑單項時：
@@ -64,6 +66,7 @@ find grafana/dashboards -name '*.json' -exec jq empty {} +
 - 遠端 agent 必須主動 push；中央 Prometheus 不對產品主機開放 scrape port。
 - Trading 類告警的 duplicate process、risk halt 與 telemetry missing 屬高風險狀態，規則必須先經 shadow 與 canary 驗證。
 - Trading target（單一 server 上的單一 strategy）的增減一律用 `scripts/trading-target add|remove`（repo）、`agents/alloy/trading/setup-linux.sh add|retire`（host）與 `scripts/central-deploy`（central），流程見 `agents/alloy/trading/README.md`；不得手改 `trading-targets.yml` 或在測試中寫死 target 名單。`prometheus/rules/tests/fixtures/trading-targets.yml` 是 rule 語意 fixture，增減 target 時不修改。
+- Windows 安裝器（`agents/alloy/windows/*.ps1`）必須同時能在 Windows PowerShell 5.1 與 PowerShell 7 執行：純 ASCII、不提示輸入、不以參數接收憑證、不開啟 secret 檔；所有碰主機的呼叫放在 `*-SkyEyeHost*` 函式。Windows 告警的 metric 名稱必須在 `tests/fixtures/windows/` 的 inventory 或 allowlist 內。
 - Linux Trading monitoring 必須以 `skyeye-trading-probe@STRATEGY`、獨立 mode-0600 env、獨立 `tnauqquant-STRATEGY.prom` 與精確 log glob 隔離；共享 textfile collector 只能在所有 templated probe 停止且 timer disabled 時改寫。Mainnet strategy 未經 operator 指示不得由監控安裝器啟動。
 
 ## 相關文件
@@ -72,6 +75,7 @@ find grafana/dashboards -name '*.json' -exec jq empty {} +
 - `docs/work-log.md` — 工作記錄（最新在最上方）
 - `monitoring-plan-v2.md` — 現有平台架構與歷史決策
 - `docs/onboarding-new-product.md` — 一般產品 onboarding 流程
+- `runbooks/windows-host-onboarding.md` — Windows 主機上線、rollback 與告警處理
 - `docs/grafana-conventions.md` — dashboard 命名與 provisioning 規則
 - `docs/trading-monitoring-development-plan.md` — Trading monitoring 設計、跨 server contract 與開發計畫
 - `docs/trading-runtime-contract-agent-spec.md` — 可直接交給 tnauqquant agent 的 runtime contract 規格

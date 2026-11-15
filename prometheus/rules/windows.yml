@@ -1,0 +1,82 @@
+groups:
+  # Windows hosts report through agents/alloy/windows/. Every rule here is in
+  # shadow: Prometheus evaluates it and Alertmanager sends it to shadow-null.
+  # Promotion follows runbooks/windows-host-onboarding.md.
+  #
+  # Only metric names the Windows template keeps may be used here;
+  # tests/windows/test-windows-central.sh checks that.
+  - name: windows-host
+    interval: 1m
+    rules:
+      - alert: WindowsHostStale
+        # A host that delivered in the last 7 days and has no healthy exporter
+        # scrape now: the agent stopped, lost its token, or the machine is off.
+        # It clears by itself 7 days after the last sample, so a retired host
+        # needs no cleanup.
+        expr: |
+          last_over_time(up{job="integrations/windows"}[7d])
+          unless on (product, server_id)
+          (up{job="integrations/windows"} == 1)
+        for: 1h
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} has delivered no Windows metrics for 1h"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+      - alert: WindowsDiskLow
+        # Drive letters only. The template already leaves out the recovery and
+        # EFI partitions (HarddiskVolumeN); the matcher keeps that true for a
+        # host that reports them anyway.
+        expr: |
+          100 * windows_logical_disk_free_bytes{volume=~"[A-Z]:"}
+            / windows_logical_disk_size_bytes{volume=~"[A-Z]:"} < 10
+        for: 30m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} drive {{ $labels.volume }} has less than 10% free"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+      - alert: WindowsDiskCritical
+        expr: |
+          100 * windows_logical_disk_free_bytes{volume=~"[A-Z]:"}
+            / windows_logical_disk_size_bytes{volume=~"[A-Z]:"} < 5
+        for: 15m
+        labels:
+          severity: High
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} drive {{ $labels.volume }} has less than 5% free"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+      - alert: WindowsClockSkew
+        # The offset Windows Time computed against its source. Past a few
+        # seconds, TLS and token validation on the host start to fail.
+        expr: abs(windows_time_computed_time_offset_seconds) > 5
+        for: 30m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "{{ $labels.server_id }} clock is more than 5s from its time source"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"
+
+      - alert: AlloyAgentPushFailing
+        # Seen only while the metrics push itself still works, which is the
+        # case it is for: logs refused while metrics arrive, or a push that
+        # fails part of the time. A host that delivers nothing at all is
+        # WindowsHostStale.
+        expr: |
+          sum by (product, server_id) (rate(prometheus_remote_storage_samples_failed_total{job="integrations/self"}[10m])) > 0
+          or
+          sum by (product, server_id) (rate(loki_write_dropped_entries_total{job="integrations/self"}[10m])) > 0
+        for: 15m
+        labels:
+          severity: Medium
+          notification_mode: shadow
+        annotations:
+          summary: "Alloy on {{ $labels.server_id }} is failing to push metrics or dropping logs"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/windows-host-onboarding.md"

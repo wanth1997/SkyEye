@@ -11,6 +11,10 @@
 # The macOS template is validated with the Linux image of the same version, so
 # darwin-only behaviour is not covered.
 #
+# The Windows versions get their image checks here. The Windows template itself
+# is rendered by its PowerShell installer, so tests/windows/test-windows-config.sh
+# validates and runs it on every version listed for Windows.
+#
 # VERBOSE=1 also prints every check that passed.
 
 set -uo pipefail
@@ -89,7 +93,8 @@ image_for() {
 }
 
 ALL_VERSIONS=""
-for version in $SKYEYE_ALLOY_LINUX_VERSIONS $SKYEYE_ALLOY_MACOS_VERSIONS; do
+[[ -n "${SKYEYE_ALLOY_WINDOWS_VERSIONS:-}" ]] || die "SKYEYE_ALLOY_WINDOWS_VERSIONS is empty or missing"
+for version in $SKYEYE_ALLOY_LINUX_VERSIONS $SKYEYE_ALLOY_MACOS_VERSIONS $SKYEYE_ALLOY_WINDOWS_VERSIONS; do
   listed "$version" "$ALL_VERSIONS" || ALL_VERSIONS="$ALL_VERSIONS $version"
 done
 

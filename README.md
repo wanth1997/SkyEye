@@ -27,12 +27,14 @@ PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
 - **External deps**: blackbox probes on NewebPay, Google OAuth, ppclub.tw, Hengfu (insecure TLS)
 
 ### Alert rules active
-39 Prometheus rules across 7 files:
+98 Prometheus rules across 9 files:
 - `system.yml` — CPU, RAM, disk, OOM, systemd units
 - `app.yml` — BackendDown, 5xx rates, latency p99, unhandled exception surge, payment failure and LinkCourt 401/429 surge shadow alerts
 - `business.yml` — PaymentSuccessRateLow, RefundVolumeHigh, ExternalApiDown, ExternalApiSlow, TlsCertExpired, TlsCertExpiringSoon
 - `deadman.yml` — SchedulerNoHeartbeat, PrometheusSelfStale, SkyEyeWatchdog (external dead man's switch), DailyHeartbeat
 - `stack-health.yml` — SkyEye components, remote ingest path (AllRemoteAgentsSilent), resource pressure, rule evaluation health
+- `backup.yml` — Prometheus backup freshness
+- `windows.yml` — Windows hosts: stale host, disk, clock skew, failing Alloy push (all shadow)
 - `trading-targets.yml` / `trading.yml` — production Trading target inventory (edit with `scripts/trading-target add|remove`) and shadow alerts
 
 Severity → routing:
@@ -56,7 +58,7 @@ SkyEye/
 │
 ├── prometheus/
 │   ├── prometheus.yml                   remote-write receiver + scrape + blackbox
-│   └── rules/                           system / app / business / deadman / stack / trading (39 rules)
+│   └── rules/                           system / app / business / deadman / stack / backup / windows / trading (98 rules)
 │
 ├── loki/loki-config.yml                 S3 backend, delete API enabled
 │
@@ -66,7 +68,7 @@ SkyEye/
 │   ├── provisioning/                    datasources (pinned UIDs) + dashboard loader
 │   └── dashboards/
 │       ├── Overview/                    Overview — All products
-│       ├── Hosts/                       Hosts — Node exporter (from grafana.com 1860)
+│       ├── Hosts/                       Hosts — Node exporter (from grafana.com 1860), 主機 — Windows
 │       └── PPClub/                      backend-overview, business
 │
 ├── cloudflared/
@@ -79,6 +81,7 @@ SkyEye/
 │   ├── config-logs.alloy.tmpl           journald → PII scrub → central Loki (Phase 2A)
 │   ├── config-metrics.alloy.tmpl        node_exporter → central Prom (Phase 2B)
 │   ├── config-app.alloy.tmpl            app /metrics scrape (Phase 2C)
+│   ├── windows/                         Windows hosts: install.ps1, uninstall.ps1, config template
 │   └── README.md                        env vars, verify, troubleshoot
 │
 ├── infra/iam/                           one-time AWS bootstrap
