@@ -1,0 +1,55 @@
+// Loaded beside the unmodified render by tests/windows/test-windows-scrub.sh.
+//
+// loki.source.windowsevent does nothing outside Windows, so this feeds fixture
+// Event Log lines into the template's own loki.process.windows_eventlog. It
+// only adds what the real source adds itself: the channel and computer labels,
+// no filename label, and the event time as the entry timestamp. Everything
+// after that receiver is the template.
+//
+// The runner log needs no harness: the template's own loki.source.file reads
+// /samples/diag.
+
+loki.source.file "fixture_system" {
+  targets = [
+    {
+      __path__ = "/samples/eventlog/System/events.jsonl",
+      job      = "windows-eventlog",
+      channel  = "System",
+      computer = "FAKE-Computer",
+    },
+  ]
+  tail_from_end = false
+  forward_to    = [loki.process.fixture_eventlog.receiver]
+}
+
+loki.source.file "fixture_application" {
+  targets = [
+    {
+      __path__ = "/samples/eventlog/Application/events.jsonl",
+      job      = "windows-eventlog",
+      channel  = "Application",
+      computer = "FAKE-Computer",
+    },
+  ]
+  tail_from_end = false
+  forward_to    = [loki.process.fixture_eventlog.receiver]
+}
+
+loki.process "fixture_eventlog" {
+  stage.label_drop {
+    values = ["filename"]
+  }
+
+  stage.json {
+    expressions = {
+      fixture_time = "timeCreated",
+    }
+  }
+
+  stage.timestamp {
+    source = "fixture_time"
+    format = "RFC3339Nano"
+  }
+
+  forward_to = [loki.process.windows_eventlog.receiver]
+}

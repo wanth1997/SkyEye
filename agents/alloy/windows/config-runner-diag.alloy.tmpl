@@ -12,13 +12,17 @@ local.file_match "runner_diag" {
       job      = "github-runner-diag",
     },
   ]
-  sync_period = "30s"
+  sync_period       = "30s"
+  ignore_older_than = "24h"
 }
 
+// Each file is read from its start: the runner opens a new log every time it
+// starts, and tailing from the end would lose the first lines of each. Old
+// history stays out through ignore_older_than above and the 24h drop below.
 loki.source.file "runner_diag" {
   targets       = local.file_match.runner_diag.targets
   forward_to    = [loki.process.runner_diag.receiver]
-  tail_from_end = true
+  tail_from_end = false
 }
 
 loki.process "runner_diag" {
@@ -32,7 +36,17 @@ loki.process "runner_diag" {
   }
 
   stage.regex {
-    expression = `^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z (?P<diag_level>[A-Z]+)\s`
+    expression = `^\[(?P<diag_time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z) (?P<diag_level>[A-Z]+)\s`
+  }
+
+  stage.timestamp {
+    source = "diag_time"
+    format = "2006-01-02 15:04:05Z07:00"
+  }
+
+  stage.drop {
+    older_than          = "24h"
+    drop_counter_reason = "runner_diag_too_old"
   }
 
   stage.drop {

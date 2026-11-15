@@ -392,7 +392,9 @@ loki.process "scrub" {
     replace    = "[TOKEN]"
   }
 
-  // W8: credentials inside a URL, scheme://user:password@host
+  // W8: credentials inside a URL, scheme://user:password@host. The shared email
+  // rule already takes them when the host looks like a mail domain, and the
+  // host name with them; this covers an IP address or a bare host name.
   stage.replace {
     expression = `[A-Za-z][A-Za-z0-9+.-]*://([^/\s:@"']+:[^/\s@"']+)@`
     replace    = "[SECRET]"
