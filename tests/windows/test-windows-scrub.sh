@@ -76,6 +76,12 @@ for image in "${ALLOY_IMAGES[@]}"; do
     grep -E 'level=(error|warn)' "$WORK/alloy.log" | tail -n 5 | cut -c1-300 || true
     record "the scrub contract is not met on Alloy v$version"
   fi
+
+  # The stored entries are the only real Windows log data the repository has,
+  # so the dashboard's log panels are queried here.
+  contract judge-dashboard-logs --loki "$LOKI" --server "$server" --product "$PRODUCT" \
+    --dashboard "$REPO_ROOT/grafana/dashboards/Hosts/hosts-windows.json" || \
+    record "a log panel of the Windows dashboard does not work on Alloy v$version"
 done
 
 [[ "$FAILED" == "0" ]] || die "Windows scrub contract is not met"

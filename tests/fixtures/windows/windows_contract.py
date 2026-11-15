@@ -396,6 +396,228 @@ def judge_metrics(args):
     return 0
 
 
+# ------------------------------------------------------------------ central: rules and dashboard
+
+PROMQL_WORDS = {"by", "without", "on", "ignoring", "group_left", "group_right", "or", "and", "unless",
+                "bool", "offset", "inf", "nan"}
+
+
+def promql_selectors(expr):
+    """(metric name, selector text or None) for every series selector in a PromQL expression."""
+    bare = re.sub(r'"(?:[^"\\]|\\.)*"', '""', expr)
+    bare = re.sub(r"\[[^\]]*\]", "", bare)
+    bare = re.sub(r"\b(by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)", " ", bare)
+    # Label names inside a selector look like metric names; they are not.
+    spans = [match.span() for match in re.finditer(r"\{[^}]*\}", bare)]
+    found = []
+    for match in re.finditer(r"[A-Za-z_:][A-Za-z0-9_:]*", bare):
+        if any(start < match.start() < end for start, end in spans):
+            continue
+        name = match.group(0)
+        rest = bare[match.end():]
+        if name in PROMQL_WORDS or re.match(r"\s*\(", rest):
+            continue
+        selector = re.match(r"\{[^}]*\}", rest)
+        found.append((name, selector.group(0) if selector else None))
+    return found
+
+
+def allowed_metric_names(args):
+    keep = {name for name, verdict in read_inventory(args.inventory) if verdict == "keep"}
+    # ALERTS is written by central Prometheus itself.
+    return keep | set(read_allowlist(args.allowlist)) | {"ALERTS"}
+
+
+def substitute(expr, product, server):
+    return (expr.replace("$__rate_interval", "5m").replace("$__interval", "1m")
+            .replace("$product", product).replace("$server_id", server))
+
+
+def dashboard_targets(dashboard):
+    for panel in dashboard["panels"]:
+        for target in panel.get("targets", []):
+            yield panel, target
+
+
+def check_dashboard(args):
+    """Static checks on the Windows dashboard, and a promtool test that runs its queries."""
+    failures = []
+    path = pathlib.Path(args.dashboard)
+    dashboard = json.loads(path.read_text(encoding="utf-8"))
+    allowed = allowed_metric_names(args)
+
+    if dashboard.get("uid") != "hosts-windows" or path.name != "hosts-windows.json":
+        failures.append("the uid and the file name must both be hosts-windows")
+    if dashboard.get("title") != "主機 — Windows":
+        failures.append(f"unexpected title {dashboard.get('title')!r}")
+    for tag in ("layer:host", "provisioned"):
+        if tag not in dashboard.get("tags", []):
+            failures.append(f"missing tag {tag}")
+    variables = [(v["name"], v["datasource"].get("uid")) for v in dashboard["templating"]["list"]]
+    if variables != [("product", "prometheus"), ("server_id", "prometheus")]:
+        failures.append(f"variables must be product then server_id on Prometheus, found {variables}")
+
+    ids = [panel["id"] for panel in dashboard["panels"]]
+    if len(ids) != len(set(ids)):
+        failures.append("panel ids are not unique")
+    cells = {}
+    for panel in dashboard["panels"]:
+        pos = panel["gridPos"]
+        if pos["x"] + pos["w"] > 24:
+            failures.append(f"panel {panel['id']} is wider than the grid")
+        for x in range(pos["x"], pos["x"] + pos["w"]):
+            for y in range(pos["y"], pos["y"] + pos["h"]):
+                if (x, y) in cells:
+                    failures.append(f"panels {cells[(x, y)]} and {panel['id']} overlap")
+                cells[(x, y)] = panel["id"]
+
+    scoped = ('product="$product"', 'server_id="$server_id"')
+    prom, loki = [], []
+    for panel, target in dashboard_targets(dashboard):
+        where = f"panel {panel['id']} ({panel['title']})"
+        sources = {panel.get("datasource", {}).get("uid"), target.get("datasource", {}).get("uid")}
+        if len(sources) != 1 or not sources <= {"prometheus", "loki"}:
+            failures.append(f"{where}: datasource must be the pinned uid prometheus or loki, found {sorted(map(str, sources))}")
+            continue
+        expr = target["expr"]
+        if sources == {"prometheus"}:
+            prom.append((where, expr))
+            selectors = promql_selectors(expr)
+            if not selectors:
+                failures.append(f"{where}: no metric found in {expr}")
+            for name, selector in selectors:
+                if name not in allowed:
+                    failures.append(f"{where}: {name} is not a metric the Windows template sends")
+            raw = re.findall(r"\{[^}]*\}", expr)
+            if len(raw) != len(selectors) or any(sel is None for _, sel in selectors):
+                failures.append(f"{where}: a metric has no label selector: {expr}")
+            for selector in raw:
+                if not all(part in selector for part in scoped):
+                    failures.append(f"{where}: selector {selector} is not scoped to $product and $server_id")
+        else:
+            loki.append((where, expr))
+            selector = re.match(r"(?:.*?\()*\s*(\{[^}]*\})", expr)
+            if not selector or not all(part in selector.group(1) for part in scoped):
+                failures.append(f"{where}: the log selector is not scoped to $product and $server_id: {expr}")
+                continue
+            labels = set(re.findall(r'([a-z_]+)\s*(?:=~|!=|!~|=)\s*"', selector.group(1)))
+            grouped = set(re.findall(r"[a-z_]+", " ".join(re.findall(r"\bby\s*\(([^)]*)\)", expr))))
+            budget = DIAG_LABELS if 'job="github-runner-diag"' in selector.group(1) else EVENTLOG_LABELS
+            if "job" not in labels or not (labels | grouped) <= budget:
+                failures.append(f"{where}: uses labels {sorted(labels | grouped)}, the stream has {sorted(budget)}")
+    if len(prom) < 20 or len(loki) < 3:
+        failures.append(f"only {len(prom)} Prometheus and {len(loki)} Loki queries found; the dashboard was not read")
+
+    # Every Prometheus query runs on fixture series: it must return something for
+    # the selected host and nothing for a host that does not exist.
+    series = []
+    for raw in pathlib.Path(args.series).read_text(encoding="utf-8").splitlines():
+        if not raw or raw.startswith("#"):
+            continue
+        selector, values = raw.split("\t")
+        name = selector.split("{")[0]
+        if name not in allowed:
+            failures.append(f"the dashboard fixture invents a metric: {name}")
+        series.append((selector, values))
+    lines = ["evaluation_interval: 1m", "tests:"]
+    for server, expect in ((args.server, True), ("no-such-host", False)):
+        lines += [f"  - name: dashboard queries for {server}", "    interval: 1m", "    input_series:"]
+        for selector, values in series:
+            lines += [f"      - series: {json.dumps(selector)}", f"        values: {json.dumps(values)}"]
+        lines.append("    promql_expr_test:")
+        for where, expr in prom:
+            query = f"count({substitute(expr, args.product, server)}) > bool 0"
+            lines += [f"      # {where}", f"      - expr: {json.dumps(query)}", "        eval_time: 10m"]
+            if expect or "vector(0)" in expr:
+                lines += ["        exp_samples:", "          - labels: '{}'", "            value: 1"]
+            else:
+                lines.append("        exp_samples: []")
+    pathlib.Path(args.out).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    for failure in sorted(set(failures)):
+        print(f"FAIL dashboard: {failure}")
+    if failures:
+        return 1
+    print(f"ok: dashboard has {len(prom)} Prometheus and {len(loki)} Loki queries, all scoped and on sent metrics")
+    return 0
+
+
+def check_rules(args):
+    """The Windows alert rules as the pinned Prometheus loaded them."""
+    failures = []
+    allowed = allowed_metric_names(args)
+    line = next((l for l in pathlib.Path(args.log).read_text(encoding="utf-8").splitlines() if l.startswith("RULES ")), None)
+    if line is None:
+        print("FAIL rules: Prometheus did not load the rule file")
+        return 1
+    groups = json.loads(line[6:])["data"]["groups"]
+    rules = [rule for group in groups if group["name"] == "windows-host" for rule in group["rules"]]
+    if len(rules) < 5:
+        failures.append(f"expected at least 5 rules in group windows-host, found {len(rules)}")
+    routes = []
+    for rule in rules:
+        name, labels, notes = rule["name"], rule.get("labels", {}), rule.get("annotations", {})
+        # A Windows alert leaves shadow only through the promotion procedure, which
+        # changes this test in the same commit.
+        if labels.get("notification_mode") != "shadow":
+            failures.append(f"{name}: notification_mode is {labels.get('notification_mode')!r}, new alerts start in shadow")
+        if labels.get("severity") not in ("Medium", "High"):
+            failures.append(f"{name}: severity is {labels.get('severity')!r}")
+        if not notes.get("summary"):
+            failures.append(f"{name}: no summary")
+        prefix = "https://github.com/wanth1997/SkyEye/blob/master/"
+        runbook = notes.get("runbook_url", "")
+        if not runbook.startswith(prefix) or not (pathlib.Path(args.repo) / runbook[len(prefix):]).is_file():
+            failures.append(f"{name}: runbook_url does not point to a file in this repository: {runbook}")
+        for metric, _ in promql_selectors(rule["query"]):
+            if metric not in allowed:
+                failures.append(f"{name}: {metric} is not a metric the Windows template sends")
+        fields = [f"alertname={name}", "product=github-runner", "server_id=fixture-windows"]
+        fields += [f"{key}={value}" for key, value in sorted(labels.items())]
+        routes.append(" ".join(fields))
+    pathlib.Path(args.routes).write_text("\n".join(routes) + "\n", encoding="utf-8")
+    for failure in failures:
+        print(f"FAIL rules: {failure}")
+    if failures:
+        return 1
+    print(f"ok: {len(rules)} Windows rules are in shadow, use sent metrics and link an existing runbook")
+    return 0
+
+
+def judge_dashboard_logs(args):
+    """The dashboard's Loki queries against the Loki the scrub suite filled."""
+    dashboard = json.loads(pathlib.Path(args.dashboard).read_text(encoding="utf-8"))
+    now = time.time_ns()
+    failures, count = [], 0
+    for panel, target in dashboard_targets(dashboard):
+        if target.get("datasource", {}).get("uid") != "loki":
+            continue
+        count += 1
+        params = urllib.parse.urlencode({
+            "query": substitute(target["expr"], args.product, args.server), "limit": 100, "step": "60",
+            "start": now - 6 * 3600 * 10**9, "end": now + 3600 * 10**9,
+        })
+        try:
+            result = http_json(args.loki, f"http://127.0.0.1:3100/loki/api/v1/query_range?{params}")["data"]["result"]
+        except (subprocess.CalledProcessError, ValueError):
+            failures.append(f"panel {panel['id']} ({panel['title']}): Loki rejects the query")
+            continue
+        if not result:
+            failures.append(f"panel {panel['id']} ({panel['title']}): the query returns nothing")
+        elif target["expr"].rstrip().endswith('"') and "line_format" in target["expr"]:
+            shown = [line for stream in result for _, line in stream["values"]]
+            if not any(re.match(r"\[(System|Application)\] \S.* #\d+  \S", line) for line in shown):
+                failures.append(f"panel {panel['id']} ({panel['title']}): line_format did not fill in: {shown[:1]}")
+    if count < 3:
+        failures.append(f"only {count} Loki queries found in the dashboard")
+    for failure in failures:
+        print(f"FAIL dashboard logs: {failure}")
+    if failures:
+        return 1
+    print(f"ok: {count} dashboard log queries return data")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
@@ -436,6 +658,31 @@ def main():
     metrics.add_argument("--server", required=True)
     metrics.add_argument("--product", required=True)
     metrics.set_defaults(run=judge_metrics)
+
+    board = commands.add_parser("dashboard")
+    board.add_argument("--dashboard", required=True)
+    board.add_argument("--series", required=True)
+    board.add_argument("--inventory", required=True)
+    board.add_argument("--allowlist", required=True)
+    board.add_argument("--server", required=True)
+    board.add_argument("--product", required=True)
+    board.add_argument("--out", required=True)
+    board.set_defaults(run=check_dashboard)
+
+    rules = commands.add_parser("rules")
+    rules.add_argument("--log", required=True)
+    rules.add_argument("--repo", required=True)
+    rules.add_argument("--inventory", required=True)
+    rules.add_argument("--allowlist", required=True)
+    rules.add_argument("--routes", required=True)
+    rules.set_defaults(run=check_rules)
+
+    board_logs = commands.add_parser("judge-dashboard-logs")
+    board_logs.add_argument("--loki", required=True)
+    board_logs.add_argument("--dashboard", required=True)
+    board_logs.add_argument("--server", required=True)
+    board_logs.add_argument("--product", required=True)
+    board_logs.set_defaults(run=judge_dashboard_logs)
 
     args = parser.parse_args()
     return args.run(args)

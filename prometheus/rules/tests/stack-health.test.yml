@@ -129,6 +129,33 @@ tests:
         alertname: AllRemoteAgentsSilent
         exp_alerts: []
 
+  # A Windows host has a dedicated Access token. It keeps delivering when the
+  # token the Linux agents share is revoked, and must not make that look fine.
+  - name: a delivering Windows agent does not hide a shared-token outage
+    interval: 30s
+    input_series:
+      - series: 'up{job="integrations/unix",instance="PROD02",product="ppclub",server_id="PROD02"}'
+        values: '1x10 _x30'
+      - series: 'up{job="integrations/unix",instance="trading01",product="tnauqquant",server_id="trading01"}'
+        values: '1x10 _x30'
+      - series: 'up{job="integrations/windows",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1x40'
+      - series: 'up{job="integrations/self",instance="FAKE-HOST",product="github-runner",server_id="fake-windows"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: AllRemoteAgentsSilent
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: AllRemoteAgentsSilent
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              notification_mode: shadow
+            exp_annotations:
+              summary: "No remote agent is delivering metrics — check cloudflared and the Access service token"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/all-remote-agents-silent.md"
+
   # Until alertmanager/secrets/deadman_url exists every watchdog ping fails;
   # that must not page through Telegram, but a Telegram failure still must.
   - name: webhook failures do not fire AlertmanagerNotifyFailures, Telegram failures do

@@ -55,6 +55,9 @@ groups:
         # pile of per-host alerts. Remote Alloy agents report
         # up{job="integrations/unix"}; the central node-exporter is
         # job="monitoring-host" and does not count.
+        # Windows agents (job="integrations/windows") do not count either:
+        # each holds its own Access token, so one that still delivers says
+        # nothing about the token the Linux agents share.
         expr: absent(up{job="integrations/unix"} == 1)
         for: 5m
         labels:
