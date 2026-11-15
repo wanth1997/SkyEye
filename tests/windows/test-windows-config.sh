@@ -98,8 +98,11 @@ has '__path__ = "/samples/diag/Runner_\*\.log"' "$WORK/cfg/config.alloy" || reco
 
 # The mutation: exactly the two header lines change.
 sed 's/convert\.nonsensitive(\(local\.file\.cf_secret\.content\))/\1/' "$WORK/cfg/config.alloy" >"$WORK/broken/config.alloy"
-[[ "$(diff "$WORK/cfg/config.alloy" "$WORK/broken/config.alloy" | grep -c '^>')" == "2" ]] || \
-  die "the mutation did not change exactly two lines"
+# A template that already lacks the conversion leaves nothing to remove. That
+# is recorded, and the run below then shows what such a config does.
+changed="$(diff "$WORK/cfg/config.alloy" "$WORK/broken/config.alloy" | grep -c '^>' || true)"
+[[ "$changed" == "2" ]] || \
+  record "removing convert.nonsensitive changed $changed lines of the render, expected the two secret headers"
 
 cp "$WINDOWS_FIXTURES/metrics-harness.alloy" "$WORK/cfg/harness.alloy"
 cp "$WINDOWS_FIXTURES/label-contract.prom" "$WORK/samples/textfile/"
@@ -171,7 +174,7 @@ for image in "${ALLOY_IMAGES[@]}"; do
     run --storage.path=/tmp/alloy --disable-reporting --server.http.listen-addr=127.0.0.1:12345 /cfg
   docker start "$alloy" >/dev/null
 
-  contract judge-metrics --prom "$prom" --fixture "$WINDOWS_FIXTURES/label-contract.prom" \
+  contract judge-metrics --prom "$prom" --alloy "$alloy" --fixture "$WINDOWS_FIXTURES/label-contract.prom" \
     --inventory "$INVENTORY" --allowlist "$ALLOWLIST" --server "$SERVER" --product "$PRODUCT" || \
     record "Alloy v$version: the label contract is not met"
 
@@ -180,7 +183,7 @@ for image in "${ALLOY_IMAGES[@]}"; do
     record "Alloy v$version: the render did not stay up under alloy run"
   docker logs "$alloy" >"$WORK/alloy.log" 2>&1 || true
   if grep -q 'failed to evaluate config' "$WORK/alloy.log"; then
-    record "Alloy v$version: a component of the render failed to load: $(grep 'failed to evaluate config' "$WORK/alloy.log" | head -n 2 | cut -c1-300 || true)"
+    record "Alloy v$version: a component of the render failed to load: $(grep 'failed to evaluate config' "$WORK/alloy.log" | grep -o 'node=.*' | head -n 2 | cut -c1-220 | tr '\n' ' ' || true)"
   fi
   [[ "$(docker exec "$prom" wget -qO- http://127.0.0.1:12345/-/ready 2>/dev/null || true)" == *ready* ]] || \
     record "Alloy v$version: /-/ready does not answer on the render"

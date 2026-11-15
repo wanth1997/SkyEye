@@ -331,6 +331,11 @@ def judge_metrics(args):
         alloy = prom_series(args.prom, '{job="integrations/self"}')
         if fixture and any(row["__name__"] == "prometheus_remote_storage_samples_total" for row in alloy):
             break
+        running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", args.alloy],
+                                 capture_output=True, text=True).stdout.strip()
+        if running != "true":
+            print("FAIL: the Alloy container stopped before any series arrived")
+            return 1
         time.sleep(2)
     time.sleep(6)
     fixture = prom_series(args.prom, '{__name__=~"windows_.+"}')
@@ -652,6 +657,7 @@ def main():
 
     metrics = commands.add_parser("judge-metrics")
     metrics.add_argument("--prom", required=True)
+    metrics.add_argument("--alloy", required=True)
     metrics.add_argument("--fixture", required=True)
     metrics.add_argument("--inventory", required=True)
     metrics.add_argument("--allowlist", required=True)
