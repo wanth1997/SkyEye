@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-19 02:27 — Trading01 新 lane `popdex-02`（PopDEX ETH）納入監控
+
+**改動摘要：** 新增 `trading01`／`popdex-02` 的 shadow inventory row、不含 credential 的 instance env 範例與 operator 上線程序。這次只 merge；主機端 `setup-linux.sh add` 與 `central-deploy` 還沒執行，lane 本身在 Wan 手動測一個 cycle 之前維持停用。
+
+**修改的檔案：**
+- `prometheus/rules/trading-targets.yml`：`scripts/trading-target add --server trading01 --strategy popdex-02` 產生的一筆 row，`notification_mode: shadow`。
+- `agents/alloy/trading/deployment-linux-popdex-02.env.example`：新增。`TQ_STRATEGY_DISABLED=1`；`TQ_EXECUTABLE` 與 `TQ_EXECUTOR_MAP` 留空，由 operator 在 Trading01 唯讀核對後填入，原樣無法 render 或 `add`；`TQ_RAW_LOG_GLOB` 限定 `YYYYMMDD_HHMMSS_popdex_02_config.raw.log`，不會選到名稱相似的檔案。
+- `docs/trading01-popdex-02-onboarding.md`：新增 operator 程序。Step 1 唯讀前置檢查（lane 的 service 與所有可能啟動它的 timer 都停用、Alloy 版本、共用 probe 檔案與 staging 相同、填入兩個空值），以及安裝前的中央基準；Step 2 host `add`（只 reload）；Step 3 中央確認 remote-write；Step 4 分成 dry run 與正式 `central-deploy`，並處理已套用的情況；Step 5 在 Wan 手動測試 cycle 後核對 binding、raw log、Loki、executor 成交額與數量單位。附 disabled 期間與改回 `0` 之後預期的 shadow 告警表。
+- `tests/trading/test-linux-env-examples.sh`：新增 suite。每份 `deployment-linux-*.env.example` 都在 test root 內 render 並與其他 lane 一起 `alloy validate`，寫入前先驗證名稱與路徑；註明 `CONTRACT-NAMED LOGS ONLY` 的範例必須只選到自己的 log。
+- `tests/trading/test-central-config.sh`：收集 exchange 名稱時略過空的 `TQ_EXECUTOR_MAP`。
+- `agents/alloy/trading/README.md`：檔案表加上 `popdex-02`，Add/remove 一節指向新程序。
+
+**原因/備註：** 請求來源是 Linear WAN-346（tnauqquant manager 轉述 Wan：「Sky Eye 新增新的監控」）。Code review 三輪，第三輪的修正只改 operator 文件，依 manager 代決 D29 不再開第四輪；程序裡的 systemd 與 Loki 命令只對 stub 跑過，第一次執行要有人看著。上線前已知的風險：Trading01 上的共用 `ensure-log-access.sh` 可能比 master 舊，`add` 會拒絕，Step 1 的 `cmp` 不符就 STOP；共用 probe 的數量欄位與 dashboard 的持倉單位寫死 BTC，ETH lane 的單位要在 Step 5 核對。另外四個 Linux 範例的寬鬆 raw log glob 另開建議卡 WAN-355。
+
+---
+
 ## 2026-11-16 00:01 — Windows 主機監控（第一台 wans-windows）
 
 **改動摘要：** SkyEye 新增 Windows 主機的正式支援：Alloy config 範本、PowerShell 安裝器與解除安裝器、5 條 shadow 告警、dashboard「主機 — Windows」與 runbook，並全部納入 `scripts/verify-all`。這次只 merge；尚未部署到 wans-windows，runner 也還沒安裝。
