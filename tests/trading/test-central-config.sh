@@ -128,9 +128,11 @@ if rg -n 'exchange *(=|!=|=~|!~) *\\"' "$DETAIL_DASHBOARD" "$FLEET_DASHBOARD"; t
   printf 'FAIL: a Trading dashboard selects a literal exchange\n' >&2
   exit 1
 fi
+# An example whose executor is not verified yet leaves the map empty (see
+# tests/trading/test-linux-env-examples.sh); it names no exchange.
 mapped_exchanges="$(
   sed -nE 's/^(export )?TQ_EXECUTOR_MAP=//p' "$REPO_ROOT"/agents/alloy/trading/*.env.example |
-    tr -d "'\"" | tr ',' '\n' | sed -E 's/^[^=]*=//' | sort -u
+    tr -d "'\"" | tr ',' '\n' | sed -E 's/^[^=]*=//' | sed '/^$/d' | sort -u
 )"
 [[ "$mapped_exchanges" == *popdex* && "$mapped_exchanges" == *lighter* ]] || {
   printf 'FAIL: could not read the exchanges from the env examples: %s\n' "$mapped_exchanges" >&2
