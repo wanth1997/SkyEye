@@ -88,15 +88,21 @@ cmp "$STAGE/agents/alloy/trading/ensure-log-access.sh" /usr/local/libexec/skyeye
 systemctl is-active tnauqquant@popdex-02.service  | tee "$WORK/lane.active"     # inactive
 systemctl is-enabled tnauqquant@popdex-02.service | tee "$WORK/lane.enabled"    # disabled、masked 或 static
 pgrep -a -f 'popdex_02_config' | tee "$WORK/lane.processes"                     # 沒有輸出
-# 每個 timer unit file 一行。從 unit file 列，因為 list-timers 只列已載入的 timer；template 看 popdex-02 這個 instance
-systemctl list-unit-files --type=timer --no-legend | awk '{ print $1 }' | while read -r t; do
-  case "$t" in *@.timer) t="${t%.timer}popdex-02.timer" ;; esac
-  printf '%s triggers=%s enabled=%s active=%s\n' "$t" "$(systemctl show -p Triggers --value "$t")" \
-    "$(systemctl is-enabled "$t" 2>&1)" "$(systemctl is-active "$t")"
-done | tee "$WORK/timers"
+# timer 有兩個來源：已安裝的 unit file，以及 systemd 已載入的 timer unit。
+# template 實際在用的 instance（例如 schedule@night.timer）只出現在後者
+systemctl list-unit-files --type=timer --no-legend >"$WORK/timer-files" && [ -s "$WORK/timer-files" ] && echo TIMER-FILES-READ
+systemctl list-units --type=timer --all --no-legend --plain >"$WORK/timer-units" && [ -s "$WORK/timer-units" ] && echo TIMER-UNITS-READ
+awk '$1 !~ /[.]timer$/' "$WORK/timer-files" "$WORK/timer-units"                 # 沒有輸出
+# 兩個來源合併，每個 timer 一行；template 的 unit file 另外看 popdex-02 這個 instance
+{ awk '{ print $1 }' "$WORK/timer-files" | sed 's/@[.]timer$/@popdex-02.timer/'; awk '{ print $1 }' "$WORK/timer-units"; } |
+  sort -u | while read -r t; do
+    printf '%s triggers=%s enabled=%s active=%s\n' "$t" "$(systemctl show -p Triggers --value "$t")" \
+      "$(systemctl is-enabled "$t" 2>&1)" "$(systemctl is-active "$t")"
+  done | tee "$WORK/timers"
 ```
 
 - 前三項都要符合註解。`is-active` 是 `active`、`activating` 或 `failed`，`is-enabled` 是 `enabled`、`enabled-runtime` 或其他值，都算不符。
+- **兩個 timer 來源都要讀得到。** `TIMER-FILES-READ` 與 `TIMER-UNITS-READ` 都要印出（命令成功而且有內容），`awk` 那一行沒有輸出（每一行的第一欄都是 timer 名稱）。少一個標記、`awk` 有輸出，或 `timers` 有一行 `active=` 不是 `inactive` 而 `triggers=` 是空的（看不出它啟動什麼）：當作不符。
 - **直接啟動這條 lane 的 timer：** `timers` 裡 `triggers=` 含 `tnauqquant@popdex-02.service` 的每一行，都必須是 `active=inactive`，而且 `enabled=` 是 `disabled`、`masked` 或 `static`。`enabled=enabled`、`enabled-runtime`（下次開機就會生效）或 `active=active` 算不符。已停用且 inactive 的 timer 不算不符。
 - **共用的每日重啟（18:30Z），以及其他啟動對象會操作 tnauqquant instance 的 timer：** 在 `timers` 找到它。它已停用且 inactive 就不影響。它是啟用或 active 時，`triggers=` 是它啟動的 unit，用 `systemctl cat <unit>` 唯讀看它實際做什麼：只重啟已在跑的 instance（例如 `try-restart`），或對象不含 `popdex-02`，算符合；會讓停著的 `tnauqquant@popdex-02` 被啟動（`start` 或 `restart`，而且對象涵蓋它），算不符。看不出來就當作不符。
 - 任何一項不符：**STOP，回報 Wan**。lane 已在跑或會被自動啟動，「Wan 手動測一個 cycle 之後才 enable」的前提不成立，後續由 Wan 決定。本文件不 stop、不 disable 任何 unit。
@@ -133,7 +139,7 @@ grep -c 'strategy *= *"popdex-02"' "$WORK/render/trading-popdex-02.alloy"       
 
 ### monitoring-prod（ubuntu）：安裝前的基準
 
-Step 3 要拿它比對其他 lane 是否受 reload 影響，Step 4 失敗時 R5 要用它還原。`q`、`lq`、`targets`、`t01_alerts` 與 rollout 文件 Phase 1 的同名函式相同。`probe_ages` 的 `age` 是現在與 probe 時間戳的差距**絕對值**，與 `TradingTelemetryMissing` 的算法相同，所以 probe 時間超前也算不新鮮。**本文件的新鮮門檻一律是 age < 60**（基準、Step 3、4b 與部署後檢查；告警本身是 180 秒）。
+Step 3 要拿它比對其他 lane 是否受 reload 影響，Step 4 失敗時 R5 要用它還原。`q`、`targets`、`t01_alerts` 與 rollout 文件 Phase 1 的同名函式相同。`probe_ages` 的 `age` 是現在與 probe 時間戳的差距**絕對值**，與 `TradingTelemetryMissing` 的算法相同，所以 probe 時間超前也算不新鮮。**本文件的新鮮門檻一律是 age < 60**（基準、Step 3、4b 與部署後檢查；告警本身是 180 秒）。
 
 ```bash
 M7=<同上>; MERGE=<完整 SHA>
@@ -142,7 +148,6 @@ declare -p M7 MERGE CUT >"$CUT/vars"
 cd /home/ubuntu/SkyEye
 cat >"$CUT/helpers.sh" <<'EOF'
 q() { curl -fsS --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
-lq() { curl -fsS --get http://127.0.0.1:3100/loki/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
 targets() { q 'trading_target_info' | jq -S '[.[].metric | del(.__name__)] | sort'; }
 probe_ages() { q 'abs(time() - tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01"})' \
   | jq -c '[.[] | {strategy: .metric.strategy, age: (.value[1] | tonumber | floor)}] | sort_by(.strategy)'; }
@@ -340,12 +345,14 @@ grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_m
 
   ```bash
   RUN_ID=<Trading01 印出的 run_id>
-  lq "sum(count_over_time({product=\"tnauqquant\",server_id=\"trading01\",strategy=\"popdex-02\",run_id=\"$RUN_ID\"}[1h]))" \
-    | jq -e 'length == 1 and (.[0].value[1] | tonumber) > 0' >/dev/null && echo LOKI-HAS-THIS-RUN
+  RESP="$(curl -fsS --get http://127.0.0.1:3100/loki/api/v1/query --data-urlencode \
+    "query=sum(count_over_time({product=\"tnauqquant\",server_id=\"trading01\",strategy=\"popdex-02\",run_id=\"$RUN_ID\"}[1h]))")" &&
+    jq -e '.status == "success" and (.data.result | length == 1 and (.[0].value[1] | tonumber) > 0)' <<<"$RESP" >/dev/null &&
+    echo LOKI-HAS-THIS-RUN
   ```
 
-  印出 `LOKI-HAS-THIS-RUN` 才算通過：查詢成功，而且這個 `run_id` 的 log 筆數大於 0。沒印出就不算通過，不論是查詢失敗（`lq` 沒有輸出）、沒有這個 run 的 stream，還是筆數為 0；回報 manager。
-- **executor 映射：** raw log 的 `executor=` 必須是 `TQ_EXECUTOR_MAP` 等號左邊的名稱。成交額要從 probe 採用的那一筆讀：上面 `PNL` 那一行的 `volume_usd_by_executor`，該 executor 的金額要與 `current_run_exchange_volume_usd{exchange="popdex"}` 一致。之後若還有 `stable` 不是 `true` 的 `pnl_status`，probe 不採用，不要拿它比。probe 只採用 `time=` 是 RFC 3339 且不在未來的行，否則改取前一筆（下面的加總也一樣跳過這種行）。印出的 `time=` 不是這樣時，這裡取到的就不是 probe 採用的那一筆，不要比對，回報 manager。
+  完整回應先存進 `RESP`，`curl` 的退出碼是 0 才往下驗同一份回應。印出 `LOKI-HAS-THIS-RUN` 才算通過：`curl` 成功、回應的 `status` 是 `success`，而且這個 `run_id` 的 log 筆數大於 0。沒印出就不算通過，不論是查詢失敗或傳輸中斷（`curl` 退出碼不是 0）、API 沒有回報成功、沒有這個 run 的 stream，還是筆數為 0；回報 manager。
+- **executor 映射：** raw log 的 `executor=` 必須是 `TQ_EXECUTOR_MAP` 等號左邊的名稱。成交額要從 probe 採用的那一筆讀：上面 `PNL` 那一行的 `volume_usd_by_executor`，該 executor 的金額要與 `current_run_exchange_volume_usd{exchange="popdex"}` 一致。之後若還有 `stable` 不是 `true` 的 `pnl_status`，probe 不採用，不要拿它比。probe 只採用時間可信的行（`time=` 是 RFC 3339，且不晚於 probe 取樣時間加 120 秒），這裡的命令與下面的加總都不做這項篩選；命令結果與 probe 輸出不符時，先看印出的 `time=`，不要據此修改 env，回報 manager。
   - 那一筆沒有 `volume_usd_by_executor`（或整份 log 沒有 stable 的 `pnl_status`）時，probe 才改成加總 `msg=trade_status` 的 `volume_usd`。這時用同樣的加總核對：
 
     ```bash
@@ -354,7 +361,7 @@ grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_m
       if (m == "trade_status" && v ~ /^([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/) sum[x] += v } END { for (x in sum) printf "%s %.10f\n", x, sum[x] }' "$LOG"
     ```
 
-  - raw 有成交額而 probe 是 `0` 就是映射填錯，改 `$WORK/popdex-02.env` 後照 Step 2 的 `add` 重跑一次。這次 cycle 沒有成交時，成交額無法驗證，在執行紀錄註明。
+  - raw 的 executor 名稱不是 `TQ_EXECUTOR_MAP` 等號左邊的名稱，才是映射填錯（probe 的成交額會是 `0`）：改 `$WORK/popdex-02.env` 後照 Step 2 的 `add` 重跑一次。名稱相符而金額不符時不改 env，照上面那一句回報 manager。這次 cycle 沒有成交時，成交額無法驗證，在執行紀錄註明。
 - **done marker：** 印出 `NO-DONE-MARKER` 時，這次 cycle 沒有寫 terminal marker，`marker_binding_ok` 仍是 `1`，這不是 schema 錯誤；記下 cycle 是怎麼結束的。marker 存在時才看 schema：四個欄位任何一個是 `null`，或 `marker_binding_ok 0`，共用 probe 就無法綁定這條 lane 的 marker。**不要改 probe，回報 manager**，lane enable 之前要先決定。
 - **數量欄位名稱：** 不是 `*_qty_btc` 時 probe 讀不到持倉，同樣回報 manager。
 - **數量單位：** 欄位名稱相同也要確認數值的單位，因為 binding 不檢查它。向 Wan 或 tnauqquant manager 確認這條 lane 的 `*_qty_btc`／`*_btc` 是不是 ETH 數量；或在測試 cycle 持倉不為零、Wan 知道交易所實際持倉時，對照當下的 `tnauqquant_current_position_btc`（cycle 結束後持倉是 0，看不出單位）。兩種結果分開記錄，**都在 enable 之前回報 manager**：
