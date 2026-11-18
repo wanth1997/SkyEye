@@ -5,7 +5,7 @@
 > **本文件是 operator 程序，repo 變更 merge 後不會自動生效。** 它只寫 `popdex-02` 特有的部分：
 >
 > - 通用的 add／remove 步驟見 [README 的 Add or remove a Trading target](../agents/alloy/trading/README.md#add-or-remove-a-trading-target)。
-> - 硬性限制、staging 與 central-deploy 的判讀沿用 [Trading01 PopDEX rollout](trading01-popdex-rollout.md)，下面用「rollout 文件」稱呼它。
+> - 硬性限制、staging、central-deploy 的判讀與 R5 沿用 [Trading01 PopDEX rollout](trading01-popdex-rollout.md)，下面用「rollout 文件」稱呼它。
 > - 這次**不**升級 Alloy、**不**更新共用 probe、**不**動其他 strategy 的 probe。任何一項變成必要時都是 STOP。
 >
 > **狀態：** 尚未執行。
@@ -19,18 +19,18 @@
 | systemd instance | `tnauqquant@popdex-02.service` |
 | config | `/home/ubuntu/tnauqquant/config/popdex_02_config.yaml` |
 | run-state | `/home/ubuntu/tnauqquant/run-state/popdex-02/` |
-| raw log | `/home/ubuntu/tnauqquant/logs/live-runs/<UTC>_popdex_02_config.raw.log` |
+| raw log | `/home/ubuntu/tnauqquant/logs/live-runs/<YYYYMMDD_HHMMSS>_popdex_02_config.raw.log`。`TQ_RAW_LOG_GLOB` 只選這個形式，同目錄裡名稱相似的檔案不算這條 lane |
 | textfile | `tnauqquant-popdex-02.prom` |
 | 安裝時的狀態 | `TQ_STRATEGY_DISABLED=1`：lane 安裝後是 disabled，Wan 手動測一個 cycle 之後才 enable |
 
-**SkyEye 不知道、operator 必須在 Trading01 唯讀核對後才填的值。** example 把前兩個留空，`setup-linux.sh` 會拒絕空值，所以 example 原樣無法安裝。不要從 `popdex-btc` 照抄。
+**SkyEye 不知道、operator 必須在 Trading01 唯讀核對的值。** example 把前兩個留空，`setup-linux.sh` 會拒絕空值，所以 example 原樣無法安裝。不要從 `popdex-btc` 照抄。
 
 | 值 | 怎麼核對 | 填錯的後果 |
 |---|---|---|
-| `TQ_EXECUTABLE` | `tnauqquant@popdex-02.service` 實際啟動的 binary 絕對路徑（Step 1）。第一次 run 之後再用 manifest 的 `.executable` 確認（Step 5）。 | probe 數不到程序（`process_count 0`），測試 cycle 不會出現 `TradingUnexpectedProcess`，並出現 `TradingRunBindingInvalid` |
-| `TQ_EXECUTOR_MAP` | 寫成 `<executor>=popdex`。`<executor>` 是 `popdex_02_config.yaml` 內的 executor 名稱，也是 raw log 的 `executor=` 欄位。新帳號，可能不是 `popdex-main`。 | 沒有告警，但 `exchange="popdex"` 的成交量與持倉 series 不會出現 |
-| `TQ_INSTANCE_ID`（example 預填 `popdex-02`，是預期值） | 必須等於 config 的 `instance_id:`（Step 1） | `TradingRunBindingInvalid` |
-| 數量欄位名稱 | 共用 probe 讀 raw log 的 `net_qty_btc`／`initiator_qty_btc`／`carrier_qty_btc`，以及 done marker 的 `long_btc`／`short_btc`／`net_btc`／`dust_tolerance_btc`。這條 lane 交易 ETH，欄位名稱是否相同只能在第一次 run 之後確認（Step 5）。 | 持倉 series 不會出現；done marker 不合 schema 時每次 run 結束都會出現 `TradingRunBindingInvalid` |
+| `TQ_EXECUTABLE` | `tnauqquant@popdex-02.service` 實際啟動的 binary 絕對路徑（Step 1）。第一次 run 之後用 manifest 的 `.executable` 確認（Step 5）。 | probe 數不到程序（`process_count 0`），測試 cycle 不會出現 `TradingUnexpectedProcess`，並出現 `TradingRunBindingInvalid` |
+| `TQ_EXECUTOR_MAP` | 寫成 `<executor>=popdex`。`<executor>` 是 `popdex_02_config.yaml` 內的 executor 名稱，也是 raw log 的 `executor=` 欄位。新帳號，可能不是 `popdex-main`。 | 沒有告警，series 也照樣出現：`exchange="popdex"` 的成交量會是 `0`（漏計），單一 executor 的淨持倉仍掛在 `popdex` 上。**series 存在不代表映射正確**，要用 Step 5 同一個已成交 cycle 的 executor 名稱與成交額核對 |
+| `TQ_INSTANCE_ID`（example 預填 `popdex-02`，是預期值） | 等於 config 的 `instance_id:`，且與 Trading01 其他 instance 不同（Step 1）。config 是別的值時填 config 的值。第一次 run 之後用 manifest 的 `.instance_id` 確認（Step 5）。 | `strategy_identity_ok 0`；manifest 存在時出現 `TradingRunBindingInvalid` |
+| 數量欄位的名稱與單位 | 共用 probe 讀 raw log 的 `net_qty_btc`／`initiator_qty_btc`／`carrier_qty_btc`，以及 done marker 的 `long_btc`／`short_btc`／`net_btc`／`dust_tolerance_btc`，原值輸出成 `tnauqquant_current_position_btc`，沒有換算；Grafana 固定標成 BTC。這條 lane 交易 ETH，欄位名稱與單位只能在第一次 run 之後確認（Step 5）。 | 名稱不同：持倉 series 不會出現，done marker 不合 schema 時每次 run 結束都有 `TradingRunBindingInvalid`。名稱相同但數值是 ETH：binding 全部正常，面板卻把 ETH 數量標成 BTC |
 
 ## 硬性限制
 
@@ -38,9 +38,11 @@ rollout 文件「執行前必讀」的硬性限制全部適用，把其中的 `p
 
 - **不得 start、stop、restart、enable 或 disable 任何 `tnauqquant@*` service 或 timer，不得修改 tnauqquant 的 config、env、run-state 或程式。** 本文件只讀取它們。lane 的啟動與 enable 由 Wan 決定。
 - **順序固定為先 host、後中央。** PR 在時窗開始時才 merge；merge 之後 monitoring-prod 不得執行 `scripts/central-deploy`（包括為了其他變更），直到 Step 3 確認 `popdex-02` 已在 remote-write。
-- **時間：** Step 2 到 Step 4 避開 UTC 18:15–19:30；`scripts/central-deploy` 在任何情況下都不得在 UTC 18:30–19:30 執行。
+- **時間：** 本文件每個 `[CHANGE]` 步驟，包括 `scripts/central-deploy` 的 dry run 與正式部署，都不在 UTC 18:15–19:30 執行（18:30Z 是 Trading01 tnauqquant 的每日重啟 timer，19:00Z 是 monitoring-prod 的備份 cron）。引用 rollout 文件的段落時，時窗也以這一條為準。
 - **Alloy 只 reload。** 不使用 `--restart-alloy`；`add` 要求它就是 STOP。
-- **中止規則：** 只要在 Step 3 通過前停下（任何 STOP），下一次 `central-deploy` 之前，manager 先依 README 的 Remove 第 1 步用 `scripts/trading-target remove --server trading01 --strategy popdex-02` 開 PR 並 merge，master 不留沒有 probe 的 row。下次再用 `scripts/trading-target add` 加回。Step 2 已裝上的 probe 可以留著：中央沒有 row 時，`popdex-02` 的 series 不會觸發告警。
+- **中止規則：** 只要在 Step 3 通過前停下（任何 STOP），下一次 `central-deploy` 之前，manager 先依 README 的 Remove 第 1 步用 `scripts/trading-target remove --server trading01 --strategy popdex-02` 開 PR 並 merge，master 不留沒有 probe 的 row。下次再用 `scripts/trading-target add` 加回。Step 2 已裝上的 probe 與 Alloy fragment 可以留著：
+  - `prometheus/rules/trading.yml` 的告警全部以 inventory row 為條件，中央沒有 row 時不會為 `popdex-02` 觸發。
+  - Loki 規則（`TradingExecutionIncident`、`TradingCriticalLogEvent`、`TradingCriticalWarnEvent`）直接比對收到的 log，不看 inventory。fragment 留著而 lane 寫出符合的事件時，仍會出現 shadow 告警；這不代表中央移除失敗。要連 log 一起停，用 `"$SETUP" retire --strategy popdex-02`。
 - 不加 Alertmanager silence。所有 Trading 告警都是 `notification_mode="shadow"`，不會發 Telegram。
 - 不要印出或複製 `popdex_02_config.yaml` 全文與 tnauqquant 的 env 檔，裡面可能有帳號資料。本文件只取指定的單行。
 
@@ -52,9 +54,11 @@ rollout 文件「執行前必讀」的硬性限制全部適用，把其中的 `p
 git cat-file -e "$MERGE:agents/alloy/trading/deployment-linux-popdex-02.env.example" && echo MERGE-HAS-POPDEX-02
 ```
 
-## Step 1 — 唯讀前置檢查（Trading01，root shell）`[READ-ONLY]`
+## Step 1 — 唯讀前置檢查與基準 `[READ-ONLY]`
 
-唯一的寫入是 `$WORK` 紀錄目錄。**任何一項不符就 STOP，不進 Step 2**，依中止規則處理。
+唯一的寫入是 `$WORK`、`$CUT` 紀錄目錄。**Trading01 與 monitoring-prod 兩邊全部通過才進 Step 2；任何一項不符就 STOP**，依中止規則處理。
+
+### Trading01（root shell）
 
 ```bash
 sudo -i
@@ -78,35 +82,86 @@ cmp "$STAGE/agents/alloy/trading/ensure-log-access.sh" /usr/local/libexec/skyeye
 - `CanReload` 不是 `yes`，或 `CONFIG_FILE` 那一行不是剛好一行：STOP（`add` 會要求 restart）。
 - `PROBE-SAME` 或 `ACCESS-SAME` 沒印出：STOP。Trading01 上的共用 probe 檔案比 `MERGE` 舊，`add` 會以 `shared probe artifacts changed while …` 拒絕。更新共用檔案要先停下所有 `skyeye-trading-probe@*`（rollout 文件 Phase 3 的做法），會讓其他 strategy 的 probe 中斷，不在本文件範圍，由 manager 另行安排。`ensure-log-access.sh` 在 2026-11-14 rollout 之後改過，這一項很可能不符。
 
+**lane 實際仍停用，是進入 Step 2 的條件。** `TQ_STRATEGY_DISABLED=1` 只讓 probe 回報 `run_expected=0`，擋不住 lane 啟動。
+
+```bash
+systemctl is-active tnauqquant@popdex-02.service  | tee "$WORK/lane.active"     # inactive
+systemctl is-enabled tnauqquant@popdex-02.service | tee "$WORK/lane.enabled"    # disabled、masked 或 static
+systemctl show -p TriggeredBy -p WantedBy -p RequiredBy tnauqquant@popdex-02.service | tee "$WORK/lane.pulled-by"   # 三行的 = 後面都是空的
+pgrep -a -f 'popdex_02_config' | tee "$WORK/lane.processes"                     # 沒有輸出
+systemctl list-timers --all --no-legend 'tnauqquant*' | tee "$WORK/tq-timers"
+```
+
+- 前四項都要符合註解。`is-active` 是 `active`、`activating` 或 `failed`，`is-enabled` 是 `enabled`、`enabled-runtime` 或其他值，都算不符。
+- `tq-timers` 列出的每個 timer（包括 18:30Z 的每日重啟）另外唯讀確認：用 `systemctl show -p Triggers --value <timer>` 找到它啟動的 unit，再 `systemctl cat <unit>` 確認它不會 start `tnauqquant@popdex-02`（例如只 `try-restart` 已在跑的 instance，或名單不含 `popdex-02`）。看不出來就當作不符。
+- 任何一項不符：**STOP，回報 Wan**。lane 已在跑或會被自動啟動，「Wan 手動測一個 cycle 之後才 enable」的前提不成立，後續由 Wan 決定。本文件不 stop、不 disable 任何 unit。
+
 Lane 路徑與待核對的值：
 
 ```bash
 ls -ld /home/ubuntu/tnauqquant /home/ubuntu/tnauqquant/config/popdex_02_config.yaml /home/ubuntu/tnauqquant/logs/live-runs
 ls -ld /home/ubuntu/tnauqquant/run-state/popdex-02 2>&1 | tee "$WORK/run-state.before"    # 第一次 run 之前可能還不存在，只記錄
-grep -nE '^[[:space:]]*instance_id:' /home/ubuntu/tnauqquant/config/popdex_02_config.yaml   # 值必須是 popdex-02
+ls -1t /home/ubuntu/tnauqquant/logs/live-runs/ | grep '[.]raw[.]log$' | head -n 3           # <8 位數字>_<6 位數字>_<config 檔名>.raw.log
+grep -nE '^[[:space:]]*instance_id:' /home/ubuntu/tnauqquant/config/popdex_02_config.yaml | tee "$WORK/config-instance-id"
 systemctl show -p ExecStart --value tnauqquant@popdex-02.service | tee "$WORK/execstart"
-{ systemctl is-active tnauqquant@popdex-02.service; systemctl is-enabled tnauqquant@popdex-02.service; } 2>&1 | tee "$WORK/lane.before"
-grep -H '^TQ_EXECUTABLE=' /etc/skyeye-trading/instances/*.env | tee "$WORK/sibling-executables"
+grep -HE '^TQ_(EXECUTABLE|INSTANCE_ID)=' /etc/skyeye-trading/instances/*.env | tee "$WORK/sibling-identities"
 ```
 
-- 前三個路徑缺任何一個，或 `instance_id` 不是 `popdex-02`：STOP，交給 tnauqquant manager。不要改 example 的 `TQ_INSTANCE_ID` 去配合。
+- 前三個路徑缺任何一個：STOP，交給 tnauqquant manager。
+- 其他 lane 最新的 raw log 檔名不是 `YYYYMMDD_HHMMSS_<config 檔名>.raw.log` 的形式（例如 `20261119_031500_popdex_btc_config.raw.log`）：STOP，回報 manager。這台 host 的命名與 runtime contract 不同，`popdex-02` 的 glob 會選不到檔案。
+- `TQ_INSTANCE_ID`：`config-instance-id` 要剛好一行（probe 只讀第一行），值是 `popdex-02` 就不必改 example。是別的值時，把 config 的值填進 SkyEye 的 env，並在執行紀錄寫下該值；**不要改 config**。值與 `sibling-identities` 任何一行的 `TQ_INSTANCE_ID` 相同、沒有這一行或有多行：STOP，交給 tnauqquant manager。
 - `TQ_EXECUTABLE`：從 `execstart` 取出 lane 的 binary 絕對路徑。`ExecStart` 是 launcher（例如 `scripts/tq`）而看不出 binary 時，可以唯讀看 unit 與 launcher（`systemctl cat tnauqquant@popdex-02.service`），仍無法確定就 STOP，請 tnauqquant manager 提供。確認 `test -x <路徑>`。
-- `<路徑>` 與 `sibling-executables` 裡任何一行相同：STOP。`setup-linux.sh` 要求每個 instance 的 `TQ_EXECUTABLE` 各不相同，共用 binary 的 lane 目前裝不上去，需要 SkyEye 先改 installer。
+- `<路徑>` 與 `sibling-identities` 任何一行的 `TQ_EXECUTABLE` 相同：STOP。`setup-linux.sh` 要求每個 instance 的 `TQ_EXECUTABLE` 各不相同，共用 binary 的 lane 目前裝不上去，需要 SkyEye 先改 installer。
 - `TQ_EXECUTOR_MAP`：在 `popdex_02_config.yaml` 找到這條 lane 的 executor 名稱，只記下名稱。找不到或有多個 executor：STOP，請 tnauqquant manager 提供。
-- lane 狀態只記錄，預期 `inactive`／`disabled`。
 
 填好 env 並 render（只寫 `$WORK`）：
 
 ```bash
 install -m 600 "$STAGE/agents/alloy/trading/deployment-linux-popdex-02.env.example" "$WORK/popdex-02.env"
-# 編輯 $WORK/popdex-02.env：只填 TQ_EXECUTABLE=<路徑> 與 TQ_EXECUTOR_MAP=<executor>=popdex，其他不動
-diff "$STAGE/agents/alloy/trading/deployment-linux-popdex-02.env.example" "$WORK/popdex-02.env"   # 只有這兩行不同
+# 編輯 $WORK/popdex-02.env：填 TQ_EXECUTABLE=<路徑> 與 TQ_EXECUTOR_MAP=<executor>=popdex；
+# config 的 instance_id 不是 popdex-02 時再改 TQ_INSTANCE_ID。其他不動
+diff "$STAGE/agents/alloy/trading/deployment-linux-popdex-02.env.example" "$WORK/popdex-02.env"   # 只有上述兩行（或三行）不同
 grep -c '^TQ_STRATEGY_DISABLED=1$' "$WORK/popdex-02.env"                                             # 1
 "$SETUP" --render-only "$WORK/render" --env-file "$WORK/popdex-02.env" </dev/null || echo "STOP: render"
 grep -c 'strategy *= *"popdex-02"' "$WORK/render/trading-popdex-02.alloy"                            # ≥ 1
 ```
 
+### monitoring-prod（ubuntu）：安裝前的基準
+
+Step 3 要拿它比對其他 lane 是否受 reload 影響，Step 4 失敗時 R5 要用它還原。`targets` 等 helper 與 rollout 文件 Phase 1 的同名函式相同。
+
+```bash
+M7=<同上>; MERGE=<完整 SHA>
+CUT="$HOME/popdex-02-onboarding-$M7"; install -d -m 700 "$CUT"
+declare -p M7 MERGE CUT >"$CUT/vars"
+cd /home/ubuntu/SkyEye
+cat >"$CUT/helpers.sh" <<'EOF'
+q() { curl -fsS --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
+lq() { curl -fsS --get http://127.0.0.1:3100/loki/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
+targets() { q 'trading_target_info' | jq -S '[.[].metric | del(.__name__)] | sort'; }
+probe_ages() { q 'time() - tnauqquant_probe_timestamp_seconds{product="tnauqquant",server_id="trading01"}' \
+  | jq -c '[.[] | {strategy: .metric.strategy, age: (.value[1] | tonumber | floor)}] | sort_by(.strategy)'; }
+t01_alerts() { q 'ALERTS{product="tnauqquant",server_id="trading01",alertstate="firing"}' \
+  | jq -c '[.[].metric | {alertname, strategy}] | sort'; }
+EOF
+. "$CUT/helpers.sh"
+
+git rev-parse HEAD | tee "$CUT/old-head"
+scripts/central-deploy --status 2>&1 | tee "$CUT/central-status-pre.log"   # Prometheus last reload successful: 1
+targets | tee "$CUT/pre-targets.json"
+jq -e 'map(select(.strategy == "popdex-02")) | length == 0' "$CUT/pre-targets.json"   # true
+probe_ages | tee "$CUT/probe-ages.pre.json"          # Trading01 每個已安裝的 lane 一筆，age < 60，沒有 popdex-02
+t01_alerts | tee "$CUT/t01-alerts.pre.json"
+```
+
+斷線重連時：`CUT="$HOME/popdex-02-onboarding-<M7>"; . "$CUT/vars"; . "$CUT/helpers.sh"; cd /home/ubuntu/SkyEye`。
+
+- `probe_ages` 少了已安裝的 lane，或有一筆 age ≥ 60：既有 probe 已有問題，STOP，先查明。
+- `jq` 印出 `false`：中央已提前部署 `popdex-02` row。記下時間，該段的 `TradingTelemetryMissing` 排除於 shadow 證據之外，照常繼續。此時 `old-head` 已含這個 row，R5-1 還原不了，Step 4 之後要中止時改走 README 的 Remove 流程。
+
 ## Step 2 — Host：加入 `popdex-02` `[CHANGE Trading01]`
+
+前提：Step 1 兩邊都通過，lane 仍停用，`$CUT` 的三個基準檔都已存好。
 
 ```bash
 date -u +%H:%M                                           # 不在 18:15–19:30
@@ -140,68 +195,118 @@ systemctl is-enabled skyeye-trading-probe@popdex-02.timer; systemctl is-active s
 sleep 30
 grep -E '^tnauqquant_(probe_timestamp_seconds|run_expected|process_count|runtime_contract_available)[{]' \
   /var/lib/skyeye-trading/textfile/tnauqquant-popdex-02.prom | sed 's/[{].*[}]//'
-systemctl list-units --all --no-legend --plain 'tnauqquant*' | awk '{print $1, $3, $4}'   # 與安裝前相同，本文件沒有動它們
+systemctl is-active tnauqquant@popdex-02.service; systemctl is-enabled tnauqquant@popdex-02.service   # 與 lane.active／lane.enabled 相同
 ```
 
-`probe_timestamp_seconds` 在 `date +%s` 的 60 秒內，`run_expected 0`。lane 沒在跑時 `process_count 0`。
+`probe_timestamp_seconds` 在 `date +%s` 的 60 秒內，`run_expected 0`，`process_count 0`。
 
 ## Step 3 — 中央檢查：`popdex-02` 已在 remote-write（monitoring-prod）`[READ-ONLY]`
 
-Step 2 完成後 2 分鐘內，以 `ubuntu` 在 `/home/ubuntu/SkyEye`：
+Step 2 完成後 2 分鐘內：
 
 ```bash
-q() { curl -fsS --get http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" | jq -c '.data.result'; }
-q 'time() - tnauqquant_probe_timestamp_seconds{product="tnauqquant",server_id="trading01"}' \
-  | jq -c '[.[] | {strategy: .metric.strategy, age: (.value[1] | tonumber | floor)}] | sort_by(.strategy)'
+probe_ages | tee "$CUT/probe-ages.post-add.json"
+jq -n -c --slurpfile pre "$CUT/probe-ages.pre.json" --slurpfile post "$CUT/probe-ages.post-add.json" '{
+  siblings_same: (($pre[0] | map(.strategy)) == ($post[0] | map(select(.strategy != "popdex-02") | .strategy))),
+  all_fresh: ($post[0] | all(.age < 60)),
+  popdex_02: ($post[0] | any(.strategy == "popdex-02"))}'
 q 'tnauqquant_run_expected{server_id="trading01",strategy="popdex-02"}' | jq -c '[.[].value[1]]'   # ["0"]
 ```
 
-- `popdex-02` 那一筆 age < 60，其他 strategy 的筆數與 age 和安裝前一樣：**通過，Step 4 才可以執行。**
-- 2 分鐘內 `popdex-02` 沒有出現或 age ≥ 60，其他 strategy 正常：STOP，host 維持現狀，把輸出交給 manager，依中止規則處理。
-- 其他 strategy 的 age 也變差（安裝前 < 60，現在不是）：在 Trading01 執行 `"$SETUP" retire --strategy popdex-02 </dev/null`，讓 Alloy 回到安裝前的 fragment 組合，再看一次；然後 STOP，依中止規則處理。
+- `{"siblings_same":true,"all_fresh":true,"popdex_02":true}`：**通過，Step 4 才可以執行。**
+- 2 分鐘內 `popdex_02` 仍是 `false` 或它的 age ≥ 60，其他 lane 正常：STOP，host 維持現狀，把輸出交給 manager，依中止規則處理。
+- `siblings_same` 是 `false`，或其他 lane 的 age 從 < 60 變成 ≥ 60：在 Trading01 執行 `"$SETUP" retire --strategy popdex-02 </dev/null`，讓 Alloy 回到安裝前的 fragment 組合，再跑一次 `probe_ages`；然後 STOP，依中止規則處理。
 
 ## Step 4 — 中央 inventory：`scripts/central-deploy`（monitoring-prod）`[CHANGE monitoring-prod]`
 
-前提：Step 3 已通過；現在不在 UTC 18:30–19:30；monitoring-prod 上沒有其他 operator。沿用 Step 3 的 shell（`q` 已定義）。
+前提：Step 3 已通過；現在不在 UTC 18:15–19:30；monitoring-prod 上沒有其他 operator。
+
+### 4a — Dry run
 
 ```bash
 cd /home/ubuntu/SkyEye
-MERGE=<完整 SHA>
-date -u +%H:%M
-scripts/central-deploy --dry-run --expect "$MERGE"
-scripts/central-deploy --expect "$MERGE"; echo "rc=$?"
-sleep 70
-q 'trading_target_info{strategy="popdex-02"}' | jq -c '[.[].metric | {server_id, strategy, notification_mode}]'
-q 'trading_target_info unless on (product, environment, server_id, strategy) (time() - trading_strategy_probe_timestamp_seconds < 180)'   # []
-q 'ALERTS{product="tnauqquant",server_id="trading01",alertstate="firing"}' | jq -c '[.[].metric | {alertname, strategy}] | sort'
+date -u +%H:%M                                           # 不在 18:15–19:30
+scripts/central-deploy --dry-run --expect "${MERGE:?set MERGE first}" 2>&1 | tee "$CUT/central-deploy-dry-run.log"
 ```
 
-- dry run 的最後一行必須是 `Dry run: validation passed; …`，部署的最後一行必須是 `central-deploy: done; applied <12 碼 SHA>`。拒絕或失敗時的判讀與 rollback 依 rollout 文件的 Phase 5 與 R5（把 `popdex-btc` 換成 `popdex-02`），不要改用 `git pull` 或 `git reset --hard`。
-- `trading_target_info` 預期一筆 `trading01`／`popdex-02`／`shadow`；`unless` 查詢預期 `[]`。
-- lane 停著且 disabled 時，`popdex-02` 預期沒有任何 firing 告警。
+最後一行必須是 `Dry run: validation passed; checkout left at … and nothing reloaded (…)`。不是的話 **STOP，不執行 4b**；拒絕原因的處理方式與 rollout 文件 Phase 5 的 dry run 相同（`--expect names …, but origin/master is …` 交給 manager；其他拒絕排除後在下一個時窗重跑 4a，不改用 `git pull`）。
+
+### 4b — 正式部署
+
+4a 通過之後才執行。先重新核對：
+
+```bash
+date -u +%H:%M                                           # 不在 18:15–19:30
+probe_ages                                               # 每一筆（含 popdex-02）仍 < 60
+tail -n 1 "$CUT/central-deploy-dry-run.log" | grep -q '^Dry run: validation passed' && echo DRY-RUN-OK
+```
+
+三項都符合才執行下一個區塊。時間已進入 18:15–19:30 就等時窗過後從 4a 重做；有一筆 age ≥ 60 就 STOP 查明；`DRY-RUN-OK` 沒印出就回到 4a。
+
+```bash
+scripts/central-deploy --expect "$MERGE" 2>&1 | tee "$CUT/central-deploy.log"; echo "rc=${PIPESTATUS[0]}"
+```
+
+- `rc=0` 且最後一行是 `central-deploy: done; applied <12 碼 SHA>`：成功，跑下面的檢查。
+- 其他結果依 rollout 文件 Phase 5 判讀：`Checkout fast-forwarded` 之前失敗，中央沒有變更，STOP；之後失敗執行 R5；訊息含 `is published but not loaded` 時不 rollback，排除原因後重跑部署那一行。不要改用 `git pull` 或 `git reset --hard`。
+
+部署後檢查：
+
+```bash
+[ "$(git rev-parse HEAD)" = "$MERGE" ] && echo HEAD-IS-MERGE
+sleep 70
+jq -S '. + [{"environment":"production","notification_mode":"shadow","product":"tnauqquant","quote_currency":"USDT","server_id":"trading01","strategy":"popdex-02"}] | unique' \
+  "$CUT/pre-targets.json" >"$CUT/expected-targets.json"
+targets | tee "$CUT/post-targets.json"
+diff "$CUT/expected-targets.json" "$CUT/post-targets.json" && echo TARGETS-OK
+q 'trading_target_info unless on (product, environment, server_id, strategy) (time() - trading_strategy_probe_timestamp_seconds < 180)'   # []
+t01_alerts | tee "$CUT/t01-alerts.post-deploy.json"
+```
+
+- `HEAD-IS-MERGE` 沒印出：checkout 被移動過，停下，把 `git log --oneline "$MERGE..HEAD"` 交給 manager。
+- `TARGETS-OK` 沒印出，或 `unless` 查詢不是 `[]`：執行 rollout 文件的 [R5](trading01-popdex-rollout.md#r5--中央-inventory-退回)，把 `popdex-btc` 換成 `popdex-02`。R5 讀的 `$CUT/old-head`、`$CUT/pre-targets.json` 與 `targets` 就是 Step 1 存下與定義的。
+- lane 停著且 disabled 時，`popdex-02` 預期沒有任何 firing 告警；其他 lane 的告警與 `t01-alerts.pre.json` 相同。
 
 ## Step 5 — Wan 手動測試 cycle 之後的唯讀核對 `[READ-ONLY]`
 
-Wan 跑完手動測試 cycle 之後、lane 正式 enable 之前，在 Trading01 確認留空與預期的值：
+Wan 跑完手動測試 cycle 之後、lane 正式 enable 之前，在 Trading01（root，`. "$WORK/vars"`）核對。先看 manifest：
 
 ```bash
-jq -r '.executable, .instance_id, .strategy' /home/ubuntu/tnauqquant/run-state/popdex-02/current.json
-grep -E '^TQ_(EXECUTABLE|INSTANCE_ID|STRATEGY|EXECUTOR_MAP)=' /etc/skyeye-trading/instances/popdex-02.env
-LOG=$(ls -1t /home/ubuntu/tnauqquant/logs/live-runs/*popdex_02_config.raw.log | head -n 1)
-grep -oE '(^|[[:space:]])executor=[^[:space:]]+' "$LOG" | sort | uniq -c
-grep -oE '(net|initiator|carrier)_qty_[a-z0-9]+=' "$LOG" | sort | uniq -c
-jq -r 'keys[]' /home/ubuntu/tnauqquant/run-state/popdex-02/current.done.json 2>/dev/null | grep -E '^(long|short|net|dust_tolerance)_'
-grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok|current_run_exchange_volume_usd|current_position_btc)[{]' \
-  /var/lib/skyeye-trading/textfile/tnauqquant-popdex-02.prom
+ENVF=/etc/skyeye-trading/instances/popdex-02.env
+MAN=/home/ubuntu/tnauqquant/run-state/popdex-02/current.json
+DONE=/home/ubuntu/tnauqquant/run-state/popdex-02/current.done.json
+PROM=/var/lib/skyeye-trading/textfile/tnauqquant-popdex-02.prom
+test -f "$MAN" && echo MANIFEST-PRESENT
+jq -r '.executable, .instance_id, .strategy, .log_path' "$MAN"
+grep -E '^TQ_(EXECUTABLE|INSTANCE_ID|STRATEGY|EXECUTOR_MAP|RAW_LOG_GLOB)=' "$ENVF"
+grep -nE '^[[:space:]]*instance_id:' /home/ubuntu/tnauqquant/config/popdex_02_config.yaml
 ```
 
-- manifest 的 `.executable`、`.instance_id`、`.strategy` 必須分別等於 env 的 `TQ_EXECUTABLE`、`TQ_INSTANCE_ID`、`TQ_STRATEGY`；raw log 的 executor 必須是 `TQ_EXECUTOR_MAP` 等號左邊的名稱。`TQ_EXECUTABLE` 或 `TQ_EXECUTOR_MAP` 不符：改 `$WORK/popdex-02.env` 後照 Step 2 的 `add` 重跑一次（就地更新，Alloy 只 reload）。`instance_id` 或 `strategy` 不符：STOP，交給 tnauqquant manager。
-- 數量欄位不是 `*_qty_btc`，或 done marker 沒有 `long_btc`／`short_btc`／`net_btc`／`dust_tolerance_btc`：共用 probe 讀不到這條 lane 的持倉，done marker 也會被判為 binding 不成立。**不要改 probe，回報 manager**；這需要 SkyEye 另開變更，lane enable 之前要先決定。
-- 五個 `…_ok`／`config_snapshot_match` 都是 `1` 才算核對完成。
+- `MANIFEST-PRESENT` 沒印出：這次 cycle 沒有寫出 runtime contract，下面無法核對。STOP，回報 Wan 與 tnauqquant manager；這樣 enable 的話 lane 會是 `TradingRuntimeContractMissing`。
+- `.executable` 必須等於 `TQ_EXECUTABLE`；`.instance_id` 必須同時等於 `TQ_INSTANCE_ID` 與 config 的 `instance_id:`。只有 SkyEye env 填錯時，改 `$WORK/popdex-02.env` 後照 Step 2 的 `add` 重跑一次（就地更新，Alloy 只 reload）。manifest 與 config 互相不符，或 `.strategy` 不是 `popdex-02`：STOP，交給 tnauqquant manager。
+
+manifest 核對過之後，用它的 `.log_path` 讀這次 cycle 的 log，不要自己用萬用字元挑檔：
+
+```bash
+LOG="$(jq -r '.log_path' "$MAN")"
+compgen -G "$(sed -n 's/^TQ_RAW_LOG_GLOB=//p' "$ENVF" | tail -n 1)" | grep -cxF "$LOG"       # 1
+grep -oE '(^|[[:space:]])executor=[^[:space:]]+' "$LOG" | sort | uniq -c
+grep -oE 'volume_usd_by_executor=[^[:space:]]+' "$LOG" | tail -n 1
+grep -oE '(net|initiator|carrier)_qty_[a-z0-9]+=' "$LOG" | sort | uniq -c
+if [ -e "$DONE" ]; then jq '{long_btc, short_btc, net_btc, dust_tolerance_btc}' "$DONE"; else echo NO-DONE-MARKER; fi
+grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok|current_run_exchange_volume_usd|current_position_btc|current_net_position_btc)[{]' "$PROM"
+```
+
+- **log 檔名：** `compgen` 那一行不是 `1`，代表這條 lane 的 log 不是 contract 的命名，Alloy 不會收它，probe 也不會把它算進當日 cycle。STOP，回報 manager，不要自己放寬 glob。是 `1` 時，再到 monitoring-prod 確認 log 有進 Loki（cycle 結束後一小時內）：`lq 'sum(count_over_time({product="tnauqquant",server_id="trading01",strategy="popdex-02"}[1h]))'` 不是 `[]`。
+- **executor 映射：** raw log 的 `executor=` 必須是 `TQ_EXECUTOR_MAP` 等號左邊的名稱。這次 cycle 有成交時，`volume_usd_by_executor` 裡該 executor 的金額要與 `current_run_exchange_volume_usd{exchange="popdex"}` 一致（probe 取最後一筆 stable 的 `pnl_status`；log 沒有這個欄位時改加總 `msg=trade_status` 的 `volume_usd`）。raw 有成交額而 probe 是 `0` 就是映射填錯，改 `$WORK/popdex-02.env` 後照 Step 2 的 `add` 重跑一次。這次 cycle 沒有成交時，成交額無法驗證，在執行紀錄註明。
+- **done marker：** 印出 `NO-DONE-MARKER` 時，這次 cycle 沒有寫 terminal marker，`marker_binding_ok` 仍是 `1`，這不是 schema 錯誤；記下 cycle 是怎麼結束的。marker 存在時才看 schema：四個欄位任何一個是 `null`，或 `marker_binding_ok 0`，共用 probe 就無法綁定這條 lane 的 marker。**不要改 probe，回報 manager**，lane enable 之前要先決定。
+- **數量欄位名稱：** 不是 `*_qty_btc` 時 probe 讀不到持倉，同樣回報 manager。
+- **數量單位：** 欄位名稱相同也要確認數值的單位，因為 binding 不檢查它。向 Wan 或 tnauqquant manager 確認這條 lane 的 `*_qty_btc`／`*_btc` 是不是 ETH 數量；或在測試 cycle 持倉不為零、Wan 知道交易所實際持倉時，對照當下的 `tnauqquant_current_position_btc`（cycle 結束後持倉是 0，看不出單位）。數值是 ETH，或無法確認：在執行紀錄寫下顯示限制「`popdex-02` 的持倉面板（策略詳情與總覽）顯示的是 ETH 數量，標示卻是 BTC，不能與 BTC lane 的持倉相加或比較」，**enable 之前回報 manager**。本文件不改 dashboard 與共用 probe。
+- 五個 `…_ok`／`config_snapshot_match` 都是 `1`，上面每一項都有結論，才算核對完成。
 
 ## 正式 enable 之前：把 `TQ_STRATEGY_DISABLED` 改回 `0` `[CHANGE Trading01]`
 
-Wan 決定 enable lane 時，在 lane 啟動**之前**執行（不在 UTC 18:15–19:30）：
+Step 5 核對完成、回報 manager 的事項都有結論之後，Wan 決定 enable lane 時，在 lane 啟動**之前**執行（不在 UTC 18:15–19:30）：
 
 ```bash
 install -m 600 /etc/skyeye-trading/instances/popdex-02.env "$WORK/popdex-02.enable.env"
@@ -222,13 +327,23 @@ diff /etc/skyeye-trading/instances/popdex-02.env "$WORK/popdex-02.enable.env"   
 |---|---|
 | lane 停著 | 沒有 |
 | Wan 的手動測試 cycle 跑超過 2 分鐘 | `TradingUnexpectedProcess`，程序結束後消失。這就是 disabled 的 lane 被啟動時應有的訊號 |
+| 測試 cycle 結束時沒有寫 done marker | 沒有。marker 不存在不算 binding 錯誤，留下的 `running` manifest 在 disabled 期間也不算 ProcessDown |
 | 測試 cycle 以 `risk_halt`、`max_cycles_drain_failed` 或無法辨識的 reason 結束 | `TradingCriticalSafetyState`（此時不再顯示 `TradingUnexpectedProcess`）；`pnl_status` 回報 `risk_stopped=true` 時另有 `TradingRiskStopped`。這是 lane 的真實狀態，交給 Wan |
-| manifest 存在但 binding 不成立 | `TradingRunBindingInvalid`（不看 `run_expected`）。原因可能是 `TQ_EXECUTABLE`／`TQ_INSTANCE_ID` 填錯、config 在 run 開始後被改，或 done marker 的欄位不合 schema。依 Step 5 核對 |
+| manifest 存在但 binding 不成立 | `TradingRunBindingInvalid`（不看 `run_expected`）。原因可能是 `TQ_EXECUTABLE`／`TQ_INSTANCE_ID` 填錯、config 在 run 開始後被改，或 done marker **存在**但欄位不合 schema、與 manifest 不符。依 Step 5 核對 |
 | 中央比 host 先部署，或 probe 停超過 180 秒 | `TradingTelemetryMissing` |
 
-disabled 期間**不會**出現 `TradingProcessDown`、`TradingRuntimeContractMissing`、`TradingPnlTelemetryStale`，它們都要求 `run_expected=1`。測試 cycle 沒有留下 done marker 就停下時，留下的 `running` manifest 也不會被當成 ProcessDown。
+disabled 期間**不會**出現 `TradingProcessDown`、`TradingRuntimeContractMissing`、`TradingPnlTelemetryStale`，它們都要求 `run_expected=1`。
 
-改回 `TQ_STRATEGY_DISABLED=0` 之後、lane 啟動之前：沒有 manifest 時出現 `TradingProcessDown` 與 `TradingRuntimeContractMissing`；測試 cycle 留下 `running` manifest 時出現 `TradingProcessDown`。lane 啟動後消失；剛啟動、第一筆 `pnl_status` 寫出之前可能短暫出現 `TradingPnlTelemetryStale`。
+改回 `TQ_STRATEGY_DISABLED=0` 之後、lane 啟動之前，看 run-state 留下什麼：
+
+| run-state 的狀態 | `popdex-02` 的告警 |
+|---|---|
+| 沒有 manifest | `TradingRuntimeContractMissing`（30 秒後）；P&L 持續無效滿 3 分鐘再加上 `TradingPnlTelemetryStale`。**不會**有 `TradingProcessDown`：沒有 manifest 時 binding 是 0，規則的 `unless` 把它抑制 |
+| 有效的 `running` manifest，沒有 done marker | `TradingProcessDown`（2 分鐘後）；最後一筆 `pnl_status` 超過 5 分鐘或無效時，滿 3 分鐘再加上 `TradingPnlTelemetryStale` |
+| 有效的 manifest，加上與它相符的 done marker | 沒有，marker 讓 `run_expected=0`。reason 屬於上表那三種時是 `TradingCriticalSafetyState` |
+| manifest 在，done marker 存在但不合 schema 或與 manifest 不符 | `TradingRunBindingInvalid`；`TradingProcessDown` 被抑制；P&L 過期時另有 `TradingPnlTelemetryStale` |
+
+lane 啟動並寫出新的 manifest 與有效的 `pnl_status` 之後，這些告警消失。
 
 Step 2 到 Step 4 的 UTC 時窗，以及 Wan 的手動測試 cycle，都寫進執行紀錄，並從 `trading01`／`popdex-02` 的 shadow 證據中排除。
 
@@ -237,9 +352,10 @@ Step 2 到 Step 4 的 UTC 時窗，以及 Wan 的手動測試 cycle，都寫進�
 | 項目 | 時間（UTC） | 結果／record |
 |---|---|---|
 | Step 0 staging | | `MERGE`、`STAGE` |
-| Step 1 前置檢查 | | `WORK`、Alloy 版本、填入的 `TQ_EXECUTABLE` 與 executor 名稱及其來源 |
+| Step 1 前置檢查與基準 | | `WORK`、`CUT`、Alloy 版本、lane 停用的核對結果、填入的 `TQ_EXECUTABLE`／executor 名稱／`TQ_INSTANCE_ID` 及其來源 |
 | Step 2 host add | | `Rollback record:` 路徑、`rc` |
-| Step 3 中央檢查 | | `popdex-02` 的 age |
-| Step 4 central-deploy | | applied SHA |
-| Step 5 測試 cycle 後核對 | | 五個 binding 值、數量欄位名稱 |
+| Step 3 中央檢查 | | 比對結果、`popdex-02` 的 age |
+| Step 4a dry run | | 最後一行 |
+| Step 4b central-deploy | | applied SHA、`TARGETS-OK` |
+| Step 5 測試 cycle 後核對 | | 五個 binding 值、log 檔名與 Loki、executor 與成交額、done marker、數量欄位名稱與單位（含顯示限制） |
 | `TQ_STRATEGY_DISABLED=0` | | `Rollback record:` 路徑 |
