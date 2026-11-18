@@ -14,6 +14,10 @@ set -euo pipefail
 # until every empty value is filled. To check the rest of the file, this suite
 # fills the empty values with stand-ins that exist only here; no host value is
 # guessed in the example or in this suite.
+#
+# An example whose comments carry the line "# CONTRACT-NAMED LOGS ONLY" says
+# that its TQ_RAW_LOG_GLOB selects the lane's contract-named raw logs and no
+# file that only resembles them. The suite holds each such example to that.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -34,14 +38,34 @@ done
 [[ -x "$SETUP" && -x "$ACCESS_HELPER" && -x "$TARGET_TOOL" ]] || \
   fail 'setup-linux.sh, ensure-log-access.sh or scripts/trading-target is missing'
 
+# The host tools' own readers. valid_label_value is what setup-linux.sh accepts
+# as a strategy name; installed_env_value is how it reads a value back from an
+# env file without executing it.
+die() {
+  fail "$@"
+}
+# shellcheck source=/dev/null
+source "$TRADING_DIR/linux-common.sh"
+
 EXAMPLES=()
 while IFS= read -r example_path; do
   EXAMPLES+=("$example_path")
 done < <(find "$TRADING_DIR" -maxdepth 1 -type f -name 'deployment-linux-*.env.example' | LC_ALL=C sort)
 [[ "${#EXAMPLES[@]}" -gt 0 ]] || fail 'no deployment-linux-*.env.example was found'
 
+# Reads NAME from an env file as the host tools do, so NAME=value,
+# NAME="value" and NAME='value' all give value.
 example_value() {
-  sed -nE "s/^$1=//p" "$2" | tail -n 1
+  installed_env_value "$1" "$2" || \
+    fail "$(basename "$2"): $1 is not an assignment the host tools can read"
+}
+
+# Prints the quote character NAME's value is written in, if any.
+value_quote() {
+  case "$(sed -nE "s/^$1=//p" "$2" | tail -n 1)" in
+    \"*) printf '"' ;;
+    \'*) printf "'" ;;
+  esac
 }
 
 unfilled_keys() {
@@ -107,37 +131,50 @@ require_in_test_root() {
 }
 
 # Copies EXAMPLE to TARGET for a run inside the test root: each host path gets
-# the test root put in front of it, wherever the example points, and the host
-# accounts become the current user. Empty values stay empty. Then creates what
-# setup-linux.sh expects on a host: the repo root, the config carrying the
-# example's instance id, the raw log directory and the textfile directory.
-# Every path is checked before the first directory or file is created.
+# the test root put in front of it, wherever the example points and in the
+# quotes the example wrote it in, and the host accounts become the current
+# user. Empty values stay empty. Then creates what setup-linux.sh expects on a
+# host: the repo root, the config carrying the example's instance id, the raw
+# log directory and the textfile directory.
+#
+# Nothing is written before every name and path has been checked. Callers
+# build TARGET and later paths from the example's TQ_STRATEGY, so the name
+# must be one setup-linux.sh accepts, and TARGET and every mapped path must
+# resolve below the test root.
 stage_example() {
-  local example="$1" target="$2" label key value repo_root config_path log_glob textfile_dir
+  local example="$1" target="$2" label strategy key value repo_root config_path log_glob textfile_dir
   label="$(basename "$example")"
+  strategy="$(example_value TQ_STRATEGY "$example")"
+  valid_label_value "$strategy" || \
+    fail "$label: TQ_STRATEGY=$strategy is not a name setup-linux.sh accepts; nothing was written for it"
+  require_in_test_root "$label staged env" "$target"
+  for key in "${PATH_KEYS[@]}"; do
+    value="$(example_value "$key" "$example")"
+    [[ -n "$value" ]] || continue
+    [[ "$value" == /* ]] || fail "$label: $key must be an absolute path, got $value"
+    require_in_test_root "$label $key" "$TEST_ROOT$value"
+  done
+  for key in TQ_REPO_ROOT TQ_CONFIG_PATH TQ_RAW_LOG_GLOB TQ_TEXTFILE_DIR; do
+    [[ -n "$(example_value "$key" "$example")" ]] || \
+      fail "$label: $key is not a host fact to leave empty"
+  done
+
   cp "$example" "$target"
   chmod 600 "$target"
   for key in "${PATH_KEYS[@]}"; do
     value="$(example_value "$key" "$example")"
     [[ -n "$value" ]] || continue
-    [[ "$value" == /* ]] || fail "$label: $key must be a bare absolute path, got $value"
-    set_env_value "$target" "$key" "$TEST_ROOT$value"
+    set_env_value "$target" "$key" "$(value_quote "$key" "$example")$TEST_ROOT$value$(value_quote "$key" "$example")"
   done
   set_env_value "$target" TQ_PROBE_USER "$CURRENT_USER"
   set_env_value "$target" TQ_PROBE_GROUP "$CURRENT_GROUP"
   set_env_value "$target" TQ_ALLOY_USER "$CURRENT_USER"
   set_env_value "$target" TQ_ALLOY_GROUP "$CURRENT_GROUP"
 
-  for key in "${PATH_KEYS[@]}"; do
-    value="$(example_value "$key" "$target")"
-    [[ -z "$value" ]] || require_in_test_root "$label $key" "$value"
-  done
   repo_root="$(example_value TQ_REPO_ROOT "$target")"
   config_path="$(example_value TQ_CONFIG_PATH "$target")"
   log_glob="$(example_value TQ_RAW_LOG_GLOB "$target")"
   textfile_dir="$(example_value TQ_TEXTFILE_DIR "$target")"
-  [[ -n "$repo_root" && -n "$config_path" && -n "$log_glob" && -n "$textfile_dir" ]] || \
-    fail "$label: TQ_REPO_ROOT, TQ_CONFIG_PATH, TQ_RAW_LOG_GLOB and TQ_TEXTFILE_DIR are not host facts to leave empty"
   mkdir -p "$repo_root" "$(dirname "$config_path")" "${log_glob%/*}" "$textfile_dir"
   printf 'instance_id: "%s"\n' "$(example_value TQ_INSTANCE_ID "$target")" >"$config_path"
 }
@@ -201,12 +238,19 @@ resembling_names() {
     "${RUN_STAMP}_$stem.raw.log.1"
 }
 
+# Where the loop below stages the example of STRATEGY.
+staged_env_path() {
+  printf '%s/%s.source.env\n' "$ENVS" "$1"
+}
+
 INVENTORY_JSON="$("$TARGET_TOOL" list --format json)"
 STRATEGIES=()
 STAGED_REPO_ROOTS=()
 STAGED_GLOBS=()
 OWN_LOGS=()
+CONTRACT_ONLY=()
 rows_compared=0
+contract_only_count=0
 seen_paths=$'\n'
 
 for example in "${EXAMPLES[@]}"; do
@@ -260,7 +304,7 @@ for example in "${EXAMPLES[@]}"; do
     rows_compared=$((rows_compared + 1))
   fi
 
-  source_env="$ENVS/$strategy.source.env"
+  source_env="$(staged_env_path "$strategy")"
   stage_example "$example" "$source_env"
 
   unfilled="$(unfilled_keys "$example")"
@@ -287,6 +331,8 @@ for example in "${EXAMPLES[@]}"; do
   fill_env "$source_env" "$filled_env" ''
   [[ -z "$(unfilled_keys "$filled_env")" ]] || fail "$name: a value is still empty after the stand-ins"
 
+  # example_value reads the glob as retire and later sibling adds do: from the
+  # env, without executing it.
   staged_glob="$(example_value TQ_RAW_LOG_GLOB "$filled_env")"
   render_dir="$RENDERS/$strategy"
   "$SETUP" --render-only "$render_dir" --env-file "$filled_env" >/dev/null || fail "$name does not render"
@@ -302,15 +348,6 @@ for example in "${EXAMPLES[@]}"; do
     fail "$name: the fragment carries a collector or an unrendered placeholder"
   fi
   cmp -s "$filled_env" "$render_dir/instances/$strategy.env" || fail "$name: the rendered env differs from its source"
-  # retire and later sibling adds read the glob back from the installed env
-  # without executing it; they must get the same pattern.
-  readback_glob="$(
-    die() { exit 1; }
-    # shellcheck source=/dev/null
-    source "$TRADING_DIR/linux-common.sh"
-    installed_env_value TQ_RAW_LOG_GLOB "$render_dir/instances/$strategy.env"
-  )" || fail "$name: the host tools cannot read TQ_RAW_LOG_GLOB back from the installed env"
-  [[ "$readback_glob" == "$staged_glob" ]] || fail "$name: TQ_RAW_LOG_GLOB reads back as $readback_glob"
   cp "$fragment" "$COMBINED/"
   cp "$render_dir/trading-metrics.alloy" "$COMBINED/"
 
@@ -327,11 +364,15 @@ for example in "${EXAMPLES[@]}"; do
   STAGED_REPO_ROOTS+=("$(example_value TQ_REPO_ROOT "$filled_env")")
   STAGED_GLOBS+=("$staged_glob")
   OWN_LOGS+=("$own_log")
+  if rg -q '^# CONTRACT-NAMED LOGS ONLY' "$example"; then
+    CONTRACT_ONLY+=(1)
+    contract_only_count=$((contract_only_count + 1))
+  else
+    CONTRACT_ONLY+=(0)
+  fi
 done
 
 printf 'case: each raw log glob selects its own contract-named log and no other lane'"'"'s\n'
-suffix_only=0
-suffix_only_names=''
 for i in "${!STAGED_GLOBS[@]}"; do
   # compgen -G is how probe.sh expands the glob.
   selected="$(compgen -G "${STAGED_GLOBS[$i]}" | LC_ALL=C sort || true)"
@@ -352,21 +393,14 @@ for i in "${!STAGED_GLOBS[@]}"; do
   [[ "$(LC_ALL=C sort "$SETFACL_LOG")" == "$selected" ]] || \
     fail "${STRATEGIES[$i]}: ensure-log-access.sh and the probe select different files for the same glob"
 
-  if [[ "$selected" != "${OWN_LOGS[$i]}" ]]; then
-    suffix_only=$((suffix_only + 1))
-    suffix_only_names+=" ${STRATEGIES[$i]}"
+  # An example that says its glob takes contract-named logs only selects its
+  # own log and none of the files that resemble it. The examples that do not
+  # say so end in *<config stem>.raw.log; the envs installed on the hosts
+  # carry the same value and are not rewritten from this repo.
+  if [[ "${CONTRACT_ONLY[$i]}" -eq 1 && "$selected" != "${OWN_LOGS[$i]}" ]]; then
+    fail "${STRATEGIES[$i]}: the example says CONTRACT-NAMED LOGS ONLY, but its TQ_RAW_LOG_GLOB selects: $(tr '\n' ' ' <<<"$selected"). Use DIR/<8 x [0-9]>_<6 x [0-9]>_<config stem>.raw.log"
   fi
 done
-
-printf 'case: no further example selects files that only resemble its raw log\n'
-# The examples written before the contract form was used here end in
-# *<config stem>.raw.log, which also selects the resembling files. They stay
-# as they are: the envs installed on the hosts carry the same value and are
-# not rewritten from this repo. This is how many of them there are, and no
-# other example may join them; lower the number when one is tightened.
-MAX_SUFFIX_ONLY_GLOBS=4
-[[ "$suffix_only" -le "$MAX_SUFFIX_ONLY_GLOBS" ]] || \
-  fail "$suffix_only examples have a TQ_RAW_LOG_GLOB that also selects similarly named files ($suffix_only_names ); only the $MAX_SUFFIX_ONLY_GLOBS older ones may. Use DIR/<8 x [0-9]>_<6 x [0-9]>_<config stem>.raw.log"
 
 printf 'case: every fragment loads next to the others in one Alloy directory\n'
 cat >"$COMBINED/config.alloy" <<'EOF'
@@ -378,6 +412,51 @@ prometheus.remote_write "central" {
 }
 EOF
 alloy validate "$COMBINED" >/dev/null || fail 'the combined Alloy directory does not validate'
+
+# Stages and renders EXAMPLE, whose host paths are below HOST_ROOT, in its own
+# directory of the test root, and checks that what it needed was created below
+# the test root and not on this machine.
+check_staged_elsewhere() {
+  local label="$1" example="$2" host_root="$3" work="$TEST_ROOT/relocated/$1" staged config glob
+  mkdir -p "$work"
+  staged="$work/source.env"
+  stage_example "$example" "$staged"
+  config="$(example_value TQ_CONFIG_PATH "$staged")"
+  [[ "$config" == "$TEST_ROOT$host_root/repo/"* && -f "$config" ]] || \
+    fail "$label: the config was not created below the test root: $config"
+  fill_env "$staged" "$work/filled.env" ''
+  "$SETUP" --render-only "$work/render" --env-file "$work/filled.env" >/dev/null || \
+    fail "$label: the example does not render"
+  glob="$(example_value TQ_RAW_LOG_GLOB "$staged")"
+  rg -q -F "\"$glob\"" "$work/render/trading-$(example_value TQ_STRATEGY "$staged").alloy" || \
+    fail "$label: the fragment does not tail the glob below the test root"
+  [[ ! -e "$host_root" ]] || fail "$label: staging or rendering wrote to $host_root on this machine"
+}
+
+# A file outside the test root that no case may touch.
+victim="$OUTSIDE/victim.source.env"
+printf 'not a test file\n' >"$victim"
+chmod 644 "$victim"
+outside_untouched() {
+  [[ "$(ls -A "$OUTSIDE")" == "$(basename "$victim")" && "$(cat "$victim")" == 'not a test file' &&
+    "$(file_mode "$victim")" == 644 ]]
+}
+
+# Expects stage_example to refuse EXAMPLE with REASON before it writes
+# anything, in the test root or outside it.
+expect_stage_refused() {
+  local label="$1" reason="$2" example="$3" target="$4" before
+  before="$(tree_listing)"
+  if (stage_example "$example" "$target") >"$TEST_ROOT/refused.out" 2>&1; then
+    fail "$label: the example was staged"
+  fi
+  rg -q -F "$reason" "$TEST_ROOT/refused.out" || {
+    cat "$TEST_ROOT/refused.out" >&2
+    fail "$label: the example was refused for another reason than: $reason"
+  }
+  [[ "$(tree_listing)" == "$before" ]] || fail "$label: the refused example left files behind in the test root"
+  outside_untouched || fail "$label: staging changed a file outside the test root"
+}
 
 printf 'case: an example whose paths are not under /home/ubuntu is still staged inside the test root\n'
 base_example="${EXAMPLES[0]}"
@@ -392,19 +471,17 @@ for key in TQ_REPO_ROOT TQ_CONFIG_PATH TQ_RAW_LOG_GLOB TQ_RUN_MANIFEST TQ_DONE_M
   [[ "$(example_value "$key" "$relocated_example")" == "$relocated_root/repo"* ]] || \
     fail "the relocated example still has $key outside $relocated_root"
 done
-relocated_env="$TEST_ROOT/relocated/relocated.source.env"
-stage_example "$relocated_example" "$relocated_env"
-[[ ! -e "$relocated_root" ]] || fail "staging the relocated example wrote to $relocated_root on this machine"
-relocated_config="$(example_value TQ_CONFIG_PATH "$relocated_env")"
-[[ "$relocated_config" == "$TEST_ROOT$relocated_root/repo/"* && -f "$relocated_config" ]] || \
-  fail "the relocated config was not created below the test root: $relocated_config"
-fill_env "$relocated_env" "$TEST_ROOT/relocated/relocated.env" ''
-"$SETUP" --render-only "$TEST_ROOT/relocated/render" --env-file "$TEST_ROOT/relocated/relocated.env" >/dev/null || \
-  fail 'the relocated example does not render'
-rg -q -F "\"$(example_value TQ_RAW_LOG_GLOB "$relocated_env")\"" \
-  "$TEST_ROOT/relocated/render/trading-$(example_value TQ_STRATEGY "$relocated_env").alloy" || \
-  fail 'the relocated fragment does not tail the relocated glob'
-[[ ! -e "$relocated_root" ]] || fail "rendering the relocated example wrote to $relocated_root on this machine"
+check_staged_elsewhere relocated "$relocated_example" "$relocated_root"
+
+printf 'case: a path written in quotes is staged like a bare one, and stays quoted\n'
+quoted_example="$TEST_ROOT/relocated/deployment-linux-quoted.env.example"
+cp "$relocated_example" "$quoted_example"
+set_env_value "$quoted_example" TQ_CONFIG_PATH "\"$(example_value TQ_CONFIG_PATH "$relocated_example")\""
+set_env_value "$quoted_example" TQ_RAW_LOG_GLOB "'$(example_value TQ_RAW_LOG_GLOB "$relocated_example")'"
+check_staged_elsewhere quoted "$quoted_example" "$relocated_root"
+rg -q '^TQ_CONFIG_PATH="/.*"$' "$TEST_ROOT/relocated/quoted/source.env" &&
+  rg -q "^TQ_RAW_LOG_GLOB='/.*'\$" "$TEST_ROOT/relocated/quoted/source.env" || \
+  fail 'the staged env did not keep the quotes the example wrote its paths in'
 
 printf 'case: a path that climbs out of the test root is refused before anything is created\n'
 climb=''
@@ -414,16 +491,23 @@ done
 escape_example="$TEST_ROOT/relocated/deployment-linux-escape.env.example"
 cp "$base_example" "$escape_example"
 set_env_value "$escape_example" TQ_CONFIG_PATH "/climb/${climb%/}$OUTSIDE/config/escape.yaml"
-before_escape="$(tree_listing)"
-if (stage_example "$escape_example" "$TEST_ROOT/relocated/escape.source.env") >"$TEST_ROOT/escape.out" 2>&1; then
-  fail 'an example whose config path resolves outside the test root was staged'
-fi
-rg -q -F 'outside the test root' "$TEST_ROOT/escape.out" || {
-  cat "$TEST_ROOT/escape.out" >&2
-  fail 'the escaping example was refused for another reason'
-}
-[[ -z "$(ls -A "$OUTSIDE")" ]] || fail 'staging wrote outside the test root'
-[[ "$(tree_listing | grep -vxF -e "$TEST_ROOT/escape.out" -e "$TEST_ROOT/relocated/escape.source.env")" == \
-  "$before_escape" ]] || fail 'the refused example left directories behind'
+expect_stage_refused 'a config path that climbs out' 'outside the test root' \
+  "$escape_example" "$TEST_ROOT/relocated/escape.source.env"
 
-printf 'PASS: %d Linux instance examples, %d of them with an inventory row\n' "${#EXAMPLES[@]}" "$rows_compared"
+printf 'case: a strategy name that is not a plain label is refused before a path is built from it\n'
+# With this name, the path the loop above would stage to is the file outside.
+unsafe_strategy="../../$(basename "$OUTSIDE")/victim"
+unsafe_example="$TEST_ROOT/relocated/deployment-linux-unsafe-name.env.example"
+cp "$base_example" "$unsafe_example"
+set_env_value "$unsafe_example" TQ_STRATEGY "$unsafe_strategy"
+unsafe_target="$(staged_env_path "$unsafe_strategy")"
+[[ "$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$unsafe_target")" == "$victim" ]] || \
+  fail "the unsafe strategy name does not lead to $victim, so this case would prove nothing"
+expect_stage_refused 'a strategy name with path separators' 'is not a name setup-linux.sh accepts' \
+  "$unsafe_example" "$unsafe_target"
+
+printf 'case: a staging target outside the test root is refused, whatever the strategy is called\n'
+expect_stage_refused 'a staging target outside the test root' 'outside the test root' "$base_example" "$victim"
+
+printf 'PASS: %d Linux instance examples, %d with an inventory row, %d held to contract-named logs only\n' \
+  "${#EXAMPLES[@]}" "$rows_compared" "$contract_only_count"
