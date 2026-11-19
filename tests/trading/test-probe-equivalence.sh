@@ -818,7 +818,9 @@ REAL_STAT="$(command -v stat)"
 GNU_SHIM="$CASE_DIR/gnu-shim"
 mkdir -p "$GNU_SHIM"
 GNU_STAT_CALLS="$CASE_DIR/gnu-stat.calls"
+GNU_STAT_BATCHES="$CASE_DIR/gnu-stat.batches"
 : >"$GNU_STAT_CALLS"
+: >"$GNU_STAT_BATCHES"
 cat >"$GNU_SHIM/stat" <<SHIM_EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -826,6 +828,9 @@ printf 'call\n' >>"$GNU_STAT_CALLS"
 if [[ "\${1:-}" == "-c" && "\${2:-}" == "%Y" ]]; then
   shift 2
   if [[ "\${1:-}" == "--" ]]; then shift; fi
+  if [[ "\$#" -gt 1 ]]; then
+    printf '%s\n' "\$#" >>"$GNU_STAT_BATCHES"
+  fi
   if "$REAL_STAT" -c '%Y' -- "\$@" 2>/dev/null; then
     exit 0
   fi
@@ -880,14 +885,15 @@ if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
   exit 1
 fi
 gnu_stat_count="$(wc -l <"$GNU_STAT_CALLS" | tr -d ' ')"
-if [[ "$gnu_stat_count" != "1" ]]; then
-  printf 'FAIL: scenario 15d (C4): expected 1 batched GNU stat call for 80 bound logs, got %s\n' "$gnu_stat_count" >&2
+gnu_batch_sizes="$(tr '\n' ' ' <"$GNU_STAT_BATCHES")"
+if [[ "$gnu_batch_sizes" != "80 " || "$gnu_stat_count" -gt 3 ]]; then
+  printf 'FAIL: scenario 15d (C4/C11): expected 1 GNU stat batch of 80 (<=3 total), got batches=[%s] total=%s\n' "$gnu_batch_sizes" "$gnu_stat_count" >&2
   exit 1
 fi
 PASS_COUNT=$((PASS_COUNT + 1))
-printf 'ok      scenario 15d (C4): GNU stat/date path matches baseline with 1 stat call for 80 genuinely bound logs\n'
+printf 'ok      scenario 15d (C4): GNU stat/date path matches baseline with 1 batch stat (%s total) for 80 genuinely bound logs\n' "$gnu_stat_count"
 
-printf '# Scenario 16 (C3): >500 short matching paths use 1 stat batch on both BSD and GNU paths\n'
+printf '# Scenario 16 (C3/C13): >500 short paths, dynamic large ASCII, UTF-8 over ARG_MAX, and >5000 short paths\n'
 new_fixture big-glob big_glob_config 'lighter-main=lighter' Asia/Taipei
 SHORT_LOG_DIR="$REPO/l"
 mkdir -p "$SHORT_LOG_DIR"
@@ -911,17 +917,31 @@ match_count_16="$(compgen -G "$TQ_RAW_LOG_GLOB" | wc -l | tr -d ' ')"
   exit 1
 }
 
-# 16a: BSD/native stat success-batch count == 1 for 505 short paths.
+# 16a: BSD/native stat batch count == 1 (<=3 total) for 505 short paths.
 STAT_OK_SHIM="$CASE_DIR/stat-ok-shim"
 mkdir -p "$STAT_OK_SHIM"
 STAT_OK_CALLS="$CASE_DIR/stat-ok.calls"
+STAT_OK_BATCHES="$CASE_DIR/stat-ok.batches"
 : >"$STAT_OK_CALLS"
+: >"$STAT_OK_BATCHES"
 cat >"$STAT_OK_SHIM/stat" <<SHIM_EOF
 #!/usr/bin/env bash
 rc=0
 "$REAL_STAT" "\$@" || rc=\$?
 if [[ "\$rc" -eq 0 ]]; then
   printf 'ok\n' >>"$STAT_OK_CALLS"
+  path_args=0
+  seen_dd=0
+  for a in "\$@"; do
+    if [[ "\$seen_dd" -eq 1 ]]; then
+      path_args=\$((path_args + 1))
+    elif [[ "\$a" == "--" ]]; then
+      seen_dd=1
+    fi
+  done
+  if [[ "\$path_args" -gt 1 ]]; then
+    printf '%s\n' "\$path_args" >>"$STAT_OK_BATCHES"
+  fi
 fi
 exit "\$rc"
 SHIM_EOF
@@ -934,16 +954,18 @@ if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
   diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
   exit 1
 fi
+stat_ok_batch_sizes="$(tr '\n' ' ' <"$STAT_OK_BATCHES")"
 stat_ok_count="$(wc -l <"$STAT_OK_CALLS" | tr -d ' ')"
-if [[ "$stat_ok_count" != "1" ]]; then
-  printf 'FAIL: scenario 16a (C3): expected 1 successful stat batch for 505 short paths, got %s\n' "$stat_ok_count" >&2
+if [[ "$stat_ok_batch_sizes" != "505 " || "$stat_ok_count" -gt 3 ]]; then
+  printf 'FAIL: scenario 16a (C3): expected 1 stat batch of 505 (<=3 total), got batches=[%s] total=%s\n' "$stat_ok_batch_sizes" "$stat_ok_count" >&2
   exit 1
 fi
 PASS_COUNT=$((PASS_COUNT + 1))
-printf 'ok      scenario 16a (C3): 505 short paths use 1 successful stat batch and match baseline\n'
+printf 'ok      scenario 16a (C3): 505 short paths use 1 stat batch (%s total) and match baseline\n' "$stat_ok_count"
 
-# 16b: GNU stat call count == 1 for 505 short paths.
+# 16b: GNU stat batch count == 1 (<=3 total) for 505 short paths.
 : >"$GNU_STAT_CALLS"
+: >"$GNU_STAT_BATCHES"
 rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
 FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$GNU_SHIM:$PATH" "$NEW_PROBE"
 if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
@@ -951,68 +973,84 @@ if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
   diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
   exit 1
 fi
+gnu_batch_sizes_16="$(tr '\n' ' ' <"$GNU_STAT_BATCHES")"
 gnu_stat_count_16="$(wc -l <"$GNU_STAT_CALLS" | tr -d ' ')"
-if [[ "$gnu_stat_count_16" != "1" ]]; then
-  printf 'FAIL: scenario 16b (C3): expected 1 GNU stat call for 505 short paths, got %s\n' "$gnu_stat_count_16" >&2
+if [[ "$gnu_batch_sizes_16" != "505 " || "$gnu_stat_count_16" -gt 3 ]]; then
+  printf 'FAIL: scenario 16b (C3): expected 1 GNU stat batch of 505 (<=3 total), got batches=[%s] total=%s\n' "$gnu_batch_sizes_16" "$gnu_stat_count_16" >&2
   exit 1
 fi
 PASS_COUNT=$((PASS_COUNT + 1))
-printf 'ok      scenario 16b (C3): 505 short paths use 1 GNU stat call and match baseline\n'
+printf 'ok      scenario 16b (C3): 505 short paths use 1 GNU stat batch (%s total) and match baseline\n' "$gnu_stat_count_16"
 
-# 16c & 16d: large ASCII argument list (>1 MiB on 2 MiB ARG_MAX Linux; >650 KiB on 1 MiB macOS)
-# uses 1 stat call, and UTF-8 paths exceeding ARG_MAX in encoded bytes succeed without E2BIG.
-PLATFORM_ARG_MAX="$(getconf ARG_MAX 2>/dev/null || printf '1048576')"
-if [[ "$PLATFORM_ARG_MAX" -ge 1500000 ]]; then
-  ASCII16_DEPTH=9
-  ASCII16_SEG="$(printf 'a%.0s' {1..200})"
-  ASCII16_COUNT=600
-  UTF816_DEPTH=20
-  UTF816_SEG="$(printf '中%.0s' {1..60})"
-  UTF816_COUNT=600
-else
-  ASCII16_DEPTH=4
-  ASCII16_SEG="$(printf 'a%.0s' {1..200})"
-  ASCII16_COUNT=800
-  UTF816_DEPTH=4
-  UTF816_SEG="$(printf '中%.0s' {1..65})"
-  UTF816_COUNT=1350
+# 16c & 16d (C3/C13): dynamically sized from host getconf ARG_MAX minus env and measured
+# per-path encoded length; verify direct single stat succeeds for ASCII and UTF-8 exceeds ARG_MAX.
+PLATFORM_ARG_MAX="$(getconf ARG_MAX 2>/dev/null || printf '262144')"
+PLATFORM_PATH_MAX="$(getconf PATH_MAX "$TEST_ROOT" 2>/dev/null || printf '1024')"
+ENV_BYTES="$(env | wc -c | tr -d ' ')"
+ENV_LINES="$(env | wc -l | tr -d ' ')"
+ENV_OVERHEAD=$((ENV_BYTES + ENV_LINES * 16 + 8192))
+AVAIL_ARG_BYTES=$((PLATFORM_ARG_MAX - ENV_OVERHEAD))
+if [[ "$AVAIL_ARG_BYTES" -lt 65536 ]]; then
+  AVAIL_ARG_BYTES=65536
 fi
 
 ASCII16_DIR="$REPO"
-for (( d = 1; d <= ASCII16_DEPTH; d++ )); do
+ASCII16_SEG="$(printf 'a%.0s' {1..200})"
+ASCII16_MAX_PATH=$((PLATFORM_PATH_MAX - 150))
+[[ "$ASCII16_MAX_PATH" -le 1850 ]] || ASCII16_MAX_PATH=1850
+while [[ $(( ${#ASCII16_DIR} + ${#ASCII16_SEG} + 48 )) -le "$ASCII16_MAX_PATH" ]]; do
   ASCII16_DIR="$ASCII16_DIR/$ASCII16_SEG"
 done
 mkdir -p "$ASCII16_DIR"
+ascii16_sample_bytes=$(( $(printf '%s\0' "$ASCII16_DIR/o0001_big_glob_config.raw.log" | wc -c | tr -d ' ') + 16 ))
+target_ascii16_bytes=$((AVAIL_ARG_BYTES * 60 / 100))
+ASCII16_COUNT=$((target_ascii16_bytes / ascii16_sample_bytes))
+[[ "$ASCII16_COUNT" -ge 3 ]] || ASCII16_COUNT=3
+
 export TQ_RAW_LOG_GLOB="$ASCII16_DIR/*.raw.log"
+ascii16_paths=()
 for (( n = 1; n < ASCII16_COUNT; n++ )); do
   printf -v idx '%04d' "$n"
   p="$ASCII16_DIR/o${idx}_big_glob_config.raw.log"
   : >"$p"
   touch_epoch "$p" "$((old_base_epoch + n))"
+  ascii16_paths+=("$p")
 done
 LOG16C="$ASCII16_DIR/$RUN16.raw.log"
 printf 'time=2025-07-17T06:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=4 cycles_completed=1\n' >"$LOG16C"
 touch_epoch "$LOG16C" "$LOG16_MTIME"
+ascii16_paths+=("$LOG16C")
+if ! ("$REAL_STAT" -c '%Y' -- "${ascii16_paths[@]}" >/dev/null 2>&1 || \
+      "$REAL_STAT" -f '%m' -- "${ascii16_paths[@]}" >/dev/null 2>&1); then
+  printf 'FAIL: scenario 16c (C13): direct single stat call failed for %s ASCII paths\n' "$ASCII16_COUNT" >&2
+  exit 1
+fi
 write_manifest "$RUN16" "$LOG16C" "2025-07-17T05:00:00Z"
 : >"$STAT_OK_CALLS"
+: >"$STAT_OK_BATCHES"
 rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
 FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$STAT_OK_SHIM:$SHIM:$PATH" "$NEW_PROBE"
-assert_metric_value "scenario 16c (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
-assert_metric_value "scenario 16c (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG16_MTIME"
-assert_metric_value "scenario 16c (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
-stat_ok_16c="$(wc -l <"$STAT_OK_CALLS" | tr -d ' ')"
-if [[ "$stat_ok_16c" != "1" ]]; then
-  printf 'FAIL: scenario 16c (C3): expected 1 successful stat batch for %s large ASCII paths, got %s\n' "$ASCII16_COUNT" "$stat_ok_16c" >&2
+assert_metric_value "scenario 16c (C3/C13)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+assert_metric_value "scenario 16c (C3/C13)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG16_MTIME"
+assert_metric_value "scenario 16c (C3/C13)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+stat_ok_16c_sizes="$(tr '\n' ' ' <"$STAT_OK_BATCHES")"
+if [[ "$stat_ok_16c_sizes" != "$ASCII16_COUNT " ]]; then
+  printf 'FAIL: scenario 16c (C3/C13): expected 1 stat batch of %s large ASCII paths, got [%s]\n' "$ASCII16_COUNT" "$stat_ok_16c_sizes" >&2
   exit 1
 fi
 PASS_COUNT=$((PASS_COUNT + 1))
-printf 'ok      scenario 16c (C3): %s large ASCII paths use 1 stat call\n' "$ASCII16_COUNT"
+printf 'ok      scenario 16c (C3/C13): %s large ASCII paths use 1 stat batch\n' "$ASCII16_COUNT"
 
 UTF816_DIR="$REPO"
-for (( d = 1; d <= UTF816_DEPTH; d++ )); do
+UTF816_SEG="$(printf '中%.0s' {1..60})"
+UTF816_SEG_BYTES="$(printf '%s' "$UTF816_SEG" | wc -c | tr -d ' ')"
+UTF816_MAX_PATH=$((PLATFORM_PATH_MAX - 150))
+while [[ $(( $(printf '%s' "$UTF816_DIR" | wc -c | tr -d ' ') + UTF816_SEG_BYTES + 48 )) -le "$UTF816_MAX_PATH" ]]; do
   UTF816_DIR="$UTF816_DIR/$UTF816_SEG"
 done
 mkdir -p "$UTF816_DIR"
+utf816_sample_bytes="$(printf '%s\0' "$UTF816_DIR/o0001_big_glob_config.raw.log" | wc -c | tr -d ' ')"
+UTF816_COUNT=$(( (PLATFORM_ARG_MAX + 65536) / utf816_sample_bytes + 1 ))
 export TQ_RAW_LOG_GLOB="$UTF816_DIR/*.raw.log"
 for (( n = 1; n < UTF816_COUNT; n++ )); do
   printf -v idx '%04d' "$n"
@@ -1025,17 +1063,73 @@ printf 'time=2025-07-17T06:00:00Z level=INFO msg=pnl_status stable=true cycle_co
 touch_epoch "$LOG16D" "$LOG16_MTIME"
 utf8_bytes_16d="$(find "$UTF816_DIR" -maxdepth 1 -type f -name '*.raw.log' -print0 | wc -c | tr -d ' ')"
 if [[ "$utf8_bytes_16d" -le "$PLATFORM_ARG_MAX" ]]; then
-  printf 'FAIL: scenario 16d (C3): UTF-8 fixture (%s bytes) did not exceed ARG_MAX (%s)\n' "$utf8_bytes_16d" "$PLATFORM_ARG_MAX" >&2
+  printf 'FAIL: scenario 16d (C13): UTF-8 fixture (%s bytes) did not exceed ARG_MAX (%s)\n' "$utf8_bytes_16d" "$PLATFORM_ARG_MAX" >&2
   exit 1
 fi
 write_manifest "$RUN16" "$LOG16D" "2025-07-17T05:00:00Z"
 rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
 FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$SHIM:$PATH" "$NEW_PROBE"
-assert_metric_value "scenario 16d (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
-assert_metric_value "scenario 16d (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG16_MTIME"
-assert_metric_value "scenario 16d (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+assert_metric_value "scenario 16d (C3/C13)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+assert_metric_value "scenario 16d (C3/C13)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG16_MTIME"
+assert_metric_value "scenario 16d (C3/C13)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
 PASS_COUNT=$((PASS_COUNT + 1))
-printf 'ok      scenario 16d (C3): %s UTF-8 paths (%s bytes > ARG_MAX %s) succeed without E2BIG\n' "$UTF816_COUNT" "$utf8_bytes_16d" "$PLATFORM_ARG_MAX"
+printf 'ok      scenario 16d (C3/C13): %s UTF-8 paths (%s bytes > ARG_MAX %s) succeed without E2BIG\n' "$UTF816_COUNT" "$utf8_bytes_16d" "$PLATFORM_ARG_MAX"
+
+# 16e (C3): >5000 short paths (beats BSD xargs default 5000-arg cap) use 1 stat batch when they fit.
+SHORT5K_DIR="$TEST_ROOT/s5k"
+mkdir -p "$SHORT5K_DIR"
+perl -e '
+  my ($dir, $ts) = @ARGV;
+  for my $i (1..5000) {
+    my $p = sprintf("%s/o%04d.raw.log", $dir, $i);
+    open my $fh, ">", $p or die $!;
+    close $fh;
+    utime $ts, $ts, $p;
+  }
+' "$SHORT5K_DIR" "$old_base_epoch"
+LOG16E="$SHORT5K_DIR/$RUN16.raw.log"
+printf 'time=2025-07-17T06:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=4 cycles_completed=1\n' >"$LOG16E"
+touch_epoch "$LOG16E" "$LOG16_MTIME"
+export TQ_RAW_LOG_GLOB="$SHORT5K_DIR/*.raw.log"
+write_manifest "$RUN16" "$LOG16E" "2025-07-17T05:00:00Z"
+short5k_paths=()
+while IFS= read -r p; do
+  [[ -n "$p" ]] && short5k_paths+=("$p")
+done <<EOF
+$(compgen -G "$TQ_RAW_LOG_GLOB" || true)
+EOF
+if [[ "${#short5k_paths[@]}" != "5001" ]]; then
+  printf 'FAIL: scenario 16e (C3): expected 5001 short paths, got %s\n' "${#short5k_paths[@]}" >&2
+  exit 1
+fi
+if "$REAL_STAT" -c '%Y' -- "${short5k_paths[@]}" >/dev/null 2>&1 || \
+   "$REAL_STAT" -f '%m' -- "${short5k_paths[@]}" >/dev/null 2>&1
+then
+  : >"$STAT_OK_CALLS"
+  : >"$STAT_OK_BATCHES"
+  rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+  FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$STAT_OK_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+  assert_metric_value "scenario 16e (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+  assert_metric_value "scenario 16e (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG16_MTIME"
+  assert_metric_value "scenario 16e (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+  stat_ok_16e_sizes="$(tr '\n' ' ' <"$STAT_OK_BATCHES")"
+  if [[ "$stat_ok_16e_sizes" != "5001 " ]]; then
+    printf 'FAIL: scenario 16e (C3): expected 1 stat batch of 5001 short paths, got [%s]\n' "$stat_ok_16e_sizes" >&2
+    exit 1
+  fi
+  PASS_COUNT=$((PASS_COUNT + 1))
+  printf 'ok      scenario 16e (C3): 5001 short paths use 1 stat batch (bypassing BSD xargs 5000-arg cap)\n'
+else
+  # On hosts with small ARG_MAX (e.g. 262 KiB) where 5001 paths cannot fit in one exec,
+  # probe must still succeed cleanly across xargs splits.
+  rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+  FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$SHIM:$PATH" "$NEW_PROBE"
+  assert_metric_value "scenario 16e (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+  assert_metric_value "scenario 16e (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG16_MTIME"
+  assert_metric_value "scenario 16e (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+  PASS_COUNT=$((PASS_COUNT + 1))
+  printf 'ok      scenario 16e (C3): 5001 short paths succeed cleanly across ARG_MAX split\n'
+fi
 
 printf '# Scenario 17 (C1): manifest log created after enumeration, first write after midnight, and out-of-glob exclusion\n'
 REAL_JQ="$(command -v jq)"
@@ -1168,6 +1262,67 @@ if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
 fi
 PASS_COUNT=$((PASS_COUNT + 1))
 printf 'ok      scenario 17e (C9): first-write heartbeat without completed cycle refreshes log_mtime_seconds and matches baseline\n'
+
+# 17f (C11): first completed cycle appended AFTER manifest binding, immediately before scanning the bound log.
+# Intercept the timestamp_to_epoch date call for MANIFEST_PROCESS_STARTED_AT, which sits right between
+# LATEST_LOG_MTIME=$(file_mtime ...) and the manifest scan in both OLD_PROBE and NEW_PROBE.
+C11_SHIM="$CASE_DIR/c11-date-shim"
+mkdir -p "$C11_SHIM"
+C11_FLAG="$CASE_DIR/c11-triggered"
+cat >"$C11_SHIM/date" <<SHIM_EOF
+#!/usr/bin/env bash
+if [[ ! -f "$C11_FLAG" && "\$*" == *"2025-07-17T06:00:00Z"* ]]; then
+  : >"$C11_FLAG"
+  printf 'time=2025-07-17T06:06:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=between.1 session_cycle=1 real_pnl_usdt=8 cycles_completed=1\n' >>"$LOG17"
+  TZ=UTC touch -t "\$(TZ=UTC "$REAL_DATE" -r "$TODAY_TOUCH_17" +%Y%m%d%H%M.%S 2>/dev/null || TZ=UTC "$REAL_DATE" -d "@$TODAY_TOUCH_17" +%Y%m%d%H%M.%S)" "$LOG17"
+fi
+exec "$SHIM/date" "\$@"
+SHIM_EOF
+chmod 755 "$C11_SHIM/date"
+: >"$LOG17"
+touch_epoch "$LOG17" "$YEST_TOUCH_17"
+rm -f "$C11_FLAG" "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$C11_SHIM:$SHIM:$PATH" "$OLD_PROBE"
+: >"$LOG17"
+touch_epoch "$LOG17" "$YEST_TOUCH_17"
+rm -f "$C11_FLAG"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$C11_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+assert_metric_value "scenario 17f (C11)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$YEST_TOUCH_17"
+assert_metric_value "scenario 17f (C11)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_current_cycles_completed 1
+assert_metric_value "scenario 17f (C11)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 17f (C11): completion between binding and scan differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 17f (C11): first completion between binding and scan keeps binding mtime, counts daily cycle, and matches baseline\n'
+
+# 17g (C12): two distinct matching filenames hard-linked to the same inode count two run-qualified daily cycles.
+new_fixture link-c12 link_c12_config 'lighter-main=lighter' Asia/Taipei
+RUN17G_A="20250717_010000_link_c12_config"
+RUN17G_B="20250717_020000_link_c12_config"
+LOG17G_A="$REPO/logs/live-runs/$RUN17G_A.raw.log"
+LOG17G_B="$REPO/logs/live-runs/$RUN17G_B.raw.log"
+printf 'time=2025-07-17T01:30:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=hl.1 session_cycle=1 real_pnl_usdt=4 cycles_completed=1\n' >"$LOG17G_A"
+ln "$LOG17G_A" "$LOG17G_B"
+touch_epoch "$LOG17G_A" "$(epoch_of 2025-07-17T02:30:00Z)"
+write_manifest "$RUN17G_A" "$LOG17G_A" "2025-07-17T01:00:00Z"
+assert_identical "scenario 17g (C12): two hard-linked matching filenames count two run-qualified daily cycles" "$NOW_DEFAULT"
+assert_metric_value "scenario 17g (C12)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 2
+
+# 17h (C12): symlink sorting before the bound manifest log with differing mtime preserves target mtime for log_mtime_seconds.
+rm -f "$LOG17G_B"
+LOG17H_LINK="$REPO/logs/live-runs/20250717_000000_link_c12_config.raw.log"
+TARGET_MTIME_17H="$(epoch_of 2025-07-17T01:00:00Z)"
+SYMLINK_MTIME_17H="$(epoch_of 2025-07-17T09:00:00Z)"
+ln -s "$LOG17G_A" "$LOG17H_LINK"
+touch_epoch "$LOG17G_A" "$TARGET_MTIME_17H"
+symlink_stamp="$(TZ=UTC "$REAL_DATE" -r "$SYMLINK_MTIME_17H" +%Y%m%d%H%M.%S 2>/dev/null ||
+  TZ=UTC "$REAL_DATE" -d "@$SYMLINK_MTIME_17H" +%Y%m%d%H%M.%S)"
+TZ=UTC touch -h -t "$symlink_stamp" "$LOG17H_LINK"
+assert_identical "scenario 17h (C12): symlink in glob with newer mtime preserves bound target mtime" "$NOW_DEFAULT"
+assert_metric_value "scenario 17h (C12)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$TARGET_MTIME_17H"
 
 printf '# Scenario 18 (C2): same-day history log archived between enumeration and history scan\n'
 new_fixture race-c2 race_c2_config 'lighter-main=lighter' Asia/Taipei

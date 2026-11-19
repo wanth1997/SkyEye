@@ -56,7 +56,7 @@ find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 | (
   done
 
   if [[ "${#raw_logs[@]}" -gt 0 ]]; then
-    xargs_args=(-0)
+    xargs_max_bytes=""
     xargs_max_chars=0
     for (( acl_index = 0; acl_index < ${#raw_logs[@]}; acl_index++ )); do
       xargs_max_chars=$((xargs_max_chars + ${#raw_logs[$acl_index]} + 4))
@@ -67,16 +67,17 @@ find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 | (
         if [[ "$limit_line" == *"Maximum length of command we could actually use:"* ]]; then
           xargs_max_bytes="${limit_line##*:}"
           xargs_max_bytes="${xargs_max_bytes//[^0-9]/}"
-          if [[ "$xargs_max_bytes" =~ ^[0-9]+$ && "$xargs_max_bytes" -gt 131072 ]]; then
-            xargs_args=(-0 -s "$xargs_max_bytes")
-          fi
+          [[ "$xargs_max_bytes" =~ ^[0-9]+$ && "$xargs_max_bytes" -gt 131072 ]] || xargs_max_bytes=""
           break
         fi
       done <<<"$xargs_limits"
     fi
 
+    getfacl_xargs=(-0 -n "${#raw_logs[@]}")
+    [[ -z "$xargs_max_bytes" ]] || getfacl_xargs+=(-s "$xargs_max_bytes")
+
     if ! missing_indices="$(printf '%s\0' "${raw_logs[@]}" | \
-        xargs "${xargs_args[@]}" getfacl -cp -- 2>/dev/null | \
+        xargs "${getfacl_xargs[@]}" getfacl -cp -- 2>/dev/null | \
         LC_ALL=C awk -v alloy_user="$TQ_ALLOY_USER" -v expected="${#raw_logs[@]}" '
       BEGIN {
         RS = ""
@@ -109,8 +110,10 @@ find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 | (
     fi
 
     if [[ "${#missing_files[@]}" -gt 0 ]]; then
+      setfacl_xargs=(-0 -n "${#missing_files[@]}")
+      [[ -z "$xargs_max_bytes" ]] || setfacl_xargs+=(-s "$xargs_max_bytes")
       if ! printf '%s\0' "${missing_files[@]}" | \
-          xargs "${xargs_args[@]}" setfacl -m "u:${TQ_ALLOY_USER}:r--" -- >/dev/null 2>&1
+          xargs "${setfacl_xargs[@]}" setfacl -m "u:${TQ_ALLOY_USER}:r--" -- >/dev/null 2>&1
       then
         die "unable to grant Alloy read access to a configured raw log"
       fi

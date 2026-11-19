@@ -19,6 +19,15 @@ valid_label_value() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
 }
 
+same_dir_and_basename() {
+  local a="$1" b="$2"
+  [[ "${a##*/}" == "${b##*/}" ]] || return 1
+  local da="${a%/*}" db="${b%/*}"
+  da="${da:-/}"
+  db="${db:-/}"
+  [[ "$da" == "$db" || "$da" -ef "$db" ]]
+}
+
 STAT_FLAVOR=""
 DATE_FLAVOR=""
 
@@ -935,7 +944,7 @@ $(compgen -G "$TQ_RAW_LOG_GLOB" || true)
 EOF
 
 if [[ "${#RAW_LOG_FILES[@]}" -gt 0 ]]; then
-  xargs_args=(-0)
+  xargs_args=(-0 -n "${#RAW_LOG_FILES[@]}")
   xargs_max_chars=0
   for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
     xargs_max_chars=$((xargs_max_chars + ${#RAW_LOG_FILES[$raw_log_index]} + 4))
@@ -947,7 +956,7 @@ if [[ "${#RAW_LOG_FILES[@]}" -gt 0 ]]; then
         xargs_max_bytes="${limit_line##*:}"
         xargs_max_bytes="${xargs_max_bytes//[^0-9]/}"
         if [[ "$xargs_max_bytes" =~ ^[0-9]+$ && "$xargs_max_bytes" -gt 131072 ]]; then
-          xargs_args=(-0 -s "$xargs_max_bytes")
+          xargs_args=(-0 -n "${#RAW_LOG_FILES[@]}" -s "$xargs_max_bytes")
         fi
         break
       fi
@@ -1107,23 +1116,12 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       MANIFEST_SCANNED=1
       MANIFEST_RAW_LOG_INDEX=-1
       for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
-        if [[ "${RAW_LOG_FILES[$raw_log_index]}" == "$MANIFEST_LOG_PATH" ||
-              "${RAW_LOG_FILES[$raw_log_index]}" -ef "$MANIFEST_LOG_PATH" ]]
-        then
+        if same_dir_and_basename "${RAW_LOG_FILES[$raw_log_index]}" "$MANIFEST_LOG_PATH"; then
           MANIFEST_RAW_LOG_INDEX="$raw_log_index"
           break
         fi
       done
-      if [[ "$MANIFEST_RAW_LOG_INDEX" -ge 0 &&
-            "${RAW_LOG_MTIMES[$MANIFEST_RAW_LOG_INDEX]}" -ge "$TODAY_START_EPOCH" ]]
-      then
-        LATEST_LOG_MTIME="${RAW_LOG_MTIMES[$MANIFEST_RAW_LOG_INDEX]}"
-      else
-        LATEST_LOG_MTIME="$(file_mtime "$MANIFEST_LOG_PATH")"
-        if [[ "$MANIFEST_RAW_LOG_INDEX" -ge 0 ]]; then
-          RAW_LOG_MTIMES[MANIFEST_RAW_LOG_INDEX]="$LATEST_LOG_MTIME"
-        fi
-      fi
+      LATEST_LOG_MTIME="$(file_mtime "$MANIFEST_LOG_PATH")"
       CURRENT_RUN_ID="$MANIFEST_RUN_ID"
       CURRENT_RUN_STARTED_TIMESTAMP="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
 
@@ -1363,16 +1361,15 @@ fi
 TODAY_CYCLE_LINES=""
 for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
   history_log="${RAW_LOG_FILES[$raw_log_index]}"
-  history_mtime="${RAW_LOG_MTIMES[$raw_log_index]}"
-  [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
-  [[ -f "$history_log" ]] || continue
-  if [[ "$MANIFEST_SCANNED" -eq 1 &&
-        ( "$raw_log_index" -eq "$MANIFEST_RAW_LOG_INDEX" ||
-          "$history_log" == "$MANIFEST_LOG_PATH" ||
-          "$history_log" -ef "$MANIFEST_LOG_PATH" ) ]]
-  then
+  if [[ "$MANIFEST_SCANNED" -eq 1 && "$raw_log_index" -eq "$MANIFEST_RAW_LOG_INDEX" ]]; then
+    [[ -f "$history_log" ]] || continue
+    history_mtime="$(file_mtime "$history_log")"
+    [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
     history_cycles="$MANIFEST_TODAY_CYCLES"
   else
+    history_mtime="${RAW_LOG_MTIMES[$raw_log_index]}"
+    [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
+    [[ -f "$history_log" ]] || continue
     history_run_id="${history_log##*/}"
     history_run_id="${history_run_id%.raw.log}"
     history_cycles="$(today_completed_cycles_for_log "$history_log" "$history_run_id")"
@@ -1386,17 +1383,15 @@ for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ 
   fi
 done
 # If the bound manifest log appeared in-glob after the initial enumeration,
-# include its already-parsed daily cycles once when its mtime qualifies while
-# keeping out-of-glob manifest logs excluded.
+# include its already-parsed daily cycles once when its live mtime qualifies
+# while keeping out-of-glob manifest logs excluded.
 if [[ "$MANIFEST_SCANNED" -eq 1 && "$MANIFEST_RAW_LOG_INDEX" -lt 0 &&
       -n "$MANIFEST_TODAY_CYCLES" && -f "$MANIFEST_LOG_PATH" ]]
 then
   manifest_in_glob=0
   while IFS= read -r glob_candidate; do
     [[ -n "$glob_candidate" ]] || continue
-    if [[ "$glob_candidate" == "$MANIFEST_LOG_PATH" ||
-          "$glob_candidate" -ef "$MANIFEST_LOG_PATH" ]]
-    then
+    if same_dir_and_basename "$glob_candidate" "$MANIFEST_LOG_PATH"; then
       manifest_in_glob=1
       break
     fi
@@ -1404,10 +1399,7 @@ then
 $(compgen -G "$TQ_RAW_LOG_GLOB" || true)
 EOF
   if [[ "$manifest_in_glob" -eq 1 ]]; then
-    manifest_history_mtime="$LATEST_LOG_MTIME"
-    if [[ "$manifest_history_mtime" -lt "$TODAY_START_EPOCH" ]]; then
-      manifest_history_mtime="$(file_mtime "$MANIFEST_LOG_PATH")"
-    fi
+    manifest_history_mtime="$(file_mtime "$MANIFEST_LOG_PATH")"
     if [[ "$manifest_history_mtime" -ge "$TODAY_START_EPOCH" ]]; then
       if [[ -n "$TODAY_CYCLE_LINES" ]]; then
         TODAY_CYCLE_LINES+=$'\n'"$MANIFEST_TODAY_CYCLES"

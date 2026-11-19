@@ -358,42 +358,48 @@ assert_line_count "505 already-OK getfacl calls" "$GETFACL_CALLS" 1
 assert_line_count "505 already-OK awk calls" "$AWK_CALLS" 1
 assert_line_count "505 already-OK setfacl calls" "$SETFACL_CALLS" 0
 
-# C3: large ASCII argument list (>1 MiB on 2 MiB ARG_MAX Linux; >650 KiB on 1 MiB macOS)
-# fits in one getfacl + one awk + one setfacl call, and UTF-8 paths exceeding ARG_MAX
-# in encoded bytes split cleanly across xargs without E2BIG.
-PLATFORM_ARG_MAX="$(getconf ARG_MAX 2>/dev/null || printf '1048576')"
-if [[ "$PLATFORM_ARG_MAX" -ge 1500000 ]]; then
-  # Linux (ARG_MAX=2097152, PATH_MAX=4096): 600 ASCII paths ~= 1.10 MiB (>1 MiB) in 1 call.
-  ASCII_DEPTH=9
-  ASCII_SEG="$(printf 'a%.0s' {1..200})"
-  ASCII_COUNT=600
-  # UTF-8: 600 paths * ~3680 bytes ~= 2.21 MiB (>2 MiB ARG_MAX), ~1280 chars/path (<ARG_MAX chars).
-  UTF8_DEPTH=20
-  UTF8_SEG="$(printf '中%.0s' {1..60})"
-  UTF8_COUNT=600
-else
-  # macOS (ARG_MAX=1048576, PATH_MAX=1024): 800 ASCII paths ~= 680 KiB (>512 KiB) in 1 call.
-  ASCII_DEPTH=4
-  ASCII_SEG="$(printf 'a%.0s' {1..200})"
-  ASCII_COUNT=800
-  # UTF-8: 1350 paths * ~860 bytes ~= 1.16 MiB (>1 MiB ARG_MAX), ~320 chars/path (<ARG_MAX chars).
-  UTF8_DEPTH=4
-  UTF8_SEG="$(printf '中%.0s' {1..65})"
-  UTF8_COUNT=1350
+# C13: size both batching fixtures from the host's measured ARG_MAX minus env and
+# measured per-path encoded byte length, verifying direct-call fit for ASCII and
+# ARG_MAX overflow for UTF-8 before running the assertions.
+PLATFORM_ARG_MAX="$(getconf ARG_MAX 2>/dev/null || printf '262144')"
+PLATFORM_PATH_MAX="$(getconf PATH_MAX "$TEST_ROOT" 2>/dev/null || printf '1024')"
+ENV_BYTES="$(env | wc -c | tr -d ' ')"
+ENV_LINES="$(env | wc -l | tr -d ' ')"
+ENV_OVERHEAD=$((ENV_BYTES + ENV_LINES * 16 + 8192))
+AVAIL_ARG_BYTES=$((PLATFORM_ARG_MAX - ENV_OVERHEAD))
+if [[ "$AVAIL_ARG_BYTES" -lt 65536 ]]; then
+  AVAIL_ARG_BYTES=65536
 fi
 
-printf 'case: large ASCII argument list (%s paths) fits in 1 getfacl, 1 awk, 1 setfacl (C3)\n' "$ASCII_COUNT"
 ASCII_REPO="$TEST_ROOT/ascii-repo"
 ASCII_DIR="$ASCII_REPO"
-for (( d = 1; d <= ASCII_DEPTH; d++ )); do
+ASCII_SEG="$(printf 'a%.0s' {1..200})"
+ASCII_MAX_PATH=$((PLATFORM_PATH_MAX - 150))
+[[ "$ASCII_MAX_PATH" -le 1850 ]] || ASCII_MAX_PATH=1850
+while [[ $(( ${#ASCII_DIR} + ${#ASCII_SEG} + 32 )) -le "$ASCII_MAX_PATH" ]]; do
   ASCII_DIR="$ASCII_DIR/$ASCII_SEG"
 done
 ASCII_STATE="$TEST_ROOT/ascii-state"
 mkdir -p "$ASCII_DIR" "$ASCII_STATE"
+ascii_sample_bytes=$(( $(printf '%s\0' "$ASCII_DIR/0001.raw.log" | wc -c | tr -d ' ') + 16 ))
+target_ascii_bytes=$((AVAIL_ARG_BYTES * 60 / 100))
+ASCII_COUNT=$((target_ascii_bytes / ascii_sample_bytes))
+[[ "$ASCII_COUNT" -ge 2 ]] || ASCII_COUNT=2
+
+printf 'case: large ASCII argument list (%s paths, ~%s bytes) fits in 1 getfacl, 1 awk, 1 setfacl (C3/C13)\n' \
+  "$ASCII_COUNT" "$((ASCII_COUNT * ascii_sample_bytes))"
+ascii_paths=()
 for (( i = 1; i <= ASCII_COUNT; i++ )); do
   printf -v idx '%04d' "$i"
-  : >"$ASCII_DIR/$idx.raw.log"
+  p="$ASCII_DIR/$idx.raw.log"
+  : >"$p"
+  ascii_paths+=("$p")
 done
+# Verify a direct single invocation actually fits on this host before asserting 1 batch.
+if ! ACCESS_STATE="$ASCII_STATE" "$FAKE_BIN/getfacl" -cp -- "${ascii_paths[@]}" >/dev/null 2>&1; then
+  printf 'FAIL: C13 invariant: direct single getfacl call did not fit for %s ASCII paths\n' "$ASCII_COUNT" >&2
+  exit 1
+fi
 : >"$SETFACL_LOG"
 : >"$GETFACL_CALLS"
 : >"$SETFACL_CALLS"
@@ -405,21 +411,28 @@ assert_line_count "large ASCII getfacl calls" "$GETFACL_CALLS" 1
 assert_line_count "large ASCII awk calls" "$AWK_CALLS" 1
 assert_line_count "large ASCII setfacl calls" "$SETFACL_CALLS" 1
 
-printf 'case: UTF-8 paths exceeding ARG_MAX in bytes succeed with 1 awk pass (C3)\n'
 UTF8_REPO="$TEST_ROOT/utf8-repo"
 UTF8_DIR="$UTF8_REPO"
-for (( d = 1; d <= UTF8_DEPTH; d++ )); do
+UTF8_SEG="$(printf '中%.0s' {1..60})"
+UTF8_SEG_BYTES="$(printf '%s' "$UTF8_SEG" | wc -c | tr -d ' ')"
+UTF8_MAX_PATH=$((PLATFORM_PATH_MAX - 150))
+while [[ $(( $(printf '%s' "$UTF8_DIR" | wc -c | tr -d ' ') + UTF8_SEG_BYTES + 32 )) -le "$UTF8_MAX_PATH" ]]; do
   UTF8_DIR="$UTF8_DIR/$UTF8_SEG"
 done
 UTF8_STATE="$TEST_ROOT/utf8-state"
 mkdir -p "$UTF8_DIR" "$UTF8_STATE"
+utf8_sample_bytes="$(printf '%s\0' "$UTF8_DIR/0001.raw.log" | wc -c | tr -d ' ')"
+UTF8_COUNT=$(( (PLATFORM_ARG_MAX + 65536) / utf8_sample_bytes + 1 ))
+
+printf 'case: UTF-8 paths (%s paths) exceeding ARG_MAX (%s) in bytes succeed with 1 awk pass (C3/C13)\n' \
+  "$UTF8_COUNT" "$PLATFORM_ARG_MAX"
 for (( i = 1; i <= UTF8_COUNT; i++ )); do
   printf -v idx '%04d' "$i"
   : >"$UTF8_DIR/$idx.raw.log"
 done
 utf8_bytes="$(find "$UTF8_DIR" -maxdepth 1 -type f -name '*.raw.log' -print0 | wc -c | tr -d ' ')"
 if [[ "$utf8_bytes" -le "$PLATFORM_ARG_MAX" ]]; then
-  printf 'FAIL: UTF-8 fixture (%s bytes) did not exceed ARG_MAX (%s)\n' "$utf8_bytes" "$PLATFORM_ARG_MAX" >&2
+  printf 'FAIL: C13 invariant: UTF-8 fixture (%s bytes) did not exceed ARG_MAX (%s)\n' "$utf8_bytes" "$PLATFORM_ARG_MAX" >&2
   exit 1
 fi
 : >"$SETFACL_LOG"
