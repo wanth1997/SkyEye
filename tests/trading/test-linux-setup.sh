@@ -81,6 +81,9 @@ assert_not_contains "$RETIRE" 'systemctl.*tnauqquant'
 assert_not_contains "$SERVICE_TEMPLATE" 'quant'
 assert_contains "$SERVICE_TEMPLATE" 'Type=oneshot'
 assert_contains "$SERVICE_TEMPLATE" 'EnvironmentFile=@@ENV_ROOT@@/%i.env'
+assert_contains "$SERVICE_TEMPLATE" '^Nice=10$'
+assert_contains "$SERVICE_TEMPLATE" '^CPUWeight=20$'
+assert_contains "$SERVICE_TEMPLATE" '^CPUQuota=20%$'
 assert_contains "$TIMER_TEMPLATE" 'OnUnitActiveSec=15s'
 assert_contains "$TIMER_TEMPLATE" '^OnBootSec=5s$'
 assert_not_contains "$TIMER_TEMPLATE" '^Persistent='
@@ -201,6 +204,9 @@ for strategy in "$ROBINHOOD" "$MAINNET"; do
   assert_not_contains "$rendered/trading-$strategy.alloy" '@@[A-Z_]+@@'
   assert_contains "$rendered/skyeye-trading-probe@.service" '/instances/%i[.]env'
   assert_not_contains "$rendered/skyeye-trading-probe@.service" "${strategy}[.]env"
+  assert_contains "$rendered/skyeye-trading-probe@.service" '^Nice=10$'
+  assert_contains "$rendered/skyeye-trading-probe@.service" '^CPUWeight=20$'
+  assert_contains "$rendered/skyeye-trading-probe@.service" '^CPUQuota=20%$'
 done
 
 assert_contains "$ROBINHOOD_RENDERED/trading-$ROBINHOOD.alloy" \
@@ -554,6 +560,9 @@ do
     exit 1
   }
 done
+assert_contains "$SYSTEM_ROOT/etc/systemd/system/skyeye-trading-probe@.service" '^Nice=10$'
+assert_contains "$SYSTEM_ROOT/etc/systemd/system/skyeye-trading-probe@.service" '^CPUWeight=20$'
+assert_contains "$SYSTEM_ROOT/etc/systemd/system/skyeye-trading-probe@.service" '^CPUQuota=20%$'
 
 printf 'case: installed probes publish exactly two distinct outputs\n'
 for strategy in "$ROBINHOOD" "$MAINNET"; do

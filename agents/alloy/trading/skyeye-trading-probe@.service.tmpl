@@ -10,6 +10,9 @@ EnvironmentFile=@@ENV_ROOT@@/%i.env
 ExecStartPre=@@ACCESS_PATH@@
 ExecStart=@@PROBE_PATH@@
 UMask=0027
+Nice=10
+CPUWeight=20
+CPUQuota=20%
 
 [Install]
 WantedBy=multi-user.target
