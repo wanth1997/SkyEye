@@ -19,12 +19,29 @@ valid_label_value() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
 }
 
+same_dir_and_basename() {
+  local a="$1" b="$2"
+  [[ "${a##*/}" == "${b##*/}" ]] || return 1
+  local da="${a%/*}" db="${b%/*}"
+  da="${da:-/}"
+  db="${db:-/}"
+  [[ "$da" == "$db" || "$da" -ef "$db" ]]
+}
+
+STAT_FLAVOR=""
+DATE_FLAVOR=""
+
 file_mtime() {
   local path="$1"
-  if stat -c '%Y' "$path" >/dev/null 2>&1; then
-    stat -c '%Y' "$path"
+  local mtime
+  if [[ "$STAT_FLAVOR" == "gnu" ]]; then
+    stat -c '%Y' -- "$path"
+  elif [[ "$STAT_FLAVOR" == "bsd" ]]; then
+    stat -f '%m' -- "$path"
+  elif mtime="$(stat -c '%Y' -- "$path" 2>/dev/null)" && [[ "$mtime" =~ ^-?[0-9]+$ ]]; then
+    printf '%s\n' "$mtime"
   else
-    stat -f '%m' "$path"
+    stat -f '%m' -- "$path"
   fi
 }
 
@@ -42,51 +59,49 @@ is_number() {
 
 timestamp_to_epoch() {
   local timestamp="$1"
-  local normalized result
-  normalized="$(printf '%s\n' "$timestamp" | sed -E \
-    's/\.[0-9]+([+-][0-9]{2}):([0-9]{2})$/\1\2/; s/([+-][0-9]{2}):([0-9]{2})$/\1\2/; s/\.[0-9]+Z$/Z/')"
+  if [[ "$DATE_FLAVOR" == "gnu" ]]; then
+    TZ=UTC date -d "$timestamp" '+%s' 2>/dev/null
+  else
+    local normalized="$timestamp"
+    if [[ "$normalized" =~ ^(.*)\.[0-9]+([+-][0-9][0-9]):([0-9][0-9])$ ]]; then
+      normalized="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+    elif [[ "$normalized" =~ ^(.*)([+-][0-9][0-9]):([0-9][0-9])$ ]]; then
+      normalized="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+    elif [[ "$normalized" =~ ^(.*)\.[0-9]+Z$ ]]; then
+      normalized="${BASH_REMATCH[1]}Z"
+    fi
 
-  case "$normalized" in
-    *Z)
-      if result="$(TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" '+%s' 2>/dev/null)"; then
-        printf '%s\n' "$result"
-        return 0
-      fi
-      ;;
-    *)
-      if result="$(date -j -f '%Y-%m-%dT%H:%M:%S%z' "$normalized" '+%s' 2>/dev/null)"; then
-        printf '%s\n' "$result"
-        return 0
-      fi
-      ;;
-  esac
-
-  TZ=UTC date -d "$timestamp" '+%s' 2>/dev/null
+    case "$normalized" in
+      *Z)
+        TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%SZ' "$normalized" '+%s' 2>/dev/null
+        ;;
+      *)
+        date -j -f '%Y-%m-%dT%H:%M:%S%z' "$normalized" '+%s' 2>/dev/null
+        ;;
+    esac
+  fi
 }
 
 # Zones that skip midnight for DST start that day at 01:00. GNU date rejects the
 # skipped time, while BSD date already moves it forward.
 local_day_start_epoch() {
   local day="$1"
-  local result
-  if result="$(TZ="$TQ_TIMEZONE" date -j -f '%Y-%m-%d %H:%M:%S' \
-    "$day 00:00:00" '+%s' 2>/dev/null)"; then
-    printf '%s\n' "$result"
-    return 0
+  if [[ "$DATE_FLAVOR" == "gnu" ]]; then
+    TZ="$TQ_TIMEZONE" date -d "$day 00:00:00" '+%s' 2>/dev/null ||
+      TZ="$TQ_TIMEZONE" date -d "$day 01:00:00" '+%s' 2>/dev/null
+  else
+    TZ="$TQ_TIMEZONE" date -j -f '%Y-%m-%d %H:%M:%S' "$day 00:00:00" '+%s' 2>/dev/null
   fi
-  TZ="$TQ_TIMEZONE" date -d "$day 00:00:00" '+%s' 2>/dev/null ||
-    TZ="$TQ_TIMEZONE" date -d "$day 01:00:00" '+%s' 2>/dev/null
 }
 
 # Calendar arithmetic only, so UTC keeps a DST change out of it.
 next_calendar_day() {
   local day="$1"
-  local result
-  if result="$(TZ=UTC date -j -v+1d -f '%Y-%m-%d' "$day" '+%Y-%m-%d' 2>/dev/null)"; then
-    printf '%s\n' "$result"
-    return 0
+  if [[ "$DATE_FLAVOR" == "gnu" ]]; then
+    TZ=UTC date -d "$day + 1 day" '+%Y-%m-%d' 2>/dev/null
+  else
+    TZ=UTC date -j -v+1d -f '%Y-%m-%d' "$day" '+%Y-%m-%d' 2>/dev/null
   fi
-  TZ=UTC date -d "$day + 1 day" '+%Y-%m-%d' 2>/dev/null
 }
 
 # Event times are read in awk: forking date per line would dominate every full-log
@@ -542,7 +557,7 @@ exchange_for_executor() {
 }
 
 executor_map_size() {
-  awk -F, '{ print NF }' <<<"$TQ_EXECUTOR_MAP"
+  printf '%s\n' "$EXECUTOR_MAP_SIZE"
 }
 
 first_mapped_exchange() {
@@ -556,8 +571,12 @@ signed_position() {
   awk -v side="$side" -v quantity="$quantity" 'BEGIN {
     if (side == "short") quantity = -quantity
     if (side == "flat") quantity = 0
-    printf "%.10f", quantity
-  }' | sed -E 's/0+$//; s/[.]$//; s/^-0$/0/'
+    formatted = sprintf("%.10f", quantity)
+    sub(/0+$/, "", formatted)
+    sub(/[.]$/, "", formatted)
+    if (formatted == "" || formatted == "-0") formatted = "0"
+    print formatted
+  }'
 }
 
 sum_signed_position_series() {
@@ -653,14 +672,15 @@ process_executable() {
 
 process_start_epoch() {
   local pid="$1"
-  local started result
-  started="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null | sed -E 's/[[:space:]]+$//' || true)"
+  local started
+  started="$(LC_ALL=C TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null || true)"
+  started="${started%"${started##*[![:space:]]}"}"
   [[ -n "$started" ]] || return 1
-  if result="$(LC_ALL=C TZ=UTC date -j -f '%a %b %e %T %Y' "$started" '+%s' 2>/dev/null)"; then
-    printf '%s\n' "$result"
-    return 0
+  if [[ "$DATE_FLAVOR" == "gnu" ]]; then
+    LC_ALL=C TZ=UTC date -d "$started" '+%s' 2>/dev/null
+  else
+    LC_ALL=C TZ=UTC date -j -f '%a %b %e %T %Y' "$started" '+%s' 2>/dev/null
   fi
-  LC_ALL=C TZ=UTC date -d "$started" '+%s' 2>/dev/null
 }
 
 # A manifest PID alone cannot tell the recorded process from a later one that
@@ -727,10 +747,24 @@ do
   require_env "$required_name"
 done
 
-for command_name in awk date find grep jq mktemp ps sed shasum sort stat
+for command_name in awk date find grep jq mktemp ps sed sort stat xargs
 do
   require_command "$command_name"
 done
+
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256_CMD=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+  SHA256_CMD=(shasum -a 256)
+else
+  die "missing required command: sha256sum or shasum"
+fi
+
+if [[ "$(TZ=UTC date -d '1970-01-01T00:00:00Z' '+%s' 2>/dev/null || true)" == "0" ]]; then
+  DATE_FLAVOR="gnu"
+else
+  DATE_FLAVOR="bsd"
+fi
 
 for label_value in \
   "$TQ_PRODUCT" \
@@ -799,6 +833,9 @@ old_ifs="$IFS"
 IFS=',' read -r -a executor_entries <<<"$TQ_EXECUTOR_MAP"
 IFS="$old_ifs"
 [[ "${#executor_entries[@]}" -gt 0 ]] || die "TQ_EXECUTOR_MAP must not be empty"
+# Preserve awk -F, '{ print NF }' semantics (including any trailing empty field).
+_executor_map_commas="${TQ_EXECUTOR_MAP//[^,]/}"
+EXECUTOR_MAP_SIZE=$(( ${#_executor_map_commas} + 1 ))
 seen_executors=","
 for executor_entry in "${executor_entries[@]}"; do
   [[ "$executor_entry" == *=* ]] || die "invalid TQ_EXECUTOR_MAP entry: $executor_entry"
@@ -841,9 +878,10 @@ TQ_CURL_PATH="${TQ_CURL_PATH:-$(command -v curl || true)}"
   die "TQ_CONFIG_PATH must be inside TQ_REPO_ROOT"
 
 CONFIG_REL="${TQ_CONFIG_PATH#"$TQ_REPO_ROOT"/}"
-CONFIG_STEM="$(basename "$TQ_CONFIG_PATH")"
+CONFIG_STEM="${TQ_CONFIG_PATH##*/}"
 CONFIG_STEM="${CONFIG_STEM%.*}"
-CONFIG_SHA256="$(shasum -a 256 "$TQ_CONFIG_PATH" | awk '{print $1}')"
+config_sha_line="$("${SHA256_CMD[@]}" <"$TQ_CONFIG_PATH")"
+CONFIG_SHA256="${config_sha_line%%[[:space:]]*}"
 ACTUAL_INSTANCE_ID="$(config_instance_id)"
 
 # Sample timestamps ahead of this clock by more than the allowance are rejected.
@@ -896,19 +934,63 @@ while IFS= read -r process_pid; do
 done <<<"$CONFIG_MATCHED_PIDS"
 PROCESS_COUNT="${#PROCESS_PIDS[@]}"
 
-LATEST_LOG=""
-LATEST_LOG_MTIME=0
+RAW_LOG_FILES=()
+RAW_LOG_MTIMES=()
 while IFS= read -r log_candidate; do
-  [[ -n "$log_candidate" ]] || continue
-  [[ -f "$log_candidate" ]] || continue
-  candidate_mtime="$(file_mtime "$log_candidate")"
-  if [[ "$candidate_mtime" -gt "$LATEST_LOG_MTIME" ]]; then
-    LATEST_LOG="$log_candidate"
-    LATEST_LOG_MTIME="$candidate_mtime"
-  fi
+  [[ -n "$log_candidate" && -f "$log_candidate" ]] || continue
+  RAW_LOG_FILES+=("$log_candidate")
 done <<EOF
 $(compgen -G "$TQ_RAW_LOG_GLOB" || true)
 EOF
+
+if [[ "${#RAW_LOG_FILES[@]}" -gt 0 ]]; then
+  xargs_args=(-0 -n "${#RAW_LOG_FILES[@]}")
+  xargs_max_chars=0
+  for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
+    xargs_max_chars=$((xargs_max_chars + ${#RAW_LOG_FILES[$raw_log_index]} + 4))
+  done
+  if [[ $((xargs_max_chars * 4)) -gt 100000 ]]; then
+    xargs_limits="$(LC_ALL=C xargs --show-limits </dev/null 2>&1 || true)"
+    while IFS= read -r limit_line; do
+      if [[ "$limit_line" == *"Maximum length of command we could actually use:"* ]]; then
+        xargs_max_bytes="${limit_line##*:}"
+        xargs_max_bytes="${xargs_max_bytes//[^0-9]/}"
+        if [[ "$xargs_max_bytes" =~ ^[0-9]+$ && "$xargs_max_bytes" -gt 131072 ]]; then
+          xargs_args=(-0 -n "${#RAW_LOG_FILES[@]}" -s "$xargs_max_bytes")
+        fi
+        break
+      fi
+    done <<<"$xargs_limits"
+  fi
+
+  if [[ "$STAT_FLAVOR" == "gnu" ]]; then
+    stat_output="$(printf '%s\0' "${RAW_LOG_FILES[@]}" | xargs "${xargs_args[@]}" stat -c '%Y' --)"
+  elif [[ "$STAT_FLAVOR" == "bsd" ]]; then
+    stat_output="$(printf '%s\0' "${RAW_LOG_FILES[@]}" | xargs "${xargs_args[@]}" stat -f '%m' --)"
+  elif stat_output="$(printf '%s\0' "${RAW_LOG_FILES[@]}" | xargs "${xargs_args[@]}" stat -c '%Y' -- 2>/dev/null)" && [[ -n "$stat_output" ]]; then
+    STAT_FLAVOR="gnu"
+  else
+    stat_output="$(printf '%s\0' "${RAW_LOG_FILES[@]}" | xargs "${xargs_args[@]}" stat -f '%m' --)"
+    STAT_FLAVOR="bsd"
+  fi
+
+  while IFS= read -r mtime_line; do
+    [[ "$mtime_line" =~ ^-?[0-9]+$ ]] || die "unexpected stat mtime output: $mtime_line"
+    RAW_LOG_MTIMES+=("$mtime_line")
+  done <<<"$stat_output"
+  [[ "${#RAW_LOG_MTIMES[@]}" -eq "${#RAW_LOG_FILES[@]}" ]] || \
+    die "stat returned ${#RAW_LOG_MTIMES[@]} mtimes for ${#RAW_LOG_FILES[@]} files"
+fi
+
+LATEST_LOG=""
+LATEST_LOG_MTIME=0
+for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
+  candidate_mtime="${RAW_LOG_MTIMES[$raw_log_index]}"
+  if [[ "$candidate_mtime" -gt "$LATEST_LOG_MTIME" ]]; then
+    LATEST_LOG="${RAW_LOG_FILES[$raw_log_index]}"
+    LATEST_LOG_MTIME="$candidate_mtime"
+  fi
+done
 
 RUNTIME_CONTRACT_AVAILABLE=0
 PROCESS_IDENTITY_OK=0
@@ -916,6 +998,7 @@ STRATEGY_IDENTITY_OK=0
 CONFIG_SNAPSHOT_MATCH=0
 LOG_BINDING_OK=0
 MANIFEST_SCANNED=0
+MANIFEST_RAW_LOG_INDEX=-1
 MANIFEST_LOG_PATH=""
 MANIFEST_TODAY_CYCLES=""
 MARKER_BINDING_OK=0
@@ -952,7 +1035,7 @@ if [[ "$TQ_REQUIRE_RUNTIME_CONTRACT" -eq 0 && "$PROCESS_COUNT" -eq 1 ]]; then
 fi
 
 if [[ "$TQ_REQUIRE_RUNTIME_CONTRACT" -eq 0 && -n "$LATEST_LOG" &&
-      "$(basename "$LATEST_LOG")" == *"_$CONFIG_STEM.raw.log" ]]
+      "${LATEST_LOG##*/}" == *"_$CONFIG_STEM.raw.log" ]]
 then
   LOG_BINDING_OK=1
 fi
@@ -1027,10 +1110,17 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
     fi
 
     if [[ -f "$MANIFEST_LOG_PATH" ]] &&
-       [[ "$(basename "$MANIFEST_LOG_PATH")" == "$MANIFEST_RUN_ID.raw.log" ]]
+       [[ "${MANIFEST_LOG_PATH##*/}" == "$MANIFEST_RUN_ID.raw.log" ]]
     then
       LOG_BINDING_OK=1
       MANIFEST_SCANNED=1
+      MANIFEST_RAW_LOG_INDEX=-1
+      for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
+        if same_dir_and_basename "${RAW_LOG_FILES[$raw_log_index]}" "$MANIFEST_LOG_PATH"; then
+          MANIFEST_RAW_LOG_INDEX="$raw_log_index"
+          break
+        fi
+      done
       LATEST_LOG_MTIME="$(file_mtime "$MANIFEST_LOG_PATH")"
       CURRENT_RUN_ID="$MANIFEST_RUN_ID"
       CURRENT_RUN_STARTED_TIMESTAMP="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
@@ -1199,16 +1289,17 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       if [[ -n "$NET_POSITION_SNAPSHOT" ]]; then
         IFS=$'\t' read -r current_net_line current_net_time current_net_side current_net_qty \
           <<<"$NET_POSITION_SNAPSHOT"
-        if [[ "$current_net_side" =~ ^(long|short|flat)$ ]] && is_number "$current_net_qty" &&
-           net_position_applies "$current_net_line" \
-             "$(signed_position "$current_net_side" "$current_net_qty")" &&
-           NET_POSITION_TIMESTAMP="$(position_sample_epoch "$current_net_time")"
-        then
-          CURRENT_POSITION_VALID=1
-          CURRENT_NET_POSITION_BTC="$(signed_position "$current_net_side" "$current_net_qty")"
-          if [[ "$(executor_map_size)" -eq 1 ]]; then
-            CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n' \
-              "$(first_mapped_exchange)" "$current_net_side" "$current_net_qty")"
+        if [[ "$current_net_side" =~ ^(long|short|flat)$ ]] && is_number "$current_net_qty"; then
+          current_signed_net="$(signed_position "$current_net_side" "$current_net_qty")"
+          if net_position_applies "$current_net_line" "$current_signed_net" &&
+             NET_POSITION_TIMESTAMP="$(position_sample_epoch "$current_net_time")"
+          then
+            CURRENT_POSITION_VALID=1
+            CURRENT_NET_POSITION_BTC="$current_signed_net"
+            if [[ "$(executor_map_size)" -eq 1 ]]; then
+              CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n' \
+                "$(first_mapped_exchange)" "$current_net_side" "$current_net_qty")"
+            fi
           fi
         fi
       fi
@@ -1268,14 +1359,18 @@ if [[ "$TQ_STRATEGY_DISABLED" -eq 1 ]]; then
 fi
 
 TODAY_CYCLE_LINES=""
-while IFS= read -r history_log; do
-  [[ -n "$history_log" && -f "$history_log" ]] || continue
-  history_mtime="$(file_mtime "$history_log")"
-  [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
-  if [[ "$MANIFEST_SCANNED" -eq 1 && "$history_log" == "$MANIFEST_LOG_PATH" ]]; then
+for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
+  history_log="${RAW_LOG_FILES[$raw_log_index]}"
+  if [[ "$MANIFEST_SCANNED" -eq 1 && "$raw_log_index" -eq "$MANIFEST_RAW_LOG_INDEX" ]]; then
+    [[ -f "$history_log" ]] || continue
+    history_mtime="$(file_mtime "$history_log")"
+    [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
     history_cycles="$MANIFEST_TODAY_CYCLES"
   else
-    history_run_id="$(basename "$history_log")"
+    history_mtime="${RAW_LOG_MTIMES[$raw_log_index]}"
+    [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
+    [[ -f "$history_log" ]] || continue
+    history_run_id="${history_log##*/}"
     history_run_id="${history_run_id%.raw.log}"
     history_cycles="$(today_completed_cycles_for_log "$history_log" "$history_run_id")"
   fi
@@ -1286,9 +1381,34 @@ while IFS= read -r history_log; do
       TODAY_CYCLE_LINES="$history_cycles"
     fi
   fi
-done <<EOF
+done
+# If the bound manifest log appeared in-glob after the initial enumeration,
+# include its already-parsed daily cycles once when its live mtime qualifies
+# while keeping out-of-glob manifest logs excluded.
+if [[ "$MANIFEST_SCANNED" -eq 1 && "$MANIFEST_RAW_LOG_INDEX" -lt 0 &&
+      -n "$MANIFEST_TODAY_CYCLES" && -f "$MANIFEST_LOG_PATH" ]]
+then
+  manifest_in_glob=0
+  while IFS= read -r glob_candidate; do
+    [[ -n "$glob_candidate" ]] || continue
+    if same_dir_and_basename "$glob_candidate" "$MANIFEST_LOG_PATH"; then
+      manifest_in_glob=1
+      break
+    fi
+  done <<EOF
 $(compgen -G "$TQ_RAW_LOG_GLOB" || true)
 EOF
+  if [[ "$manifest_in_glob" -eq 1 ]]; then
+    manifest_history_mtime="$(file_mtime "$MANIFEST_LOG_PATH")"
+    if [[ "$manifest_history_mtime" -ge "$TODAY_START_EPOCH" ]]; then
+      if [[ -n "$TODAY_CYCLE_LINES" ]]; then
+        TODAY_CYCLE_LINES+=$'\n'"$MANIFEST_TODAY_CYCLES"
+      else
+        TODAY_CYCLE_LINES="$MANIFEST_TODAY_CYCLES"
+      fi
+    fi
+  fi
+fi
 if [[ -n "$TODAY_CYCLE_LINES" ]]; then
   TODAY_COMPLETED_CYCLES="$(printf '%s\n' "$TODAY_CYCLE_LINES" | sort -u | awk 'END { print NR + 0 }')"
 else

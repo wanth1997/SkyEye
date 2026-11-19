@@ -22,10 +22,11 @@ done
 
 [[ "$TQ_ALLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || \
   die "TQ_ALLOY_USER is invalid"
+command -v awk >/dev/null 2>&1 || die "awk is required"
 command -v find >/dev/null 2>&1 || die "find is required"
 command -v getfacl >/dev/null 2>&1 || die "getfacl is required"
-command -v grep >/dev/null 2>&1 || die "grep is required"
 command -v setfacl >/dev/null 2>&1 || die "setfacl is required"
+command -v xargs >/dev/null 2>&1 || die "xargs is required"
 
 repo_root="${TQ_REPO_ROOT%/}"
 raw_log_dir="${TQ_RAW_LOG_GLOB%/*}"
@@ -42,23 +43,83 @@ case "$raw_log_dir" in
   *) die "TQ_RAW_LOG_GLOB must stay below TQ_REPO_ROOT" ;;
 esac
 
-# find's own errors stay on stderr; its status is checked after the loop so a
+# find's own errors stay on stderr; its status is checked after the pipeline so a
 # failed listing is reported instead of ending the script without a message.
+# The explicit subshell keeps an empty listing from running in the main shell
+# even when Bash lastpipe is enabled.
 set +e
-find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 |
+find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 | (
+  set -euo pipefail
+  raw_logs=()
   while IFS= read -r -d '' raw_log; do
-    if ! acl="$(getfacl -cp -- "$raw_log" 2>/dev/null)"; then
+    raw_logs+=("$raw_log")
+  done
+
+  if [[ "${#raw_logs[@]}" -gt 0 ]]; then
+    xargs_max_bytes=""
+    xargs_max_chars=0
+    for (( acl_index = 0; acl_index < ${#raw_logs[@]}; acl_index++ )); do
+      xargs_max_chars=$((xargs_max_chars + ${#raw_logs[$acl_index]} + 4))
+    done
+    if [[ $((xargs_max_chars * 4)) -gt 100000 ]]; then
+      xargs_limits="$(LC_ALL=C xargs --show-limits </dev/null 2>&1 || true)"
+      while IFS= read -r limit_line; do
+        if [[ "$limit_line" == *"Maximum length of command we could actually use:"* ]]; then
+          xargs_max_bytes="${limit_line##*:}"
+          xargs_max_bytes="${xargs_max_bytes//[^0-9]/}"
+          [[ "$xargs_max_bytes" =~ ^[0-9]+$ && "$xargs_max_bytes" -gt 131072 ]] || xargs_max_bytes=""
+          break
+        fi
+      done <<<"$xargs_limits"
+    fi
+
+    getfacl_xargs=(-0 -n "${#raw_logs[@]}")
+    [[ -z "$xargs_max_bytes" ]] || getfacl_xargs+=(-s "$xargs_max_bytes")
+
+    if ! missing_indices="$(printf '%s\0' "${raw_logs[@]}" | \
+        xargs "${getfacl_xargs[@]}" getfacl -cp -- 2>/dev/null | \
+        LC_ALL=C awk -v alloy_user="$TQ_ALLOY_USER" -v expected="${#raw_logs[@]}" '
+      BEGIN {
+        RS = ""
+        FS = "\n"
+        user_prefix = "user:" alloy_user ":r"
+        mask_prefix = "mask::r"
+      }
+      {
+        has_user = 0
+        has_mask = 0
+        for (i = 1; i <= NF; i++) {
+          if (index($i, user_prefix) == 1) has_user = 1
+          if (index($i, mask_prefix) == 1) has_mask = 1
+        }
+        if (!has_user || !has_mask) print NR - 1
+      }
+      END {
+        if (NR != expected) exit 2
+      }
+    ')"; then
       die "unable to inspect a configured raw log ACL"
     fi
-    if printf '%s\n' "$acl" | grep -Eq "^user:${TQ_ALLOY_USER}:r" &&
-      printf '%s\n' "$acl" | grep -Eq '^mask::r'
-    then
-      continue
+
+    missing_files=()
+    if [[ -n "$missing_indices" ]]; then
+      while IFS= read -r missing_index; do
+        [[ -n "$missing_index" ]] || continue
+        missing_files+=("${raw_logs[$missing_index]}")
+      done <<<"$missing_indices"
     fi
-    if ! setfacl -m "u:${TQ_ALLOY_USER}:r--" -- "$raw_log" >/dev/null 2>&1; then
-      die "unable to grant Alloy read access to a configured raw log"
+
+    if [[ "${#missing_files[@]}" -gt 0 ]]; then
+      setfacl_xargs=(-0 -n "${#missing_files[@]}")
+      [[ -z "$xargs_max_bytes" ]] || setfacl_xargs+=(-s "$xargs_max_bytes")
+      if ! printf '%s\0' "${missing_files[@]}" | \
+          xargs "${setfacl_xargs[@]}" setfacl -m "u:${TQ_ALLOY_USER}:r--" -- >/dev/null 2>&1
+      then
+        die "unable to grant Alloy read access to a configured raw log"
+      fi
     fi
-  done
+  fi
+)
 pipeline_status=("${PIPESTATUS[@]}")
 set -e
 # The loop has already printed its reason; a find stopped by its exit is not
