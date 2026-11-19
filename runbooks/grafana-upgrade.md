@@ -28,17 +28,21 @@ grafana_stopped() { # C1: 先確認 docker compose ps 成功，再確認無執�
   local ids; ids=$(sudo docker compose ps -q --status running grafana) || stop "docker compose ps failed"
   [ -z "$ids" ] || stop "grafana still running ($ids)"
 }
-wait_health() { # C9: wait_health WANT_VER [CID] [DEADLINE=120] — 真實經過時間 + 每次請求限時
-  local want="$1" cid="${2:-}" deadline="${3:-120}" rem out
+wait_health() { # C9: wait_health WANT_VER [CID] [DEADLINE=120] — 每輪算一次剩餘秒數，只驗證 curl rc=0
+  local want="$1" cid="${2:-}" deadline="${3:-120}" rem out rc
   local end=$((SECONDS + deadline))
-  while [ "$SECONDS" -lt "$end" ]; do
-    rem=$((end - SECONDS)); [ "$rem" -gt 5 ] && rem=5
-    if [ -n "$cid" ]; then out=$(sudo docker exec "$cid" curl -fsS --max-time "$rem" http://127.0.0.1:3000/api/health 2>/dev/null || true)
-    else out=$(curl -fsS --max-time "$rem" http://127.0.0.1:3000/api/health 2>/dev/null || true); fi
-    if [ -n "$out" ] && jq -e --arg v "$want" '.database == "ok" and .version == $v' >/dev/null 2>&1 <<<"$out"; then
+  while :; do
+    rem=$((end - SECONDS))
+    [ "$rem" -gt 0 ] || break
+    [ "$rem" -gt 5 ] && rem=5
+    rc=0
+    if [ -n "$cid" ]; then out=$(sudo docker exec "$cid" curl -fsS --max-time "$rem" http://127.0.0.1:3000/api/health 2>/dev/null) || rc=$?
+    else out=$(curl -fsS --max-time "$rem" http://127.0.0.1:3000/api/health 2>/dev/null) || rc=$?; fi
+    if [ "$rc" -eq 0 ] && [ -n "$out" ] && jq -e --arg v "$want" '.database == "ok" and .version == $v' >/dev/null 2>&1 <<<"$out"; then
       printf '%s\n' "$out"; return 0
     fi
-    [ "$SECONDS" -lt "$end" ] && sleep 1
+    [ "$((end - SECONDS))" -gt 0 ] || break
+    sleep 1
   done
   stop "Grafana $want health timeout (${deadline}s)"
 }
@@ -51,7 +55,8 @@ check_logs() { # C4: check_logs NAME [CID] [EXPECT_MIG] — 先落檔再直接 g
     stop "error found in $log"
   fi
   if [ -n "$mig" ]; then
-    grep -q 'id="folders and dashboards migration"' "$log" && grep -q 'Unified storage migrations completed successfully' "$log" \
+    grep -qE '(msg="Migration successfully executed".*id="folders and dashboards migration"|id="folders and dashboards migration".*msg="Migration successfully executed")' "$log" \
+      && grep -qF 'msg="Unified storage migrations completed successfully"' "$log" \
       || stop "unified storage migration missing in $log"
   fi
 }
@@ -84,7 +89,8 @@ TARGET=<approved-sha>
   git fetch origin
   TARGET_FULL=$(git rev-parse --verify "${TARGET}^{commit}") || stop "invalid TARGET"
   APPLIED=$(cat .git/skyeye-central-deploy.applied) || stop "missing applied SHA — ask manager for base"
-  APPLIED=$(git rev-parse --verify "${APPLIED}^{commit}") || stop "invalid applied SHA — ask manager for base"
+  [[ "$APPLIED" =~ ^[0-9a-f]{40}$ ]] || stop "invalid applied SHA format ($APPLIED) — ask manager for base"
+  git rev-parse --verify "${APPLIED}^{commit}" >/dev/null || stop "unknown applied SHA ($APPLIED) — ask manager for base"
   if OUT=$(scripts/central-deploy --dry-run --expect "$TARGET_FULL" 2>&1); then stop "expected dry-run refusal"; fi
   printf '%s\n' "$OUT"
   grep -q 'need a service recreate or a manual decision' <<<"$OUT" || stop "unexpected dry-run error"
@@ -201,7 +207,7 @@ print(f"Step 2 OK: image verified, vol={v} bytes")
 ## 6. 記錄部署（僅在第 5 步自動與人工檢查全部通過後執行）
 
 ```bash
-( set -euo pipefail; source /home/ubuntu/grafana-pre-12-backup/volume.env; scripts/central-deploy --manual-applied "$TARGET" )
+( set -euo pipefail; cd /home/ubuntu/SkyEye; source /home/ubuntu/grafana-pre-12-backup/volume.env; scripts/central-deploy --manual-applied "$TARGET" )
 ```
 
 穩定後再依需清理 `$BAK`（保留期間維持 mode 700／600）。
@@ -230,8 +236,11 @@ print(f"Step 2 OK: image verified, vol={v} bytes")
   sudo python3 -I -c 'import sqlite3,sys; r=[x[0] for x in sqlite3.connect(f"file:{sys.argv[1]}?mode=ro",uri=True).execute("PRAGMA integrity_check")]; assert r==["ok"],r' "$STAGE/grafana.db" || stop "PRAGMA integrity_check failed"
 
   # 驗證通過才切換 volume 內容（此行後失敗請維持停機並重跑完整還原）
-  sudo find "$MNT" -mindepth 1 -delete && sudo cp -a "$STAGE/." "$MNT/" && sudo rm -rf "$STAGE"
-  sudo test -s "$MNT/grafana.db" && [ "$(sudo stat -c '%u' "$MNT/grafana.db")" = "472" ] || stop "restored grafana.db check failed"
+  sudo find "$MNT" -mindepth 1 -delete || { stop "volume clear failed — Grafana stays stopped; redo the full restore from the verified tar"; exit 1; }
+  sudo cp -a "$STAGE/." "$MNT/" || { stop "backup copy failed — Grafana stays stopped; redo the full restore from the verified tar"; exit 1; }
+  sudo rm -rf "$STAGE" || { stop "stage cleanup failed — Grafana stays stopped; redo the full restore from the verified tar"; exit 1; }
+  sudo test -s "$MNT/grafana.db" || { stop "restored grafana.db missing or empty — Grafana stays stopped; redo the full restore from the verified tar"; exit 1; }
+  [ "$(sudo stat -c '%u' "$MNT/grafana.db")" = "472" ] || { stop "restored grafana.db uid mismatch — Grafana stays stopped; redo the full restore from the verified tar"; exit 1; }
 
   cat >/home/ubuntu/gf-rollback.yml <<'EOF'
 services:
@@ -243,7 +252,14 @@ services:
       GF_UNIFIED_STORAGE_DASHBOARDS_DASHBOARD_GRAFANA_APP_ENABLEMIGRATION: null
 EOF
   sudo docker compose -f docker-compose.yml -f /home/ubuntu/gf-rollback.yml up -d --no-deps grafana
-  wait_health 11.2.0 || { sudo docker compose logs --tail 80 grafana >&2; stop "rollback 11.2.0 health timeout"; }
+  if ! wait_health 11.2.0; then
+    sudo docker compose -f docker-compose.yml -f /home/ubuntu/gf-rollback.yml logs --tail 80 grafana >"$BAK/rollback-failed.log" 2>&1 || true
+    cat "$BAK/rollback-failed.log" >&2 || true
+    sudo docker compose -f docker-compose.yml -f /home/ubuntu/gf-rollback.yml stop grafana || true
+    grafana_stopped || { stop "rollback 11.2.0 health failed and grafana could not be confirmed stopped; check $BAK/rollback-failed.log"; exit 1; }
+    stop "rollback 11.2.0 health failed — log saved to $BAK/rollback-failed.log; Grafana is stopped, redo the full restore from the verified tar"
+    exit 1
+  fi
 )
 ```
 
