@@ -82,15 +82,16 @@ fi
 
 也一定要在第 1 步之後。舊版 `scripts/central-deploy` 不認得這個檔案，會拒絕部署。
 
-權限與 `tg_token` 相同：owner `ubuntu`、group `65534`（`nogroup`）、mode `0640`，目錄為 `2750`（setgid，group `65534`）。Alertmanager container 以 `nobody`（uid/gid 65534）執行，讀不到 `0600`；暫存檔必須建在這個 setgid 目錄內（或另跑 `sudo chgrp 65534`），`mv` 後才會保留 group `65534` 與 `0640`，原因見 [`alertmanager/secrets/README.md`](../alertmanager/secrets/README.md)。
+權限與 `tg_token` 相同：owner `ubuntu`、group `65534`（`nogroup`）、mode `0640`，目錄為 `2750`（setgid，group `65534`）。Alertmanager container 以 `nobody`（uid/gid 65534）執行，讀不到 `0600`；請先完成 [`alertmanager/secrets/README.md`](../alertmanager/secrets/README.md) 的一次性初始化，並用 `mktemp` 在這個 setgid 目錄內新建暫存檔（不重用固定檔名，避免沿用舊檔群組），`mv` 後才會保留 group `65534` 與 `0640`。
 
 ```bash
 cd /home/ubuntu/SkyEye/alertmanager/secrets
 read -rs DEADMAN_URL          # 貼上 ping URL，按 Enter，畫面不顯示
-printf '%s\n' "$DEADMAN_URL" > deadman_url.tmp   # 建在 setgid 目錄內以繼承 group 65534
+TMP=$(mktemp ./deadman_url.XXXXXX)   # 在 setgid 目錄內新建暫存檔以繼承 group 65534
+printf '%s\n' "$DEADMAN_URL" > "$TMP"
 unset DEADMAN_URL
-chmod 640 deadman_url.tmp
-mv deadman_url.tmp deadman_url   # 同目錄 rename：保留 group 65534 與 0640，且 container 只會看到完整的檔案
+chmod 640 "$TMP"
+mv "$TMP" deadman_url   # 同目錄 rename：保留 group 65534 與 0640，且 container 只會看到完整的檔案
 
 # 只看長度與開頭，不印內容，並確認 container 內可讀
 wc -c < deadman_url
