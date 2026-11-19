@@ -54,7 +54,7 @@ SkyEye/
 │
 ├── alertmanager/
 │   ├── alertmanager.yml                 routes + receivers (High loud / Medium + Low silent / Shadow null)
-│   └── secrets/                         tg_token (gitignored, 0644)
+│   └── secrets/                         tg_token (gitignored, 0640, group 65534)
 │
 ├── prometheus/
 │   ├── prometheus.yml                   remote-write receiver + scrape + blackbox

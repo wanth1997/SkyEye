@@ -318,7 +318,13 @@ On a rebuilt host the same steps apply: `docker compose up -d` has already start
 1. Provision new EC2 (arm64, Ubuntu 24.04, 30 GB gp3, same VPC subnet). The current root disk is 30 GB.
 2. Update `infra/iam/bootstrap.sh` with new instance ID; re-run (it's idempotent, will attach the existing role to the new instance).
 3. `bash scripts/bootstrap-monitoring-ec2.sh` — installs Docker + AWS CLI. The AWS CLI is a pinned release (2.39.3) and is installed only if the download matches the sha256 in the script; a mismatch stops the script before anything is unpacked. The comment above the pin says how to move it.
-4. `git clone` this repo, populate `alertmanager/secrets/` and `cloudflared/credentials.json` from 1Password.
+4. `git clone` this repo, apply the one-time `alertmanager/secrets/` group/permission setup (dir `2750` setgid, secret files `0640`, owner `ubuntu`, group `65534` / `nogroup`; git-tracked `README.md` is exempt — see [`alertmanager/secrets/README.md`](../alertmanager/secrets/README.md)), and populate `alertmanager/secrets/` and `cloudflared/credentials.json` from 1Password:
+   ```bash
+   sudo chgrp 65534 /home/ubuntu/SkyEye/alertmanager/secrets
+   chmod 2750 /home/ubuntu/SkyEye/alertmanager/secrets
+   # after populating secret files (also run sudo chgrp 65534 on any file moved in from outside this directory):
+   chmod 640 /home/ubuntu/SkyEye/alertmanager/secrets/<file>
+   ```
 5. `docker compose up -d`
 6. `cloudflared tunnel route dns skyeye-monitoring-prod <hostnames>` — re-point DNS (if tunnel UUID is the same, DNS may still be valid — skip if so).
 7. Restore Prometheus data from latest S3 snapshot (see above). With the tool, use `switch <id> --yes`. Step 5 started Prometheus, so `_data` is not empty and `--fresh` would be refused. The new host's own data stays as `_data.pre-restore-*`.

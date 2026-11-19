@@ -45,13 +45,13 @@ am amtool silence add --alertmanager.url=$AM --duration=1h \
    grep -q 'alertmanager/secrets/smtp_password' scripts/central-deploy && echo ready
    ```
 
-2. 放密碼。不要貼在對話裡，也不要用 `echo`。
+2. 放密碼。不要貼在對話裡，也不要用 `echo`。`alertmanager/secrets/` 應已是 `2750`（setgid，group `65534`），新建檔案會自動繼承 group `65534`（首次設定見 [`alertmanager/secrets/README.md`](../alertmanager/secrets/README.md)）。
 
    ```bash
    read -rs SMTP_PASSWORD
    printf '%s' "$SMTP_PASSWORD" > alertmanager/secrets/smtp_password
    unset SMTP_PASSWORD
-   chmod 644 alertmanager/secrets/smtp_password
+   chmod 640 alertmanager/secrets/smtp_password
    ```
 
 3. 放地址。多個收件者用逗號分隔。
@@ -61,7 +61,7 @@ am amtool silence add --alertmanager.url=$AM --duration=1h \
    {{ define "skyeye.email.to" }}RECIPIENT{{ end }}
    {{ define "skyeye.email.from" }}SENDER{{ end }}
    EOF
-   chmod 644 alertmanager/secrets/email-addresses.tmpl
+   chmod 640 alertmanager/secrets/email-addresses.tmpl
    ```
 
 4. 在 container 內檢查。兩個檔案都要印出 `readable`，`check-config` 要印出 `SUCCESS`。失敗就停下來，刪掉 `email-addresses.tmpl` 重寫，不要 reload。
