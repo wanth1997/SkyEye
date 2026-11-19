@@ -343,6 +343,7 @@ services:
     # Loki reads AWS creds from EC2 instance profile — no env var needed
 
   grafana:
+    # 已被取代：現行 pin 見 docker-compose.yml
     image: grafana/grafana:latest
     restart: unless-stopped
     environment:

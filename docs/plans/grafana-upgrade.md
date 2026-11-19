@@ -207,9 +207,9 @@ Rollback（runbook 的「退回 11.2.0」）：
 
 ## 步驟
 
-- [ ] S1 `SKYEYE-GRAFANA-UPGRADE-20261119` WAN-427 — Grafana 12.4.15 pin、provisioning 測試、升級 runbook 與文件
-  files: docker-compose.yml, tests/grafana/test-provisioning.sh, tests/trading/test-central-deploy.sh, runbooks/grafana-upgrade.md, runbooks/README.md, docs/project-brief.md, docs/grafana-conventions.md, docs/operations.md, monitoring-plan-v2.md, docs/plans/grafana-upgrade.md
-  狀態: 計畫待核准
+- [x] S1 `SKYEYE-GRAFANA-UPGRADE-20261119` WAN-427 — Grafana 12.4.15 pin、provisioning 測試、升級 runbook 與文件
+  files: docker-compose.yml, tests/grafana/test-provisioning.sh, tests/trading/test-central-deploy.sh, runbooks/grafana-upgrade.md, runbooks/README.md, runbooks/alertmanager-upgrade.md, docs/project-brief.md, docs/grafana-conventions.md, docs/operations.md, monitoring-plan-v2.md, docs/plans/grafana-upgrade.md
+  狀態: 已完成，待 review 與 publish
 
 - [ ] S2 `SKYEYE-GRAFANA-UPGRADE-DEPLOY` WAN-427 — 依 runbooks/grafana-upgrade.md 把 Grafana 12.4.15 部署到 monitoring-prod
   after: S1 (merged)
@@ -219,12 +219,13 @@ Rollback（runbook 的「退回 11.2.0」）：
 ## 已定的決策
 
 - 2026-11-19 manager（dispatch）：目標是 12.x 最新、發布滿 7 天的 patch，pin 確切 tag。Rollback 是停 Grafana、還原升級前的備份、啟動 11.2.0，不直接把 image 降版。
+- 2026-11-19 D36（Q1）：設 `GF_PLUGINS_PREINSTALL_DISABLED=true`，維持不預裝 plugin、只跑 pin 住的程式碼。
+- 2026-11-19 D36（Q2）：保留 `tests/grafana/test-provisioning.sh` 在 repo 裡，由 `scripts/verify-all` 自動執行。
+- 2026-11-19 D36（Q3）：設官方 unified-storage opt-in（`GF_UNIFIED_STORAGE_FOLDERS_FOLDER_GRAFANA_APP_ENABLEMIGRATION=true` 與 `GF_UNIFIED_STORAGE_DASHBOARDS_DASHBOARD_GRAFANA_APP_ENABLEMIGRATION=true`），讓 prod 與測試固定走同一條搬遷路徑。
 
 ## 待決問題
 
-- Q1：12.x 啟動時會自動從 grafana.com 下載並更新 4 個 Drilldown app。**建議**設 `GF_PLUGINS_PREINSTALL_DISABLED=true`，維持 11.2 不裝 plugin、只跑 pin 住的程式碼。代價是 11.2 的 Explore → Metrics 不會出現在 12.x，核心 Explore 照常。如果要保留 Drilldown，可以另開 task，用 `GF_PLUGINS_PREINSTALL` 指定發布滿 7 天的版本，並關掉 auto update。
-- Q2：要不要把 smoke test 留在 repo 裡（`tests/grafana/test-provisioning.sh`，每次 `verify-all` 多約 20～30 秒）？**建議**要。不要的話，同一支腳本只放在 report 當證據。
-- Q3：要不要用官方 opt-in 讓 folders／dashboards 一律搬進 unified storage？**建議**要，理由見上面「`docker-compose.yml` 的改動」。不設的話，prod 只要超過 10 個 dashboard 或 folder 就會留在 legacy 模式，跟測試走的路不同；runbook 的彩排會顯示 prod 實際走哪一條。
+（無）
 
 ## 驗證
 
@@ -254,6 +255,6 @@ hm.py lock -- sh -c 'tests/grafana/test-provisioning.sh && tests/grafana/test-ac
 
 ## 接續
 
-- 現況：已寫好 PLAN，還沒改任何程式。研究證據與 scratch 腳本會整理進 report。
-- 下一步：PLAN_APPROVED 之後依 S1 實作，跑驗證，回報 DONE。S2 等 S1 merge 並取得使用者核准後，依 runbook 進行。
+- 現況：S1 已實作並完成本機驗證（含 Playwright render、datasource 來回與 11.2.0 → 12.4.15 → tar 還原彩排，結果記於 report），尚未部署。
+- 下一步：S1 review 與 publish merge 到 `master` 後，取得使用者核准並在 Wan 於瀏覽器旁時執行 S2（依 `runbooks/grafana-upgrade.md`）。
 - 即時狀態：有 manager 時看 `hm.py goals grafana-upgrade`；沒有 manager 時看各步驟的勾選與 `狀態:` 行，以及標頭的 Linear 卡 WAN-427。

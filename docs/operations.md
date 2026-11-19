@@ -618,4 +618,4 @@ A: Check `alertmanager_notifications_total{integration="telegram"}` — if it in
 A: Yes. Edit `prometheus/rules/*.yml`, then `curl -X POST http://127.0.0.1:9090/-/reload`. Changes are live within seconds.
 
 **Q: I made a UI edit in Grafana and it disappeared.**
-A: Provisioning reloads JSON from disk every 60 s. Your UI edits are temporary. To persist: Share → Export → Save to file → overwrite `grafana/dashboards/<Folder>/<uid>.json` → git commit.
+A: Provisioning reloads JSON from disk every 60 s. Your UI edits are temporary. To persist: **Export → Export as code → Download file** (leave **Export for sharing externally** off; keep classic JSON, not a v2 resource — Grafana 12.4 writes `schemaVersion: 42`) → overwrite `grafana/dashboards/<Folder>/<uid>.json` → git commit.
