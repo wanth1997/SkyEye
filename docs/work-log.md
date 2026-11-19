@@ -15,6 +15,21 @@
 ---
 -->
 
+## 2026-11-19 18:38 — Trading probe：log 改為單次預先過濾掃描，並限制 unit 的 CPU
+
+**改動摘要：** `probe.sh` 原本每 15 秒對當天 live-run log 全讀 7–8 次，改成只用一次 `grep -a -n -F` 預先過濾，再由單一 awk 掃描。輸出的 metrics 與舊版逐 byte 相同。合成的 popdex-02 全天 log（54 MiB）每次執行從 4.1 CPU 秒降到 0.28 秒。`skyeye-trading-probe@.service` 加上 `Nice=10`、`CPUWeight=20`、`CPUQuota=20%`。尚未部署到 Trading01。
+
+**修改的檔案：**
+- `agents/alloy/trading/probe.sh`：單次掃描；manifest 必須恰好是一個 JSON object；讀檔／解析失敗時保留上一份 `.prom`；排序用 `grep -n` 行號，不經浮點轉換。
+- `agents/alloy/trading/skyeye-trading-probe@.service.tmpl`：CPU 優先度與每個 instance 的 quota。
+- `tests/fixtures/tnauqquant/probe-baseline-reference.sh`、`tests/trading/test-probe-equivalence.sh`：把改動前的 probe 凍結成基準，44 項逐 byte 等價檢查（含錯誤保留、大行號、多 object manifest、標籤含分段標記）。
+- `tests/trading/test-linux-setup.sh`：檢查 unit 的 Nice、CPUWeight、CPUQuota。
+- `agents/alloy/trading/README.md`：CPU 限制、效能數字，以及共用 probe 的 rollout／rollback 流程。
+
+**原因/備註：** Linear WAN-460。11-18 的量測中，4 個 probe 合計約佔單核 36%，把 Trading01（t3.large）的 CPU credit 燒光。本次不做帶狀態的增量讀取（D37），等 log 明顯變大再評估。經 Codex review 三輪後收下。
+
+---
+
 ## 2026-11-19 17:15 — Grafana 11.2.0 → 12.4.15：repo 端升級與 upgrade／rollback runbook
 
 **改動摘要：** `docker-compose.yml` 把 Grafana 釘到 `grafana/grafana:12.4.15@sha256:2894082f…`，關閉 plugin preinstall，並 opt in unified storage migration。新增離線 provisioning smoke test 與 `runbooks/grafana-upgrade.md`（包含彩排、升級與從 tar 備份還原的 rollback）。`scripts/central-deploy` 改用 v1beta1 annotations 驗證 migration 後的 dashboard。尚未部署到 monitoring-prod。
