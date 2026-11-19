@@ -28,6 +28,23 @@ file_mtime() {
   fi
 }
 
+file_size() {
+  local path="$1"
+  if stat -c '%s' "$path" >/dev/null 2>&1; then
+    stat -c '%s' "$path"
+  else
+    stat -f '%z' "$path"
+  fi
+}
+
+# Streams matching lines as "<byte_offset>:<line>", tolerating rc=1 (no matches)
+# while propagating real grep errors (rc >= 2).
+grep_fixed_offsets() {
+  local rc=0
+  LC_ALL=C grep -a -b -F "$@" || rc=$?
+  [[ "$rc" -eq 0 || "$rc" -eq 1 ]] || return "$rc"
+}
+
 is_number() {
   [[ "$1" =~ ^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$ ]]
 }
@@ -144,119 +161,214 @@ AWK_EVENT_TIME='
   }
 '
 
-# With require_trusted_time=1 the latest line is the latest one whose time can be
-# trusted, so a future event falls back to the event before it.
-latest_pnl_line() {
+# Single-pass manifest log scanner. Pre-filters with fixed-string grep -a -b -F
+# for the three rare event tags that feed all P&L, venue position, gross-flat
+# and current-run today-cycle outputs, then parses matching lines once in awk.
+# Byte offsets (+1, strictly positive) preserve exact relative line order with
+# latest_net_book_snapshot while keeping first/last key precedence identical to
+# the per-query scanners.
+scan_manifest_log() {
   local log_path="$1"
-  local require_completed="$2"
-  local require_trusted_time="${3:-0}"
-  awk -v require_completed="$require_completed" \
-      -v require_trusted_time="$require_trusted_time" \
-      -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
-    {
-      message = ""
-      stable = ""
-      completed = ""
-      for (i = 1; i <= NF; i++) {
-        equals = index($i, "=")
-        if (equals == 0) {
-          continue
+  local log_run_id="$2"
+  grep_fixed_offsets -e pnl_status -e ui_warmup_async_ready -e 'carrier_venue=' "$log_path" | \
+    LC_ALL=C awk -v mapping="$TQ_EXECUTOR_MAP" \
+        -v future_limit="$FUTURE_EVENT_LIMIT" \
+        -v day_start="$TODAY_START_EPOCH" \
+        -v day_end="$TOMORROW_START_EPOCH" \
+        -v run_id="$log_run_id" "$AWK_EVENT_TIME"'
+      function valid_number(value) {
+        return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
+      }
+      function normalize_side(value) {
+        if (value == "Long") return "long"
+        if (value == "Short") return "short"
+        if (value == "Flat") return "flat"
+        return ""
+      }
+      BEGIN {
+        mapping_count = split(mapping, mapping_entries, ",")
+        for (i = 1; i <= mapping_count; i++) {
+          equals = index(mapping_entries[i], "=")
+          executor = substr(mapping_entries[i], 1, equals - 1)
+          mapped_executor[executor] = 1
         }
-        key = substr($i, 1, equals - 1)
-        value = substr($i, equals + 1)
-        gsub(/^"|"$/, "", value)
-        if (key == "msg") message = value
-        if (key == "stable") stable = value
-        if (key == "cycle_completed") completed = value
       }
-      if (message == "pnl_status" && stable == "true" &&
-          (require_completed != "1" || completed == "true") &&
-          (require_trusted_time != "1" || event_time_trusted())) {
-        latest = $0
-      }
-    }
-    END { if (latest != "") print latest }
-  ' "$log_path"
-}
+      {
+        colon = index($0, ":")
+        if (colon <= 1) next
+        pos = substr($0, 1, colon - 1) + 1
+        line = substr($0, colon + 1)
 
-completed_cycle_pnl_series() {
-  local log_path="$1"
-  awk -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
-    function valid_number(value) {
-      return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
-    }
-    {
-      message = ""
-      stable = ""
-      completed = ""
-      cycle = ""
-      fallback_cycle = ""
-      real_pnl = ""
-      for (i = 1; i <= NF; i++) {
-        equals = index($i, "=")
-        if (equals == 0) continue
-        key = substr($i, 1, equals - 1)
-        value = substr($i, equals + 1)
-        gsub(/^"|"$/, "", value)
-        if (key == "msg") message = value
-        if (key == "stable") stable = value
-        if (key == "cycle_completed") completed = value
-        if (key == "session_cycle") cycle = value
-        if (key == "cycles_completed") fallback_cycle = value
-        if (key == "real_pnl_usdt") real_pnl = value
+        nf = split(line, fields)
+        saw_time = 0
+        time_first = ""
+        time_last = ""
+        msg_first = ""
+        msg_last = ""
+        executor_first = ""
+        reason_first = ""
+        stable = ""
+        completed = ""
+        session_cycle = ""
+        cycles_completed = ""
+        real_pnl = ""
+        cycle_id = ""
+        projection = ""
+        initiator_venue = ""
+        initiator_side = ""
+        initiator_qty = ""
+        carrier_venue = ""
+        carrier_side = ""
+        carrier_qty = ""
+
+        for (i = 1; i <= nf; i++) {
+          token = fields[i]
+          equals = index(token, "=")
+          if (equals == 0) continue
+          key = substr(token, 1, equals - 1)
+          value = substr(token, equals + 1)
+          gsub(/^"|"$/, "", value)
+          if (key == "time") {
+            if (!saw_time) {
+              time_first = value
+              saw_time = 1
+            }
+            time_last = value
+          } else if (key == "msg") {
+            # Position checks use the record-first key; P&L checks use the last.
+            if (msg_first == "") msg_first = value
+            msg_last = value
+          } else if (key == "stable") {
+            stable = value
+          } else if (key == "cycle_completed") {
+            completed = value
+          } else if (key == "session_cycle") {
+            session_cycle = value
+          } else if (key == "cycles_completed") {
+            cycles_completed = value
+          } else if (key == "real_pnl_usdt") {
+            real_pnl = value
+          } else if (key == "cycle_id") {
+            cycle_id = value
+          } else if (key == "portfolio_projection") {
+            projection = value
+          } else if (key == "initiator_venue") {
+            initiator_venue = value
+          } else if (key == "initiator_side") {
+            initiator_side = normalize_side(value)
+          } else if (key == "initiator_qty_btc") {
+            initiator_qty = value
+          } else if (key == "carrier_venue") {
+            carrier_venue = value
+          } else if (key == "carrier_side") {
+            carrier_side = normalize_side(value)
+          } else if (key == "carrier_qty_btc") {
+            carrier_qty = value
+          } else if (key == "executor") {
+            if (executor_first == "") executor_first = value
+          } else if (key == "reason") {
+            if (reason_first == "") reason_first = value
+          }
+        }
+
+        if (msg_last == "pnl_status" && stable == "true") {
+          # Unfiltered on purpose: a future newest line invalidates current P&L.
+          latest_pnl_any = line
+          epoch = event_epoch(time_first)
+          if (epoch >= 0 && epoch <= future_limit) {
+            latest_pnl_trusted = line
+            if (completed == "true") {
+              latest_pnl_completed = line
+              cycle = (session_cycle != "" ? session_cycle : cycles_completed)
+              if (cycle ~ /^[0-9]+$/ && valid_number(real_pnl)) {
+                if (!(cycle in cycle_seen)) {
+                  cycle_seen[cycle] = 1
+                  cycle_order[++cycle_count] = cycle
+                }
+                cycle_pnl[cycle] = real_pnl
+              }
+            }
+          }
+          if (completed == "true" && epoch >= 0 && epoch >= day_start &&
+              epoch < day_end && epoch <= future_limit) {
+            cid = (cycle_id != "" ? cycle_id : time_first ":" cycles_completed)
+            today_key = run_id ":" cid
+            if (!(today_key in today_seen)) {
+              today_seen[today_key] = 1
+              today_order[++today_count] = today_key
+            }
+          }
+        }
+
+        if (msg_first == "ui_warmup_async_ready" &&
+            index(reason_first, "gross_flat_verified:") == 1 &&
+            executor_first != "" && mapped_executor[executor_first]) {
+          # A gross-flat readiness line clears both venues on a two-exchange lane;
+          # a one-exchange lane adopts it as a venue source only after a two-leg line.
+          if (mapping_count > 1 || latest_venue != "") {
+            latest_venue = pos "\t" (time_last == "" ? "-" : time_last) "\t-\tflat\t0\t-\tflat\t0\tgross_flat"
+          }
+          latest_gross_flat_net = pos "\t" (time_last == "" ? "-" : time_last)
+        } else if (projection == "coordinator_book" &&
+            mapped_executor[initiator_venue] && mapped_executor[carrier_venue] &&
+            initiator_side != "" && carrier_side != "" &&
+            valid_number(initiator_qty) && valid_number(carrier_qty) &&
+            initiator_qty + 0 >= 0 && carrier_qty + 0 >= 0) {
+          # The "-" placeholder keeps the columns stable when time is absent.
+          latest_venue = pos "\t" (time_last == "" ? "-" : time_last) "\t" \
+            initiator_venue "\t" initiator_side "\t" initiator_qty "\t" \
+            carrier_venue "\t" carrier_side "\t" carrier_qty "\tbook"
+        }
       }
-      if (cycle == "") cycle = fallback_cycle
-      if (message != "pnl_status" || stable != "true" ||
-          completed != "true" || cycle !~ /^[0-9]+$/ ||
-          !valid_number(real_pnl) || !event_time_trusted()) {
-        next
+      END {
+        print "__SKYEYE_HEADER__"
+        if (latest_pnl_any != "") print "PNL_ANY\t" latest_pnl_any
+        if (latest_pnl_trusted != "") print "PNL_TRUSTED\t" latest_pnl_trusted
+        if (latest_pnl_completed != "") print "PNL_COMPLETED\t" latest_pnl_completed
+        if (latest_venue != "") print "VENUE_SNAP\t" latest_venue
+        if (latest_gross_flat_net != "") print "GROSS_FLAT_NET\t" latest_gross_flat_net
+        print "__SKYEYE_CYCLES__"
+        for (i = 1; i <= cycle_count; i++) {
+          cycle = cycle_order[i]
+          print cycle "\t" cycle_pnl[cycle]
+        }
+        print "__SKYEYE_TODAY__"
+        for (i = 1; i <= today_count; i++) {
+          print today_order[i]
+        }
       }
-      if (!(cycle in seen)) {
-        seen[cycle] = 1
-        order[++count] = cycle
-      }
-      pnl[cycle] = real_pnl
-    }
-    END {
-      for (i = 1; i <= count; i++) {
-        cycle = order[i]
-        print cycle "\t" pnl[cycle]
-      }
-    }
-  ' "$log_path"
+    '
 }
 
 mapped_executor_volumes() {
   local log_path="$1"
-  local latest_line volume_snapshot
-  latest_line="$(latest_pnl_line "$log_path" 0 1)"
-  volume_snapshot="$(logfmt_value "$latest_line" volume_usd_by_executor)"
+  local latest_trusted_line="$2"
+  local volume_snapshot
+  volume_snapshot="$(logfmt_value "$latest_trusted_line" volume_usd_by_executor)"
 
-  awk -v mapping="$TQ_EXECUTOR_MAP" -v snapshot="$volume_snapshot" \
-      -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
-    function valid_number(value) {
-      return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
-    }
-    function format_number(value, formatted) {
-      formatted = sprintf("%.10f", value)
-      sub(/0+$/, "", formatted)
-      sub(/[.]$/, "", formatted)
-      return formatted == "" ? "0" : formatted
-    }
-    BEGIN {
-      mapping_count = split(mapping, mapping_entries, ",")
-      for (i = 1; i <= mapping_count; i++) {
-        equals = index(mapping_entries[i], "=")
-        executor = substr(mapping_entries[i], 1, equals - 1)
-        exchange = substr(mapping_entries[i], equals + 1)
-        executor_exchange[executor] = exchange
-        if (!(exchange in exchange_seen)) {
-          exchange_seen[exchange] = 1
-          exchange_order[++exchange_count] = exchange
-        }
+  if [[ -n "$volume_snapshot" ]]; then
+    LC_ALL=C awk -v mapping="$TQ_EXECUTOR_MAP" -v snapshot="$volume_snapshot" '
+      function valid_number(value) {
+        return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
       }
-
-      if (snapshot != "") {
+      function format_number(value, formatted) {
+        formatted = sprintf("%.10f", value)
+        sub(/0+$/, "", formatted)
+        sub(/[.]$/, "", formatted)
+        return formatted == "" ? "0" : formatted
+      }
+      BEGIN {
+        mapping_count = split(mapping, mapping_entries, ",")
+        for (i = 1; i <= mapping_count; i++) {
+          equals = index(mapping_entries[i], "=")
+          executor = substr(mapping_entries[i], 1, equals - 1)
+          exchange = substr(mapping_entries[i], equals + 1)
+          executor_exchange[executor] = exchange
+          if (!(exchange in exchange_seen)) {
+            exchange_seen[exchange] = 1
+            exchange_order[++exchange_count] = exchange
+          }
+        }
         snapshot_count = split(snapshot, snapshot_entries, ",")
         for (i = 1; i <= snapshot_count; i++) {
           colon = index(snapshot_entries[i], ":")
@@ -271,139 +383,88 @@ mapped_executor_volumes() {
           exchange = exchange_order[i]
           print exchange "\t" format_number(exchange_volume[exchange] + 0)
         }
-        exit
       }
-    }
-    {
-      message = ""
-      executor = ""
-      volume_usd = ""
-      for (i = 1; i <= NF; i++) {
-        equals = index($i, "=")
-        if (equals == 0) continue
-        key = substr($i, 1, equals - 1)
-        value = substr($i, equals + 1)
-        gsub(/^"|"$/, "", value)
-        if (key == "msg") message = value
-        if (key == "executor") executor = value
-        if (key == "volume_usd") volume_usd = value
-      }
+    '
+    return 0
+  fi
 
-      if (message != "trade_status" || !valid_number(volume_usd) ||
-          volume_usd + 0 < 0 || !event_time_trusted()) {
-        next
+  grep_fixed_offsets -e trade_status "$log_path" | \
+    LC_ALL=C awk -v mapping="$TQ_EXECUTOR_MAP" \
+        -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
+      function valid_number(value) {
+        return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
       }
-
-      exchange = executor_exchange[executor]
-      if (exchange != "") {
-        exchange_volume[exchange] += volume_usd
+      function format_number(value, formatted) {
+        formatted = sprintf("%.10f", value)
+        sub(/0+$/, "", formatted)
+        sub(/[.]$/, "", formatted)
+        return formatted == "" ? "0" : formatted
       }
-    }
-    END {
-      if (snapshot != "") exit
-      for (i = 1; i <= exchange_count; i++) {
-        exchange = exchange_order[i]
-        print exchange "\t" format_number(exchange_volume[exchange] + 0)
-      }
-    }
-  ' "$log_path"
-}
-
-# Prints line, time, initiator venue/side/qty, carrier venue/side/qty and source
-# ("book" or "gross_flat") of the newest venue observation. A gross-flat line
-# (see latest_net_position_snapshot) is one too, with "-" venues: otherwise a
-# later book line that carries only net, as every waiting_entry line does, would
-# bring back the closed legs of a two-exchange lane. A one-exchange lane takes
-# it only after a two-leg line, so it never gains a venue source of its own.
-latest_position_snapshot() {
-  local log_path="$1"
-  awk -v mapping="$TQ_EXECUTOR_MAP" '
-    function valid_number(value) {
-      return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
-    }
-    function normalize_side(value) {
-      if (value == "Long") return "long"
-      if (value == "Short") return "short"
-      if (value == "Flat") return "flat"
-      return ""
-    }
-    BEGIN {
-      mapping_count = split(mapping, mapping_entries, ",")
-      for (i = 1; i <= mapping_count; i++) {
-        equals = index(mapping_entries[i], "=")
-        executor = substr(mapping_entries[i], 1, equals - 1)
-        mapped_executor[executor] = 1
-      }
-    }
-    {
-      projection = ""
-      sample_time = ""
-      initiator_venue = ""
-      initiator_side = ""
-      initiator_qty = ""
-      carrier_venue = ""
-      carrier_side = ""
-      carrier_qty = ""
-      message = ""
-      executor = ""
-      reason = ""
-
-      for (i = 1; i <= NF; i++) {
-        equals = index($i, "=")
-        if (equals == 0) continue
-        key = substr($i, 1, equals - 1)
-        value = substr($i, equals + 1)
-        gsub(/^"|"$/, "", value)
-        if (key == "time") sample_time = value
-        if (key == "portfolio_projection") projection = value
-        if (key == "initiator_venue") initiator_venue = value
-        if (key == "initiator_side") initiator_side = normalize_side(value)
-        if (key == "initiator_qty_btc") initiator_qty = value
-        if (key == "carrier_venue") carrier_venue = value
-        if (key == "carrier_side") carrier_side = normalize_side(value)
-        if (key == "carrier_qty_btc") carrier_qty = value
-        # The record names these first; a quoted summary may repeat them.
-        if (key == "msg" && message == "") message = value
-        if (key == "executor" && executor == "") executor = value
-        if (key == "reason" && reason == "") reason = value
-      }
-
-      if (message == "ui_warmup_async_ready" &&
-          index(reason, "gross_flat_verified:") == 1 &&
-          executor != "" && mapped_executor[executor]) {
-        if (mapping_count > 1 || latest != "") {
-          latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t-\tflat\t0\t-\tflat\t0\tgross_flat"
+      BEGIN {
+        mapping_count = split(mapping, mapping_entries, ",")
+        for (i = 1; i <= mapping_count; i++) {
+          equals = index(mapping_entries[i], "=")
+          executor = substr(mapping_entries[i], 1, equals - 1)
+          exchange = substr(mapping_entries[i], equals + 1)
+          executor_exchange[executor] = exchange
+          if (!(exchange in exchange_seen)) {
+            exchange_seen[exchange] = 1
+            exchange_order[++exchange_count] = exchange
+          }
         }
-        next
       }
+      {
+        colon = index($0, ":")
+        if (colon <= 1) next
+        line = substr($0, colon + 1)
+        nf = split(line, fields)
+        saw_time = 0
+        timestamp = ""
+        message = ""
+        executor = ""
+        volume_usd = ""
+        for (i = 1; i <= nf; i++) {
+          equals = index(fields[i], "=")
+          if (equals == 0) continue
+          key = substr(fields[i], 1, equals - 1)
+          value = substr(fields[i], equals + 1)
+          gsub(/^"|"$/, "", value)
+          if (key == "time" && !saw_time) {
+            timestamp = value
+            saw_time = 1
+          }
+          if (key == "msg") message = value
+          if (key == "executor") executor = value
+          if (key == "volume_usd") volume_usd = value
+        }
 
-      if (projection != "coordinator_book" ||
-          !mapped_executor[initiator_venue] || !mapped_executor[carrier_venue] ||
-          initiator_side == "" || carrier_side == "" ||
-          !valid_number(initiator_qty) || !valid_number(carrier_qty) ||
-          initiator_qty + 0 < 0 || carrier_qty + 0 < 0) {
-        next
+        if (message != "trade_status" || !valid_number(volume_usd) ||
+            volume_usd + 0 < 0) {
+          next
+        }
+        epoch = event_epoch(timestamp)
+        if (epoch < 0 || epoch > future_limit) next
+
+        exchange = executor_exchange[executor]
+        if (exchange != "") {
+          exchange_volume[exchange] += volume_usd
+        }
       }
-
-      # The "-" placeholder keeps the columns stable: tab is IFS whitespace, so
-      # read would otherwise shift every field when an event has no time.
-      latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t" \
-        initiator_venue "\t" initiator_side "\t" initiator_qty "\t" \
-        carrier_venue "\t" carrier_side "\t" carrier_qty "\tbook"
-    }
-    END { if (latest != "") print latest }
-  ' "$log_path"
+      END {
+        for (i = 1; i <= exchange_count; i++) {
+          exchange = exchange_order[i]
+          print exchange "\t" format_number(exchange_volume[exchange] + 0)
+        }
+      }
+    '
 }
 
-# Prints line, time, side and quantity of the newest net observation. The
-# producer logs the coordinator book before a close order fills and nothing with
-# position fields after it, so book lines alone keep the pre-close position
-# until the next signal line. Its gross_flat_verified readiness line is the
-# post-fill proof that every venue is flat; a filled close_position is not,
-# because it may be partial.
-latest_net_position_snapshot() {
-  local log_path="$1"
-  awk -v mapping="$TQ_EXECUTOR_MAP" '
+# Parses "<local_byte_offset>:<line>" lines for the newest coordinator_book net
+# observation. When base_offset > 0, local_offset == 0 may be a mid-line fragment
+# at the start of the tail window and is skipped.
+parse_net_book_stream() {
+  local base_offset="$1"
+  LC_ALL=C awk -v base_offset="$base_offset" '
     function valid_number(value) {
       return value ~ /^-?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/
     }
@@ -413,47 +474,118 @@ latest_net_position_snapshot() {
       if (value == "Flat") return "flat"
       return ""
     }
-    BEGIN {
-      mapping_count = split(mapping, mapping_entries, ",")
-      for (i = 1; i <= mapping_count; i++) {
-        equals = index(mapping_entries[i], "=")
-        mapped_executor[substr(mapping_entries[i], 1, equals - 1)] = 1
-      }
-    }
     {
+      colon = index($0, ":")
+      if (colon <= 1) next
+      local_offset = substr($0, 1, colon - 1) + 0
+      if (base_offset > 0 && local_offset == 0) next
+      pos = base_offset + local_offset + 1
+      line = substr($0, colon + 1)
+      nf = split(line, fields)
       projection = ""
       sample_time = ""
       net_side = ""
       net_qty = ""
-      message = ""
-      executor = ""
-      reason = ""
-      for (i = 1; i <= NF; i++) {
-        equals = index($i, "=")
+      for (i = 1; i <= nf; i++) {
+        equals = index(fields[i], "=")
         if (equals == 0) continue
-        key = substr($i, 1, equals - 1)
-        value = substr($i, equals + 1)
+        key = substr(fields[i], 1, equals - 1)
+        value = substr(fields[i], equals + 1)
         gsub(/^"|"$/, "", value)
         if (key == "time") sample_time = value
         if (key == "portfolio_projection") projection = value
         if (key == "net_side") net_side = normalize_side(value)
         if (key == "net_qty_btc") net_qty = value
-        # The record names these first; a quoted summary may repeat them.
-        if (key == "msg" && message == "") message = value
-        if (key == "executor" && executor == "") executor = value
-        if (key == "reason" && reason == "") reason = value
       }
       if (projection == "coordinator_book" && net_side != "" &&
           valid_number(net_qty) && net_qty + 0 >= 0) {
-        latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t" net_side "\t" net_qty
-      } else if (message == "ui_warmup_async_ready" &&
-                 index(reason, "gross_flat_verified:") == 1 &&
-                 executor != "" && mapped_executor[executor]) {
-        latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\tflat\t0"
+        latest = pos "\t" (sample_time == "" ? "-" : sample_time) "\t" net_side "\t" net_qty
       }
     }
     END { if (latest != "") print latest }
-  ' "$log_path"
+  '
+}
+
+# Prints position (1-based byte offset), time, side and quantity of the newest
+# net observation. The producer logs the coordinator book before a close order
+# fills and nothing with position fields after it; gross_flat_verified is the
+# post-fill proof that every venue is flat. Reads only the last 256 KiB first
+# because coordinated_signal_skipped can make coordinator_book >60% of a day's
+# log, falling back to a full scan only when no complete net observation sits
+# after the tail window start (or after a newer gross_flat_verified line).
+latest_net_position_snapshot() {
+  local log_path="$1"
+  local gross_flat_pos="${2:-0}"
+  local gross_flat_time="${3:--}"
+  local size tail_start=0 window=262144 net_book="" net_book_pos=0
+
+  size="$(file_size "$log_path")"
+  if [[ "$size" -gt "$window" ]]; then
+    tail_start=$((size - window))
+    net_book="$(tail -c "+$((tail_start + 1))" "$log_path" | \
+      grep_fixed_offsets -e coordinator_book | parse_net_book_stream "$tail_start")"
+  else
+    net_book="$(grep_fixed_offsets -e coordinator_book "$log_path" | \
+      parse_net_book_stream 0)"
+  fi
+
+  if [[ -z "$net_book" && "$tail_start" -gt 0 && "$gross_flat_pos" -le "$((tail_start + 1))" ]]; then
+    net_book="$(grep_fixed_offsets -e coordinator_book "$log_path" | \
+      parse_net_book_stream 0)"
+  fi
+
+  if [[ -n "$net_book" ]]; then
+    net_book_pos="${net_book%%$'\t'*}"
+  fi
+  if [[ "$gross_flat_pos" -gt 0 && "$gross_flat_pos" -gt "$net_book_pos" ]]; then
+    printf '%s\t%s\tflat\t0\n' "$gross_flat_pos" "$gross_flat_time"
+  elif [[ -n "$net_book" ]]; then
+    printf '%s\n' "$net_book"
+  fi
+}
+
+today_completed_cycles_for_log() {
+  local history_log="$1"
+  local history_run_id="$2"
+  grep_fixed_offsets -e pnl_status "$history_log" | \
+    LC_ALL=C awk -v day_start="$TODAY_START_EPOCH" -v day_end="$TOMORROW_START_EPOCH" \
+        -v run_id="$history_run_id" -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
+      {
+        colon = index($0, ":")
+        if (colon <= 1) next
+        line = substr($0, colon + 1)
+        nf = split(line, fields)
+        saw_time = 0
+        timestamp = ""
+        message = ""
+        stable = ""
+        completed = ""
+        cycle_id = ""
+        cycles_completed = ""
+        for (i = 1; i <= nf; i++) {
+          equals = index(fields[i], "=")
+          if (equals == 0) continue
+          key = substr(fields[i], 1, equals - 1)
+          value = substr(fields[i], equals + 1)
+          gsub(/^"|"$/, "", value)
+          if (key == "time" && !saw_time) {
+            timestamp = value
+            saw_time = 1
+          }
+          if (key == "msg") message = value
+          if (key == "stable") stable = value
+          if (key == "cycle_completed") completed = value
+          if (key == "cycle_id") cycle_id = value
+          if (key == "cycles_completed") cycles_completed = value
+        }
+        if (message != "pnl_status" || stable != "true" || completed != "true") next
+        epoch = event_epoch(timestamp)
+        if (epoch >= 0 && epoch >= day_start && epoch < day_end && epoch <= future_limit) {
+          if (cycle_id == "") cycle_id = timestamp ":" cycles_completed
+          print run_id ":" cycle_id
+        }
+      }
+    '
 }
 
 # One flat zero per mapped exchange, in map order, for a gross-flat observation.
@@ -692,7 +824,7 @@ do
   require_env "$required_name"
 done
 
-for command_name in awk date find jq mktemp ps sed shasum sort stat
+for command_name in awk date find grep jq mktemp ps sed shasum sort stat tail
 do
   require_command "$command_name"
 done
@@ -816,6 +948,10 @@ MAX_FUTURE_SKEW_SECONDS=120
 MAX_PROCESS_START_DRIFT_SECONDS=10
 PROBE_NOW="$(date +%s)"
 FUTURE_EVENT_LIMIT=$((PROBE_NOW + MAX_FUTURE_SKEW_SECONDS))
+TODAY_LOCAL="$(TZ="$TQ_TIMEZONE" date +%F)"
+TODAY_START_EPOCH="$(local_day_start_epoch "$TODAY_LOCAL")"
+TOMORROW_LOCAL="$(next_calendar_day "$TODAY_LOCAL")"
+TOMORROW_START_EPOCH="$(local_day_start_epoch "$TOMORROW_LOCAL")"
 
 # A failed or implausible listing is unknown, never zero processes. Exiting here
 # leaves the old textfile in place, so the frozen probe timestamp raises
@@ -876,6 +1012,9 @@ PROCESS_IDENTITY_OK=0
 STRATEGY_IDENTITY_OK=0
 CONFIG_SNAPSHOT_MATCH=0
 LOG_BINDING_OK=0
+MANIFEST_SCANNED=0
+MANIFEST_LOG_PATH=""
+MANIFEST_TODAY_CYCLES=""
 MARKER_BINDING_OK=0
 RUN_EXPECTED="$TQ_POC_RUN_EXPECTED"
 DONE_REASON=""
@@ -977,15 +1116,47 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
        [[ "$(basename "$MANIFEST_LOG_PATH")" == "$MANIFEST_RUN_ID.raw.log" ]]
     then
       LOG_BINDING_OK=1
+      MANIFEST_SCANNED=1
       LATEST_LOG_MTIME="$(file_mtime "$MANIFEST_LOG_PATH")"
       CURRENT_RUN_ID="$MANIFEST_RUN_ID"
       CURRENT_RUN_STARTED_TIMESTAMP="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
-      COMPLETED_CYCLE_PNL_SERIES="$(completed_cycle_pnl_series "$MANIFEST_LOG_PATH")"
-      CURRENT_EXCHANGE_VOLUMES="$(mapped_executor_volumes "$MANIFEST_LOG_PATH")"
+
+      CURRENT_PNL_LINE=""
+      LATEST_TRUSTED_PNL_LINE=""
+      LAST_COMPLETED_LINE=""
+      POSITION_SNAPSHOT=""
+      GROSS_FLAT_NET_POS=0
+      GROSS_FLAT_NET_TIME="-"
+      MANIFEST_TODAY_CYCLES=""
+
+      MANIFEST_SCAN_OUTPUT="$(scan_manifest_log "$MANIFEST_LOG_PATH" "$MANIFEST_RUN_ID")"
+      scan_header="${MANIFEST_SCAN_OUTPUT%%$'\n__SKYEYE_CYCLES__'*}"
+      scan_rest="${MANIFEST_SCAN_OUTPUT#*$'\n__SKYEYE_CYCLES__'}"
+      scan_rest="${scan_rest#$'\n'}"
+      COMPLETED_CYCLE_PNL_SERIES="${scan_rest%%__SKYEYE_TODAY__*}"
+      COMPLETED_CYCLE_PNL_SERIES="${COMPLETED_CYCLE_PNL_SERIES%$'\n'}"
+      MANIFEST_TODAY_CYCLES="${scan_rest#*__SKYEYE_TODAY__}"
+      MANIFEST_TODAY_CYCLES="${MANIFEST_TODAY_CYCLES#$'\n'}"
+
+      while IFS= read -r scan_line; do
+        [[ -n "$scan_line" && "$scan_line" != "__SKYEYE_HEADER__" ]] || continue
+        scan_tag="${scan_line%%$'\t'*}"
+        scan_payload="${scan_line#*$'\t'}"
+        case "$scan_tag" in
+          PNL_ANY) CURRENT_PNL_LINE="$scan_payload" ;;
+          PNL_TRUSTED) LATEST_TRUSTED_PNL_LINE="$scan_payload" ;;
+          PNL_COMPLETED) LAST_COMPLETED_LINE="$scan_payload" ;;
+          VENUE_SNAP) POSITION_SNAPSHOT="$scan_payload" ;;
+          GROSS_FLAT_NET)
+            IFS=$'\t' read -r GROSS_FLAT_NET_POS GROSS_FLAT_NET_TIME <<<"$scan_payload"
+            ;;
+        esac
+      done <<<"$scan_header"
+
+      CURRENT_EXCHANGE_VOLUMES="$(mapped_executor_volumes "$MANIFEST_LOG_PATH" "$LATEST_TRUSTED_PNL_LINE")"
 
       # Unfiltered on purpose: a value called current must not fall back to an older
       # event, so a future newest line invalidates it instead.
-      CURRENT_PNL_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 0)"
       if [[ -n "$CURRENT_PNL_LINE" ]]; then
         current_pnl_time="$(logfmt_value "$CURRENT_PNL_LINE" time)"
         current_real_pnl="$(logfmt_value "$CURRENT_PNL_LINE" real_pnl_usdt)"
@@ -1013,7 +1184,6 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
         fi
       fi
 
-      LAST_COMPLETED_LINE="$(latest_pnl_line "$MANIFEST_LOG_PATH" 1 1)"
       if [[ -n "$LAST_COMPLETED_LINE" ]]; then
         last_completed_time="$(logfmt_value "$LAST_COMPLETED_LINE" time)"
         LAST_COMPLETED_CYCLE_TIMESTAMP="$(timestamp_to_epoch "$last_completed_time" || true)"
@@ -1022,7 +1192,6 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
           LAST_COMPLETED_CYCLE_REAL_PNL="$last_completed_cycle_real_pnl"
       fi
 
-      POSITION_SNAPSHOT="$(latest_position_snapshot "$MANIFEST_LOG_PATH")"
       if [[ -n "$POSITION_SNAPSHOT" ]]; then
         IFS=$'\t' read -r \
           current_venue_line \
@@ -1063,7 +1232,8 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
         fi
       fi
 
-      NET_POSITION_SNAPSHOT="$(latest_net_position_snapshot "$MANIFEST_LOG_PATH")"
+      NET_POSITION_SNAPSHOT="$(latest_net_position_snapshot "$MANIFEST_LOG_PATH" \
+        "$GROSS_FLAT_NET_POS" "$GROSS_FLAT_NET_TIME")"
       if [[ -n "$NET_POSITION_SNAPSHOT" ]]; then
         IFS=$'\t' read -r current_net_line current_net_time current_net_side current_net_qty \
           <<<"$NET_POSITION_SNAPSHOT"
@@ -1135,46 +1305,18 @@ if [[ "$TQ_STRATEGY_DISABLED" -eq 1 ]]; then
   RUN_EXPECTED=0
 fi
 
-TODAY_LOCAL="$(TZ="$TQ_TIMEZONE" date +%F)"
-TODAY_START_EPOCH="$(local_day_start_epoch "$TODAY_LOCAL")"
-TOMORROW_LOCAL="$(next_calendar_day "$TODAY_LOCAL")"
-TOMORROW_START_EPOCH="$(local_day_start_epoch "$TOMORROW_LOCAL")"
 TODAY_COMPLETED_CYCLES="$({
   while IFS= read -r history_log; do
     [[ -n "$history_log" && -f "$history_log" ]] || continue
     history_mtime="$(file_mtime "$history_log")"
     [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
+    if [[ "$MANIFEST_SCANNED" -eq 1 && "$history_log" == "$MANIFEST_LOG_PATH" ]]; then
+      [[ -n "$MANIFEST_TODAY_CYCLES" ]] && printf '%s\n' "$MANIFEST_TODAY_CYCLES"
+      continue
+    fi
     history_run_id="$(basename "$history_log")"
     history_run_id="${history_run_id%.raw.log}"
-    awk -v day_start="$TODAY_START_EPOCH" -v day_end="$TOMORROW_START_EPOCH" \
-        -v run_id="$history_run_id" -v future_limit="$FUTURE_EVENT_LIMIT" "$AWK_EVENT_TIME"'
-      {
-        message = ""
-        stable = ""
-        completed = ""
-        cycle_id = ""
-        cycles_completed = ""
-        for (i = 1; i <= NF; i++) {
-          equals = index($i, "=")
-          if (equals == 0) continue
-          key = substr($i, 1, equals - 1)
-          value = substr($i, equals + 1)
-          gsub(/^"|"$/, "", value)
-          if (key == "msg") message = value
-          if (key == "stable") stable = value
-          if (key == "cycle_completed") completed = value
-          if (key == "cycle_id") cycle_id = value
-          if (key == "cycles_completed") cycles_completed = value
-        }
-        if (message != "pnl_status" || stable != "true" || completed != "true") next
-        timestamp = event_time()
-        epoch = event_epoch(timestamp)
-        if (epoch >= day_start && epoch < day_end && epoch <= future_limit) {
-          if (cycle_id == "") cycle_id = timestamp ":" cycles_completed
-          print run_id ":" cycle_id
-        }
-      }
-    ' "$history_log"
+    today_completed_cycles_for_log "$history_log" "$history_run_id"
   done <<EOF
 $(compgen -G "$TQ_RAW_LOG_GLOB" || true)
 EOF
@@ -1258,10 +1400,9 @@ trap cleanup_temp EXIT HUP INT TERM
   if [[ -n "$COMPLETED_CYCLE_PNL_SERIES" ]]; then
     printf '# HELP tnauqquant_cycle_cumulative_real_pnl_usdt Cumulative real PNL at each completed cycle in the current manifest-bound run.\n'
     printf '# TYPE tnauqquant_cycle_cumulative_real_pnl_usdt gauge\n'
-    while IFS=$'\t' read -r cycle cumulative_real_pnl; do
-      printf 'tnauqquant_cycle_cumulative_real_pnl_usdt{%s,cycle="%s"} %s\n' \
-        "$METRIC_LABELS" "$cycle" "$cumulative_real_pnl"
-    done <<<"$COMPLETED_CYCLE_PNL_SERIES"
+    LC_ALL=C awk -F '\t' -v labels="$METRIC_LABELS" \
+      '{ printf "tnauqquant_cycle_cumulative_real_pnl_usdt{%s,cycle=\"%s\"} %s\n", labels, $1, $2 }' \
+      <<<"$COMPLETED_CYCLE_PNL_SERIES"
   fi
   if [[ -n "$CURRENT_POSITION_SERIES" ]]; then
     # HELP must stay byte-identical across probe versions: one textfile
