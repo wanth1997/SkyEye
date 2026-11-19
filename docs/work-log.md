@@ -15,6 +15,17 @@
 ---
 -->
 
+## 2026-11-19 15:02 — enyoung 錯誤率 panel 的 LogQL 400 修正；alertmanager secrets 權限改為 0640 group 65534
+
+**改動摘要：** enyoung 日誌總覽的「5xx／4xx 錯誤率 (30m)」用了 LogQL 不支援的 `clamp_min`，Loki 回 400。改成 `(NUM or vector(0)) / (DEN > 0)`，分母只算 access log 行；有流量沒錯誤顯示 0，沒流量顯示 No data。Alertmanager secrets 的權限說明從 0644／0755 改成目錄 2750（setgid）、檔案 0640、group 65534，container 的 nobody 仍讀得到，其他帳號讀不到。主機尚未套用。
+
+**修改的檔案：**
+- `grafana/dashboards/enyoung/enyoung-logs-overview.json`：panel 11、12 的查詢，拿掉 `noValue: "0"`。
+- `alertmanager/secrets/README.md`、`docs/operations.md`：新權限模型、一次性初始化（sudo chgrp 再 chmod 2750、轉換既有 secret）與 container 內 `test -r` 驗證。
+- `runbooks/skyeye-watchdog.md`、`runbooks/trading-alert-promotion.md`、`README.md`：改為 `chmod 640`，暫存檔用 `mktemp`。
+
+**原因/備註：** Linear WAN-491；WS-ACCESS P2-17。直接 0600 會讓 nobody 讀不到 Telegram token。
+
 ## 2026-11-19 12:59 — Trading probe：改為批次取 mtime 與 ACL，去掉逐檔外部程式呼叫
 
 **改動摘要：** `probe.sh` 原本對 glob 比對到的每個 log 各跑多次 `stat`，`ensure-log-access.sh` 對每個檔案各跑一次 `getfacl` 和兩次 `grep`。現在改成用 `xargs -0` 一次 `stat` 全部檔案、一次 `getfacl` 加一個 awk 檢查全部檔案，只對缺權限的檔案跑 `setfacl`；`date` 種類只在啟動時判斷一次，有 `sha256sum` 就優先用它。輸出的 metrics 與舊版逐 byte 相同。以 73 個 log 的 robinhood 形狀測試資料量，每次執行外部程式呼叫從 565 降到 41，CPU 從約 1.44 秒降到 0.28 秒。尚未部署到 Trading01。
