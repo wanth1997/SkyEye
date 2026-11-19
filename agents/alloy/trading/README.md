@@ -14,7 +14,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
 |---|---|
 | `config-linux.alloy.tmpl` | Per-strategy Loki fragment that reuses the existing central receiver |
 | `config-linux-metrics.alloy.tmpl` | Shared textfile collector for all Linux strategy outputs |
-| `deployment-linux-{robinhood,mainnet,ourbit,popdex,popdex-02}.env.example` | Credential-free Trading01 instance contracts (`popdex` is `popdex-btc` and `popdex-02` is the ETH lane, both on the PopDEX venue). `popdex-02` leaves `TQ_EXECUTABLE` and `TQ_EXECUTOR_MAP` empty until an operator verifies them on the host, so `setup-linux.sh` refuses it as checked in |
+| `deployment-linux-{robinhood,mainnet,ourbit,popdex,popdex-02}.env.example` | Credential-free Trading01 instance examples, including retired lanes. See `scripts/trading-target list` for the current inventory (`popdex` is `popdex-btc` and `popdex-02` is the ETH lane, both on the PopDEX venue). `popdex-02` leaves `TQ_EXECUTABLE` and `TQ_EXECUTOR_MAP` empty until an operator verifies them on the host, so `setup-linux.sh` refuses it as checked in |
 | `setup-linux.sh` | `add` (one-step install/update), `retire`, render-only, and explicit singleton migration |
 | `retire-linux.sh` | Per-strategy retirement with an exact rollback record (run via `setup-linux.sh retire`) |
 | `linux-common.sh` | Shared test-root, systemctl and path guards for the Linux scripts |
@@ -203,8 +203,7 @@ The strategy has no monitoring between the retire and the new probe.
 Shared collector, units and `probe.sh` are rewritten only while every
 templated probe is stopped and disabled; both commands refuse otherwise.
 
-Adding `popdex-btc` to Trading01 also moves its Alloy off 1.16.0 and replaces
-the shared probe under the running Robinhood and Mainnet probes; follow
+For the original Trading01 Alloy upgrade and shared probe replacement, see
 [the Trading01 PopDEX rollout](../../../docs/trading01-popdex-rollout.md).
 
 Adding `popdex-02` to Trading01 follows

@@ -20,7 +20,7 @@
 - Mac mini `server_id` 更名已於 2026-11-01 完成。時窗 13:31:29Z–15:31:29Z 排除於 Trading shadow/canary 證據之外，紀錄見 `docs/trading-serverid-cutover-macmini-m2.md`。
 - 中央監控棧、Cloudflare ingress、Telegram routing、host/app/business rules 與多個產品 dashboard 已投入使用。
 - Linux/Ubuntu Alloy installer 已支援 journald、node metrics 與 application `/metrics`。
-- Trading inventory 已包含 `macmini-m2` / `toobit-mexc-btc`，以及 `trading01` 上的 `lighter-robinhood-btc-canary` 與 `lighter-mainnet-btc-canary`。Mainnet 曾於 2026-09-22 退役，2026-10-31 以 shadow inventory 恢復監控，供使用者以新帳號 765446 重啟該 lane 前先在 Grafana 確認；`ourbit-spot`（runtime instance `ourbit-spot-btc`，2026-10-08）依 operator 指示退役並移出監控名單；既有歷史資料保留，`deployment-linux-*.env.example` 保留供日後重新納入。portable read-only probe 支援雙交易所與單交易所 executor mapping；Linux 以 per-strategy systemd probe、env、metrics output 與 Loki fragment 共用單一 textfile collector，並與既有 ZenIncome Alloy pipeline 共存。Grafana 只保留可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
+- Trading inventory 以 `prometheus/rules/trading-targets.yml` 為準。`trading01` 的 `lighter-mainnet-btc-canary` 已移出 repo inventory；`ourbit-spot`（runtime instance `ourbit-spot-btc`，2026-10-08）依 operator 指示退役並移出監控名單；既有歷史資料保留，`deployment-linux-*.env.example` 保留供日後重新納入。portable read-only probe 支援雙交易所與單交易所 executor mapping；Linux 以 per-strategy systemd probe、env、metrics output 與 Loki fragment 共用單一 textfile collector，並與既有 ZenIncome Alloy pipeline 共存。Grafana 只保留可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
 - `macmini-m2`（production Mac mini）在 macOS Alloy 與 read-only probe 之外，另有隔離的每分鐘 P&L history builder，以變更偵測與 per-run cache 合併 authoritative completed-cycle delta；其 accumulated metrics 繼續保留，但不再提供專用的「Trading · 即時營運」dashboard。detail／fleet 採繁中版面：detail 第一列顯示損益、週期與目前餘額，下方單一監控摘要合併近 15 分鐘的四項事故與六項運行狀態；runtime contract、執行 identity binding 與 config snapshot drift 仍獨立判讀，關鍵事件與完整 scrubbed log 分層。餘額使用目前 run 最新穩定快照的 equity_now，已包含該策略所有交易所帳戶的總權益。fleet 繼續揭露 Prometheus shadow alerts 與獨立的 Loki execution incident count。
 - ZenIncome 的 Loki log alerts、dashboard 與唯讀 Bitfinex 診斷腳本已納入 Git；既有 production 規則狀態需由 operator 持續觀察。
 - LinkCourt 付款建立 5xx 與訂單編號 capacity/exhausted 告警已進入 shadow routing，等待 production canary review 後再決定是否升級通知。另有三條 LinkCourt 付款告警（`LinkcourtPaymentGuardHeld`、`LinkcourtPaymentNotifyUnknownOrder`、`LinkcourtInvoiceBeforeCutoff`）2026-11-03 直接上線，已同步進 `prometheus/rules/business.yml`，直接送 High。
@@ -51,6 +51,6 @@
 - 新版 probe rollout 到 Trading01 與 Mac mini，時段待指定。Mainnet strategy 不得由這個流程啟動。
 - 填 SMTP、跑真實 canary，再升級三條 Trading 告警，流程見 `runbooks/trading-alert-promotion.md`。
 - log scrub 主機 rollout 要另外核准。`agents/alloy/setup.sh` 目前會砍掉 PROD02 的 8091、8092 scrape，修好之前不得在 PROD02 重跑。
-- 依 `prometheus/rules/trading-targets.yml` 的三個 active targets（`toobit-mexc-btc`、`lighter-robinhood-btc-canary`、`lighter-mainnet-btc-canary`）觀察 shadow alerts。
+- 依 `prometheus/rules/trading-targets.yml` 中的 targets 觀察 shadow alerts。
 - 設定 Cloudflare service token 到期通知，並在到期前完成可獨立回復的 rotation。
 - 觀察 LinkCourt 付款 shadow 告警，完成 canary review 後另案決定是否啟用通知。

@@ -8,7 +8,7 @@
 > - `tests/trading/test-central-deploy.sh` 演練 R5 的兩個 `git restore` 與之後的部署。
 > - `tests/alloy/test-upgrade-linux.sh` 覆蓋 `upgrade-linux.sh`，包括 R2-CRITICAL 讀取的 record 路徑。
 >
-> **狀態：** 尚未執行。
+> 本程序以 2026-11-14 的 Trading01 配置為前提。Mainnet 移出 inventory 後，請勿重跑其中依賴 Mainnet probe 的步驟。現行 target 名單請用 `scripts/trading-target list` 查詢。
 
 ## 這次會改什麼
 

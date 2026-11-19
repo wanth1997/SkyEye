@@ -96,15 +96,15 @@ sed -n '1,240p' "$(brew --prefix)/var/lib/alloy/trading-textfile/tnauqquant.prom
 
 Central acceptance requires logs, probe metrics, stable Real PNL equality, correct Running/Completed/Critical state, path scrubbing and zero external notifications while shadowed. Observe one complete Trading cycle before requesting paging.
 
-## Linux coexistence target: Trading01
+## Linux coexistence example: Trading01 (Robinhood)
 
 | Field | Value |
 |---|---|
 | `product` | `tnauqquant` |
 | `environment` | `production` |
 | `server_id` | `trading01` |
-| `strategy` / `instance_id` | `lighter-robinhood-btc-canary`; `lighter-mainnet-btc-canary` |
-| executor mapping | `lighter-robinhood-main=lighter`; `lighter-mainnet-main=lighter` |
+| `strategy` / `instance_id` | `lighter-robinhood-btc-canary` |
+| executor mapping | `lighter-robinhood-main=lighter` |
 | sidecar required | `0` |
 | repo root | `/home/ubuntu/tnauqquant` |
 
@@ -119,9 +119,7 @@ pgrep -af '/home/ubuntu/tnauqquant/(bin/[^/]+/)?quant([[:space:]]|$)' || true
 tmux list-panes -a -F '#{session_name} #{pane_pid} #{pane_current_command}'
 alloy --version | head -1
 systemctl is-active alloy
-systemctl is-active \
-  skyeye-trading-probe@lighter-robinhood-btc-canary.timer \
-  skyeye-trading-probe@lighter-mainnet-btc-canary.timer
+systemctl is-active skyeye-trading-probe@lighter-robinhood-btc-canary.timer
 find /var/lib/skyeye-trading/textfile -maxdepth 1 -type f -name 'tnauqquant-*.prom' -print
 ```
 
