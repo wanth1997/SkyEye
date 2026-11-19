@@ -15,6 +15,25 @@
 ---
 -->
 
+## 2026-11-19 14:30 — Trading 持倉：依 lane 標示幣別、平倉後即時顯示空倉
+
+**改動摘要：** popdex-02 交易 ETH，持倉面板卻一律標 BTC；平倉成交後，面板要等下一個 signal 行才顯示空倉（popdex-02 最長 212 秒，lighter-robinhood-btc-canary 約 15 分）。這次把兩個問題一起修好。只 merge，Trading01 與中央都還沒部署。
+
+**修改的檔案：**
+- `agents/alloy/trading/probe.sh`：
+  - 新增選填 `TQ_BASE_ASSET`（未定義時是 BTC；空字串和非 ASCII 大寫英數都拒絕）。兩個持倉 metric 多帶 `base_asset` label，名稱與 `# HELP` 文字不變，新舊 `.prom` 可以在同一個 collector 共存。
+  - 把比最新 coordinator_book 行更新的 `msg=ui_warmup_async_ready reason=gross_flat_verified:*` 行（executor 必須在 map 內）當成空倉觀測。net 與 venue 兩條路徑都採用，所以雙交易所 lane 之後遇到只寫 net Flat 的 book 行，也不會把已平的兩腿還原。`close_position disposition=filled` 可能是部分平倉，不採用（D33）。
+- `agents/alloy/trading/setup-linux.sh`、`linux-common.sh`：render 與 add 驗證 `TQ_BASE_ASSET`。env 檔裡必須是 literal 的 `TQ_BASE_ASSET=<值>`，值也要和 systemd 讀到的一致；`export …`、`$VAR` 這類寫法都拒絕。
+- `prometheus/rules/trading.yml`：`trading_strategy_current_{,net_}position_btc` 保留 `base_asset`，舊 series 沒有這個 label 時記成 BTC。
+- `grafana/dashboards/Trading/trading-strategy-detail.json`、`trading-strategy-fleet.json`：單位依 `base_asset` 逐列顯示，ETH 與 BTC 不共用一個單位，也不加總。
+- `agents/alloy/trading/README.md`、`docs/trading01-popdex-02-onboarding.md`、`docs/trading-monitoring-development-plan.md`：寫明共用 probe 更新的 6 個步驟（全部 stop、逐 lane add、恢復 timer）與上線順序：先更新 host，確認 `base_asset="ETH"` 出現後才部署中央。中央先上的話，這段期間的歷史資料會錯標成 BTC。
+- `deployment-linux-popdex-02.env.example`：`TQ_BASE_ASSET=ETH`。
+- `tests/trading/`、`prometheus/rules/tests/trading.test.yml`、`tests/fixtures/tnauqquant/position-flat.raw.log`：補上 HELP 固定、asset 驗證、systemd 讀法、recording rule、dashboard 單位，以及平倉重播（單／雙交易所，時間在未來、缺少或無法解析）等測試。
+
+**原因/備註：** 請求來源是 Wan 在 SkyEye manager 對話中的要求（Linear WAN-361、WAN-400）。平倉原因由 Trading01 唯讀蒐證查明：producer 成交後寫的那幾行沒有 position 欄位。producer 端的根本修正另外請 tnauqquant 處理（WAN-401，tnauqquant#374）；它部署之後，可以評估拿掉 gross_flat 的特殊處理。上線時也要把 popdex-02 host env 的 `TQ_STRATEGY_DISABLED` 改回 0，Wan 已同意。Code review 兩個任務各兩輪，第二輪 reviewer 改用 agy（WAN-410）。
+
+---
+
 ## 2026-11-19 02:27 — Trading01 新 lane `popdex-02`（PopDEX ETH）納入監控
 
 **改動摘要：** 新增 `trading01`／`popdex-02` 的 shadow inventory row、不含 credential 的 instance env 範例與 operator 上線程序。這次只 merge；主機端 `setup-linux.sh add` 與 `central-deploy` 還沒執行，lane 本身在 Wan 手動測一個 cycle 之前維持停用。
