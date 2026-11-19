@@ -20,13 +20,14 @@ BAK=/home/ubuntu/grafana-pre-12-backup
 IMG='grafana/grafana:12.4.15@sha256:2894082f6cf7081aefdc1389265c04000812309208c190d75e8c65f7a30e4b7e'
 stop() { printf 'STOP: %s\n' "$*" >&2; return 1; }
 gv() { # gv PATH [CONTAINER_ID]
-  local t; t=$(cat /home/ubuntu/.config/skyeye/grafana-viewer-token) || return 1
-  if [ -n "${2:-}" ]; then printf 'header = "Authorization: Bearer %s"\n' "$t" | sudo docker exec -i "$2" curl --config - -fsS --max-time 10 "http://127.0.0.1:3000$1"
-  else printf 'header = "Authorization: Bearer %s"\n' "$t" | curl --config - -fsS --max-time 10 "http://127.0.0.1:3000$1"; fi
+  local t; t=$(cat /home/ubuntu/.config/skyeye/grafana-viewer-token) || { stop "cannot read grafana-viewer-token"; return 1; }
+  if [ -n "${2:-}" ]; then printf 'header = "Authorization: Bearer %s"\n' "$t" | sudo docker exec -i "$2" curl --config - -fsS --max-time 10 "http://127.0.0.1:3000$1" || return 1
+  else printf 'header = "Authorization: Bearer %s"\n' "$t" | curl --config - -fsS --max-time 10 "http://127.0.0.1:3000$1" || return 1; fi
 }
 grafana_stopped() { # C1: 先確認 docker compose ps 成功，再確認無執行中 container
-  local ids; ids=$(sudo docker compose ps -q --status running grafana) || stop "docker compose ps failed"
-  [ -z "$ids" ] || stop "grafana still running ($ids)"
+  local ids
+  ids=$(sudo docker compose ps -q --status running grafana) || { stop "docker compose ps failed"; return 1; }
+  [ -z "$ids" ] || { stop "grafana still running ($ids)"; return 1; }
 }
 wait_health() { # C9: wait_health WANT_VER [CID] [DEADLINE=120] — 每輪算一次剩餘秒數，只驗證 curl rc=0
   local want="$1" cid="${2:-}" deadline="${3:-120}" rem out rc
@@ -44,34 +45,35 @@ wait_health() { # C9: wait_health WANT_VER [CID] [DEADLINE=120] — 每輪算一
     [ "$((end - SECONDS))" -gt 0 ] || break
     sleep 1
   done
-  stop "Grafana $want health timeout (${deadline}s)"
+  stop "Grafana $want health timeout (${deadline}s)"; return 1
 }
 check_logs() { # C4: check_logs NAME [CID] [EXPECT_MIG] — 先落檔再直接 grep，不經管線
   local log="$BAK/$1.log" cid="${2:-}" mig="${3:-}"
-  if [ -n "$cid" ]; then sudo docker logs "$cid" >"$log" 2>&1 || stop "docker logs $cid failed"
-  else sudo docker compose logs --since 10m grafana >"$log" 2>&1 || stop "docker compose logs failed"; fi
+  if [ -n "$cid" ]; then sudo docker logs "$cid" >"$log" 2>&1 || { stop "docker logs $cid failed"; return 1; }
+  else sudo docker compose logs --since 10m grafana >"$log" 2>&1 || { stop "docker compose logs failed"; return 1; }; fi
   if grep -qE 'level=error|Failed to authenticate request' "$log"; then
     grep -m 10 -E 'level=error|Failed to authenticate request' "$log" >&2 || true
-    stop "error found in $log"
+    stop "error found in $log"; return 1
   fi
   if [ -n "$mig" ]; then
     grep -qE '(msg="Migration successfully executed".*id="folders and dashboards migration"|id="folders and dashboards migration".*msg="Migration successfully executed")' "$log" \
       && grep -qF 'msg="Unified storage migrations completed successfully"' "$log" \
-      || stop "unified storage migration missing in $log"
+      || { stop "unified storage migration missing in $log"; return 1; }
   fi
 }
 compare_uids() { # C5: compare_uids NAME [CID] — 逐 UID 比對 + 核對 repo folderTitle
-  local f="$BAK/$1-search.json"
-  gv '/api/search?type=dash-db&limit=5000' "${2:-}" >"$f" || stop "search API failed"
-  diff -u "$BAK/pre-uids.txt" <(jq -r '.[].uid' "$f" | LC_ALL=C sort -u) || stop "$1 UID set differs"
+  local f="$BAK/$1-search.json" u="$BAK/$1-uids.txt"
+  gv '/api/search?type=dash-db&limit=5000' "${2:-}" >"$f" || { stop "search API failed"; return 1; }
+  jq -r '.[].uid' "$f" | LC_ALL=C sort -u >"$u" || { stop "$1 invalid search JSON"; return 1; }
+  diff -u "$BAK/pre-uids.txt" "$u" || { stop "$1 UID set differs"; return 1; }
   python3 -I -c '
 import json, sys
 want = dict(line.rstrip("\n").split("\t") for line in open(sys.argv[1]))
 got = {d["uid"]: d.get("folderTitle", "") for d in json.load(open(sys.argv[2]))}
 bad = [f"{u}: got={got.get(u)!r} want={f!r}" for u, f in want.items() if got.get(u) != f]
 if bad: sys.exit("STOP: folder mismatch: " + "; ".join(bad))
-' "$BAK/repo-dashboards.tsv" "$f"
-  rm -f "$f"
+' "$BAK/repo-dashboards.tsv" "$f" || return 1
+  rm -f "$f" "$u"
 }
 EOF
 source /home/ubuntu/grafana-pre-12-backup/lib.sh
@@ -144,7 +146,7 @@ print(f"Step 2 OK: image verified, vol={v} bytes")
 (
   set -euo pipefail; cd /home/ubuntu/SkyEye; source /home/ubuntu/grafana-pre-12-backup/lib.sh; source "$BAK/volume.env"
   CID=""
-  trap '[ -z "$CID" ] || sudo docker rm -f "$CID" >/dev/null 2>&1 || true; sudo rm -rf "$BAK/rehearsal-data" "$BAK/rehearsal-tree" "$BAK/rehearsal-search.json"' EXIT
+  trap '[ -z "$CID" ] || sudo docker rm -f "$CID" >/dev/null 2>&1 || true; sudo rm -rf "$BAK/rehearsal-data" "$BAK/rehearsal-tree" "$BAK/rehearsal-search.json" "$BAK/rehearsal-uids.txt"' EXIT
   sudo docker compose stop grafana; grafana_stopped
   sudo tar --numeric-owner -cpf "$BAK/grafana_data.tar" -C "$MNT" .
   sudo chmod 600 "$BAK/grafana_data.tar"
