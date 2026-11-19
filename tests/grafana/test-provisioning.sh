@@ -2,13 +2,16 @@
 set -euo pipefail
 
 # Provisioning smoke test for the pinned Grafana image in docker-compose.yml.
-# Runs a single throwaway container with --pull never --network none, no name
-# and no bind mount (files arrive by docker cp), dummy credentials and no
-# access to production. Verifies health, clean startup logs (no errors, no
-# background plugin preinstall, unified storage migration succeeded), exact
-# dashboard/folder provisioning parity with central-deploy's comparable() rule,
-# v2beta1 schema conversion, non-Angular/non-deprecated panel registry support,
-# pinned datasource UIDs and settings, home dashboard, and Grafana's refresh
+# Runs a single throwaway container with --pull never --network none, no name,
+# dummy credentials and no access to production. Bind-mounts
+# grafana/provisioning:ro identically to docker-compose.yml (so missing
+# provisioning subdirectories cannot be masked by image defaults) and copies
+# grafana/dashboards via docker cp so synthetic refresh checks can run in the
+# same container. Verifies health, clean startup logs (no errors, no background
+# plugin preinstall, unified storage migration succeeded), exact dashboard/folder
+# provisioning parity with central-deploy's comparable() rule, v2beta1 schema
+# conversion, non-Angular/non-deprecated panel registry support, stable
+# datasource UIDs and settings, home dashboard, and Grafana's refresh
 # normalization contract.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -102,8 +105,8 @@ PINNED_VERSION="$(jq -r .version "$WORK/meta.json")"
 docker image inspect "$GRAFANA_IMAGE" >/dev/null 2>&1 || \
   fail "$GRAFANA_IMAGE is not on this machine; run docker pull $GRAFANA_IMAGE (this suite never pulls)"
 
-GRAFANA_ID="$(docker create --pull never --network none --env-file "$WORK/grafana.env" "$GRAFANA_IMAGE")"
-docker cp -q "$REPO_ROOT/grafana/provisioning/." "$GRAFANA_ID:/etc/grafana/provisioning"
+GRAFANA_ID="$(docker create --pull never --network none --env-file "$WORK/grafana.env" \
+  -v "$REPO_ROOT/grafana/provisioning:/etc/grafana/provisioning:ro" "$GRAFANA_IMAGE")"
 docker cp -q "$REPO_ROOT/grafana/dashboards/." "$GRAFANA_ID:/var/lib/grafana/dashboards"
 docker start "$GRAFANA_ID" >/dev/null
 
@@ -279,58 +282,113 @@ check(not panel_errors,
       % (", ".join(sorted(used_types)), pinned_version)
       + ("" if not panel_errors else " (%s)" % "; ".join(panel_errors)))
 
-# 8. Datasources match grafana/provisioning/datasources/default.yml
+# 8. Datasources: independently assert the stable UID contract and explicit
+# expected settings, and verify grafana/provisioning/datasources/default.yml
+# (stripping unquoted trailing comments).
+STABLE_DS_UIDS = ["alertmanager", "loki", "prometheus"]
+EXPECTED_DS = {
+    "prometheus": {
+        "uid": "prometheus",
+        "name": "Prometheus",
+        "type": "prometheus",
+        "url": "http://prometheus:9090",
+        "isDefault": True,
+        "jsonData": {"timeInterval": "15s"},
+    },
+    "loki": {
+        "uid": "loki",
+        "name": "Loki",
+        "type": "loki",
+        "url": "http://loki:3100",
+        "isDefault": False,
+        "jsonData": {"maxLines": 1000},
+    },
+    "alertmanager": {
+        "uid": "alertmanager",
+        "name": "Alertmanager",
+        "type": "alertmanager",
+        "url": "http://alertmanager:9093",
+        "isDefault": False,
+        "jsonData": {
+            "implementation": "prometheus",
+            "handleGrafanaManagedAlerts": False,
+        },
+    },
+}
+
+def strip_yaml_comment(text):
+    in_single = False
+    in_double = False
+    for idx, ch in enumerate(text):
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == "#" and not in_single and not in_double and (idx == 0 or text[idx - 1].isspace()):
+            return text[:idx].rstrip()
+    return text.rstrip()
+
+def parse_yaml_scalar(raw_val):
+    val = strip_yaml_comment(raw_val).strip()
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+        return val[1:-1]
+    if val in ("true", "false"):
+        return val == "true"
+    if re.fullmatch(r"[0-9]+", val):
+        return int(val)
+    return val
+
 ds_yml = open(os.path.join(repo_root, "grafana", "provisioning", "datasources", "default.yml"), encoding="utf-8").read()
-expected_ds = {}
+yaml_ds = {}
 current = None
 in_json_data = False
 for raw in ds_yml.splitlines():
-    stripped = raw.strip()
-    if not stripped or stripped.startswith("#"):
+    cleaned = strip_yaml_comment(raw)
+    stripped = cleaned.strip()
+    if not stripped:
         continue
-    if raw.startswith("  - "):
+    if cleaned.startswith("  - "):
         current = {"isDefault": False, "jsonData": {}}
         in_json_data = False
         k, _, v = stripped[2:].partition(":")
-        current[k.strip()] = v.strip()
+        current[k.strip()] = parse_yaml_scalar(v)
         continue
     if current is None:
         continue
-    indent = len(raw) - len(raw.lstrip(" "))
+    indent = len(cleaned) - len(cleaned.lstrip(" "))
     if indent == 4:
         in_json_data = False
         k, _, v = stripped.partition(":")
-        k, v = k.strip(), v.strip()
+        k = k.strip()
         if k == "jsonData":
             in_json_data = True
-        elif v in ("true", "false"):
-            current[k] = (v == "true")
         else:
-            current[k] = v
+            current[k] = parse_yaml_scalar(v)
         if "uid" in current:
-            expected_ds[current["uid"]] = current
+            yaml_ds[current["uid"]] = current
     elif indent >= 6 and in_json_data:
         k, _, v = stripped.partition(":")
-        k, v = k.strip(), v.strip()
-        if v in ("true", "false"):
-            val = (v == "true")
-        elif re.fullmatch(r"[0-9]+", v):
-            val = int(v)
-        else:
-            val = v
-        current["jsonData"][k] = val
+        current["jsonData"][k.strip()] = parse_yaml_scalar(v)
 
 live_ds = {d["uid"]: d for d in json.load(open(os.path.join(work, "datasources.json"), encoding="utf-8"))}
-check(sorted(live_ds) == sorted(expected_ds),
-      "provisioned datasource UIDs are unchanged (%s)" % ", ".join(sorted(expected_ds)))
+check(sorted(live_ds) == STABLE_DS_UIDS,
+      "provisioned datasource UIDs match stable contract (%s; got %s)"
+      % (", ".join(STABLE_DS_UIDS), ", ".join(sorted(live_ds))))
+check(sorted(yaml_ds) == STABLE_DS_UIDS,
+      "grafana/provisioning/datasources/default.yml declares stable UIDs (%s)"
+      % ", ".join(STABLE_DS_UIDS))
+
 ds_diffs = []
-for uid, want in sorted(expected_ds.items()):
+for uid, want in sorted(EXPECTED_DS.items()):
     got = live_ds.get(uid) or {}
+    yml = yaml_ds.get(uid) or {}
     for field in ("uid", "name", "type", "url", "isDefault", "jsonData"):
         if got.get(field) != want.get(field):
-            ds_diffs.append("%s.%s: got %r want %r" % (uid, field, got.get(field), want.get(field)))
+            ds_diffs.append("live %s.%s: got %r want %r" % (uid, field, got.get(field), want.get(field)))
+        if yml.get(field) != want.get(field):
+            ds_diffs.append("yaml %s.%s: got %r want %r" % (uid, field, yml.get(field), want.get(field)))
 check(not ds_diffs,
-      "all %d datasources match grafana/provisioning/datasources/default.yml" % len(expected_ds)
+      "all %d datasources match explicit contract and default.yml" % len(EXPECTED_DS)
       + ("" if not ds_diffs else " (%s)" % "; ".join(ds_diffs)))
 
 # 9. Default home dashboard
