@@ -30,15 +30,15 @@
 | lane 的狀態 | 已安裝。`tnauqquant@popdex-02` 的 service 與 timer 都是 disabled、inactive，尚未啟動。Wan 填好 lane 的憑證與 ETH model 之後，會手動 start 一個 cycle（`max_cycles=1`） |
 | 啟動方式 | 所有 lane 共用 template `tnauqquant@.service`，`ExecStart=/usr/local/sbin/tnauqquant-service launch %i`。這是共用的 launcher，不是 quant binary |
 | quant binary | `/home/ubuntu/tnauqquant/bin/popdex-02/quant`，記在這條 lane 設定檔的 `TNAUQ_EXPECTED_BIN`。形式與 `popdex-btc` 的 `/home/ubuntu/tnauqquant/bin/popdex-btc/quant` 相同 |
-| executor | config 的 `routing.accounts[0].name` 是 `popdex-main`，exchange 是 `popdex_usdt_perp`。名稱與 `popdex-btc` 相同（config 照抄） |
+| executor | config 的 `routing.accounts[0].name` 是 `popdex-02`，exchange 是 `popdex_usdt_perp`。2026-11-19 從 `popdex-main` 改名，06:37Z 之後的 raw log 使用新名稱。`popdex-btc` 仍使用 `popdex-main` |
 | 數量 | config 是 `execution.quantity`（`quantity_unit: base`），這條 lane 的 base 是 ETH。raw log 的欄位名稱沒有改，仍是 `*_btc`（`requested_btc`、`quantity_btc`、`net_qty_btc` 等），值是 ETH 數量 |
 
-**operator 必須在 Trading01 唯讀核對後才填的值。** example 把前兩個留空，`setup-linux.sh` 會拒絕空值，所以 example 原樣無法安裝。`TQ_EXECUTABLE` 每條 lane 不同，不要從 `popdex-btc` 照抄。
+**operator 必須在 Trading01 唯讀核對的值。** example 只將 `TQ_EXECUTABLE` 留空，`setup-linux.sh` 會拒絕空值，所以 example 原樣無法安裝。`TQ_EXECUTABLE` 每條 lane 不同，不要從 `popdex-btc` 照抄。
 
 | 值 | 怎麼核對 | 填錯的後果 |
 |---|---|---|
 | `TQ_EXECUTABLE` | 這條 lane 的 quant binary 絕對路徑，**不是** `ExecStart` 的 launcher。producer 回報 `/home/ubuntu/tnauqquant/bin/popdex-02/quant`；Step 1 只取 lane 設定檔 `/etc/tnauqquant/instances/popdex-02/manager.env` 的 `TNAUQ_EXPECTED_BIN` 那一行核對。第一次 run 之後用 manifest 的 `.executable` 確認（Step 5）。 | 填成 launcher：它每條 lane 都相同，另一個 instance 也這樣填時 `setup-linux.sh` 的不重複檢查會拒絕；裝得上去 probe 也數不到程序（`process_count 0`），測試 cycle 不會出現 `TradingUnexpectedProcess`，並出現 `TradingRunBindingInvalid` |
-| `TQ_EXECUTOR_MAP` | 寫成 `<executor>=popdex`。`<executor>` 是 config 的 `routing.accounts[0].name`，也是 raw log 的 `executor=` 欄位。producer 回報 `popdex-main`，所以是 `popdex-main=popdex`。名稱與 `popdex-btc` 相同並不衝突：executor map 是每個 instance 自己的，probe 只讀自己這條 lane 的 raw log，跨 lane 用 `strategy`／instance 區分。Step 1 在 config 核對，Step 5 用 raw log 核對。 | 沒有告警，series 也照樣出現：`exchange="popdex"` 的成交量會是 `0`（漏計），單一 executor 的淨持倉仍掛在 `popdex` 上。**series 存在不代表映射正確**，要用 Step 5 同一個已成交 cycle 的 executor 名稱與成交額核對 |
+| `TQ_EXECUTOR_MAP` | 寫成 `<executor>=popdex`。`<executor>` 是 config 的 `routing.accounts[0].name`，也是 raw log 的 `executor=` 欄位。example 已預填 `popdex-02=popdex`。Step 1 在 config 核對，Step 5 用 raw log 核對。 | 沒有告警，series 也照樣出現：`exchange="popdex"` 的成交量會是 `0`（漏計），單一 executor 的淨持倉仍掛在 `popdex` 上。**series 存在不代表映射正確**，要用 Step 5 同一個已成交 cycle 的 executor 名稱與成交額核對 |
 | `TQ_INSTANCE_ID`（example 預填 `popdex-02`，是預期值） | 等於 config 的 `instance_id:`，且與 Trading01 其他 instance 不同（Step 1）。config 是別的值時填 config 的值。第一次 run 之後用 manifest 的 `.instance_id` 確認（Step 5）。 | `strategy_identity_ok 0`；manifest 存在時出現 `TradingRunBindingInvalid` |
 | 數量欄位的名稱與單位 | 共用 probe 讀 raw log 的 `net_qty_btc`／`initiator_qty_btc`／`carrier_qty_btc`，以及 done marker 的 `long_btc`／`short_btc`／`net_btc`／`dust_tolerance_btc`，原值輸出成 `tnauqquant_current_position_btc`，沒有換算。Trading01 的共用 probe 還是本文件 `MERGE` 那一版時，Grafana 固定標成 BTC；改標 ETH 要另依 [README 的 Position units](../agents/alloy/trading/README.md#position-units-tq_base_asset) 上線（`TQ_BASE_ASSET=ETH`，需要更新共用 probe，不在本文件範圍）：先更新 Trading01，確認 `popdex-02` 的原始持倉 series 帶 `base_asset="ETH"` 之後才部署中央；中央先上的話，兩次部署之間 `popdex-02` 的歷史會被記成 BTC，直到資料過期。producer 已確認欄位名稱仍是 `*_btc`、值是 ETH 數量。第一次 run 之後核對實際的欄位名稱，並記錄顯示限制（Step 5）。 | 名稱與 probe 讀的不同：持倉 series 不會出現，done marker 不合 schema 時每次 run 結束都有 `TradingRunBindingInvalid`。名稱相同（producer 回報的情況）：binding 全部正常，面板把 ETH 數量標成 BTC |
 
@@ -140,17 +140,17 @@ grep -HE '^TQ_(EXECUTABLE|INSTANCE_ID)=' /etc/skyeye-trading/instances/*.env | t
 - `TQ_EXECUTABLE`：這條 lane 的 quant binary，就是 `$QUANT`，取自 `$LANE_ENV` 的 `TNAUQ_EXPECTED_BIN`。`grep -c` 要是 `1`，`$QUANT` 要是絕對路徑，`QUANT-EXECUTABLE` 要印出。producer 回報的值是 `/home/ubuntu/tnauqquant/bin/popdex-02/quant`；`$QUANT` 是別的路徑，或上面任何一項不成立（`$LANE_ENV` 不存在時 `grep -c` 不會是 `1`）：STOP，請 tnauqquant manager 確認。
 - `LANE_ENV` 的路徑由 tnauqquant 的原始碼決定，不必向 producer 詢問。來源是 tnauqquant `scripts/tnauqquant-service`（master `c53516a` 的行號）：第 31 行 `INSTANCE_INSTALL_ROOT="/etc/tnauqquant/instances"`，第 160 行 `MANAGER_ENV_PATH="$INSTANCE_INSTALL_ROOT/$INSTANCE/manager.env"`。它是 `tnauqquant-service install` 寫出的 metadata（`TNAUQ_EXPECTED_BIN`、`TNAUQ_ENV_FILE` 等）；tnauqquant 自己的 runbook（`docs/trading-server-runbook.md` 第 1146 行）也用 `grep -h` 從 `/etc/tnauqquant/instances/*/manager.env` 取 `TNAUQ_EXPECTED_BIN`。這裡只用上面兩個 `grep` 取那一行，不要 `cat`、不要用編輯器開。lane 的憑證放在 `TNAUQ_ENV_FILE` 指向的另一個檔，**那個檔不得讀取**。
 - `$QUANT` 與 `sibling-identities` 任何一行的 `TQ_EXECUTABLE` 相同：STOP。`setup-linux.sh` 要求每個 instance 的 `TQ_EXECUTABLE` 各不相同，共用 binary 的 lane 目前裝不上去，需要 SkyEye 先改 installer。
-- `TQ_EXECUTOR_MAP`：填 `popdex-main=popdex`。producer 回報 executor 名稱是 config 的 `routing.accounts[0].name`，值是 `popdex-main`（exchange `popdex_usdt_perp`）。在 `popdex_02_config.yaml` 唯讀確認 `routing.accounts` 只有這一個 account，只記下它的名稱。是別的名稱時填 config 的名稱，並在執行紀錄寫下與回報不同；找不到或有多個 account：STOP，請 tnauqquant manager 提供。
-- executor 名稱與 `popdex-btc` 相同（config 照抄）並不衝突，不需要為了區分而改名：`TQ_EXECUTOR_MAP` 是每個 instance 自己的 env，probe 只讀自己這條 lane 的 raw log，輸出的 series 帶的是 `strategy` 與 `exchange`，沒有 executor 名稱；跨 lane 用 `strategy`／instance 區分。
+- `TQ_EXECUTOR_MAP` 預填 `popdex-02=popdex`。producer 回報 config 的 `routing.accounts[0].name` 是 `popdex-02`（exchange `popdex_usdt_perp`）。在 `popdex_02_config.yaml` 唯讀確認 `routing.accounts` 只有這一個 account，只記下它的名稱。是別的名稱時填 config 的名稱，並在執行紀錄寫下與回報不同；找不到或有多個 account：STOP，請 tnauqquant manager 提供。
+- `TQ_EXECUTOR_MAP` 是每個 instance 自己的 env，probe 只讀自己這條 lane 的 raw log，輸出的 series 帶的是 `strategy` 與 `exchange`，沒有 executor 名稱；跨 lane 用 `strategy`／instance 區分。
 
 填好 env 並 render（只寫 `$WORK`）：
 
 ```bash
 install -m 600 "$STAGE/agents/alloy/trading/deployment-linux-popdex-02.env.example" "$WORK/popdex-02.env"
-# 編輯 $WORK/popdex-02.env：填 TQ_EXECUTABLE=<$QUANT 的值> 與 TQ_EXECUTOR_MAP=popdex-main=popdex
-# （config 的 executor 是別的名稱時用 config 的名稱）；
+# 編輯 $WORK/popdex-02.env：填 TQ_EXECUTABLE=<$QUANT 的值>。
+# 若 config 的 executor 與預填值不同，將 TQ_EXECUTOR_MAP 的 executor 改為 config 的名稱。
 # config 的 instance_id 不是 popdex-02 時再改 TQ_INSTANCE_ID。其他不動
-diff "$STAGE/agents/alloy/trading/deployment-linux-popdex-02.env.example" "$WORK/popdex-02.env"   # 只有上述兩行（或三行）不同
+diff "$STAGE/agents/alloy/trading/deployment-linux-popdex-02.env.example" "$WORK/popdex-02.env"   # 預期只有 TQ_EXECUTABLE 不同，另核對依 config 調整的值
 grep -c '^TQ_STRATEGY_DISABLED=1$' "$WORK/popdex-02.env"                                             # 1
 "$SETUP" --render-only "$WORK/render" --env-file "$WORK/popdex-02.env" </dev/null || echo "STOP: render"
 grep -c 'strategy *= *"popdex-02"' "$WORK/render/trading-popdex-02.alloy"                            # ≥ 1
@@ -371,7 +371,7 @@ grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_m
   ```
 
   完整回應先存進 `RESP`，`curl` 的退出碼是 0 才往下驗同一份回應。印出 `LOKI-HAS-THIS-RUN` 才算通過：`curl` 成功、回應的 `status` 是 `success`，而且這個 `run_id` 的 log 筆數大於 0。沒印出就不算通過，不論是查詢失敗或傳輸中斷（`curl` 退出碼不是 0）、API 沒有回報成功、沒有這個 run 的 stream，還是筆數為 0；回報 manager。
-- **executor 映射：** raw log 的 `executor=` 必須是 `TQ_EXECUTOR_MAP` 等號左邊的名稱（producer 回報 `popdex-main`）。成交額要從 probe 採用的那一筆讀：上面 `PNL` 那一行的 `volume_usd_by_executor`，該 executor 的金額要與 `current_run_exchange_volume_usd{exchange="popdex"}` 一致。之後若還有 `stable` 不是 `true` 的 `pnl_status`，probe 不採用，不要拿它比。probe 只採用時間可信的行（`time=` 是 RFC 3339，且不晚於 probe 取樣時間加 120 秒），這裡的命令與下面的加總都不做這項篩選；命令結果與 probe 輸出不符時，先看印出的 `time=`，不要據此修改 env，回報 manager。
+- **executor 映射：** raw log 的 `executor=` 必須是 `TQ_EXECUTOR_MAP` 等號左邊的名稱（改名後為 `popdex-02`）。成交額要從 probe 採用的那一筆讀：上面 `PNL` 那一行的 `volume_usd_by_executor`，該 executor 的金額要與 `current_run_exchange_volume_usd{exchange="popdex"}` 一致。之後若還有 `stable` 不是 `true` 的 `pnl_status`，probe 不採用，不要拿它比。probe 只採用時間可信的行（`time=` 是 RFC 3339，且不晚於 probe 取樣時間加 120 秒），這裡的命令與下面的加總都不做這項篩選；命令結果與 probe 輸出不符時，先看印出的 `time=`，不要據此修改 env，回報 manager。
   - 那一筆沒有 `volume_usd_by_executor`（或整份 log 沒有 stable 的 `pnl_status`）時，probe 才改成加總 `msg=trade_status` 的 `volume_usd`。這時用同樣的加總核對：
 
     ```bash
