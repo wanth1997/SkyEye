@@ -674,6 +674,17 @@ TQ_EXECUTOR_MAP="${TQ_EXECUTOR_MAP:-toobit-main=toobit,mexc-ui=mexc}"
 TQ_SIDECAR_REQUIRED="${TQ_SIDECAR_REQUIRED:-1}"
 TQ_TEXTFILE_MODE="${TQ_TEXTFILE_MODE:-600}"
 TQ_TEXTFILE_NAME="${TQ_TEXTFILE_NAME:-tnauqquant.prom}"
+# The asset the lane's position quantities are counted in. The producer's
+# *_qty_btc / *_btc field names predate non-BTC lanes, so the number is in this
+# asset whatever the field or metric name says.
+# Only an unset variable means BTC; a set but empty value is a mistake. The
+# characters are spelled out so no locale can widen the class (a range such as
+# A-Z also matches full-width letters in some UTF-8 locales). setup-linux.sh
+# applies the same rule (linux-common.sh valid_base_asset).
+TQ_BASE_ASSET="${TQ_BASE_ASSET-BTC}"
+
+[[ "$TQ_BASE_ASSET" =~ ^[ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789]{1,16}$ ]] || \
+  die "TQ_BASE_ASSET must be 1-16 ASCII upper-case letters or digits, such as BTC or ETH; leave it unset for BTC"
 
 case "$TQ_SIDECAR_REQUIRED" in
   0|1) ;;
@@ -1125,6 +1136,8 @@ then
 fi
 
 METRIC_LABELS="product=\"$TQ_PRODUCT\",environment=\"$TQ_ENVIRONMENT\",server_id=\"$TQ_SERVER_ID\",strategy=\"$TQ_STRATEGY\""
+# Only quantities carry the asset; every other series keeps its identity.
+POSITION_LABELS="$METRIC_LABELS,base_asset=\"$TQ_BASE_ASSET\""
 PROBE_TIMESTAMP="$(date +%s)"
 
 mkdir -p "$TQ_TEXTFILE_DIR"
@@ -1181,14 +1194,22 @@ trap cleanup_temp EXIT HUP INT TERM
     done <<<"$COMPLETED_CYCLE_PNL_SERIES"
   fi
   if [[ -n "$CURRENT_POSITION_SERIES" ]]; then
+    # HELP must stay byte-identical across probe versions: one textfile
+    # collector drops a family whose HELP differs between .prom files, and old
+    # and new files coexist while a host's probes are re-added one by one.
+    # The unit is the base_asset label, not this text.
     printf '# HELP tnauqquant_current_position_btc Latest coordinator-reported position quantity by exchange and side.\n'
     printf '# TYPE tnauqquant_current_position_btc gauge\n'
     while IFS=$'\t' read -r exchange side quantity; do
       printf 'tnauqquant_current_position_btc{%s,exchange="%s",side="%s"} %s\n' \
-        "$METRIC_LABELS" "$exchange" "$side" "$quantity"
+        "$POSITION_LABELS" "$exchange" "$side" "$quantity"
     done <<<"$CURRENT_POSITION_SERIES"
   fi
-  [[ -n "$CURRENT_NET_POSITION_BTC" ]] && emit_gauge tnauqquant_current_net_position_btc "Signed net BTC position from the latest coordinator book." "$CURRENT_NET_POSITION_BTC"
+  if [[ -n "$CURRENT_NET_POSITION_BTC" ]]; then
+    printf '# HELP tnauqquant_current_net_position_btc Signed net BTC position from the latest coordinator book.\n'
+    printf '# TYPE tnauqquant_current_net_position_btc gauge\n'
+    printf 'tnauqquant_current_net_position_btc{%s} %s\n' "$POSITION_LABELS" "$CURRENT_NET_POSITION_BTC"
+  fi
   if [[ -n "$VENUE_POSITION_TIMESTAMP$NET_POSITION_TIMESTAMP" ]]; then
     printf '# HELP tnauqquant_position_sample_timestamp_seconds Unix timestamp of the position observation behind the published values, by source.\n'
     printf '# TYPE tnauqquant_position_sample_timestamp_seconds gauge\n'

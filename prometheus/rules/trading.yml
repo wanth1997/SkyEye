@@ -176,15 +176,27 @@ groups:
           and on (product, environment, server_id, strategy)
           trading_target_info
 
+      # Position quantities are in the base_asset label, not necessarily BTC:
+      # the _btc names are historical. A probe from before TQ_BASE_ASSET sends
+      # no label and cannot say its asset; it is recorded as BTC, which is wrong
+      # for a non-BTC lane. So hosts with a non-BTC lane run the new probe
+      # before this rule is deployed (agents/alloy/trading/README.md,
+      # "Position units").
       - record: trading_strategy_current_net_position_btc
         expr: |
-          tnauqquant_current_net_position_btc{product="tnauqquant",environment="production"}
+          label_replace(
+            tnauqquant_current_net_position_btc{product="tnauqquant",environment="production"},
+            "base_asset", "BTC", "base_asset", ""
+          )
           and on (product, environment, server_id, strategy)
           trading_target_info
 
       - record: trading_strategy_current_position_btc
         expr: |
-          tnauqquant_current_position_btc{product="tnauqquant",environment="production"}
+          label_replace(
+            tnauqquant_current_position_btc{product="tnauqquant",environment="production"},
+            "base_asset", "BTC", "base_asset", ""
+          )
           and on (product, environment, server_id, strategy)
           trading_target_info
 

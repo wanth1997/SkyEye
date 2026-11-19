@@ -364,7 +364,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "每列是一個 globally unique strategy slug。本輪損益不跨策略加總；Runtime Contract、執行綁定與 Config 快照分欄，避免既有 config drift 掩蓋新的 runtime 缺失。Prometheus 告警可定位到策略；Loki 執行事故由上方獨立呈現。",
+      "description": "每列是一個 globally unique strategy slug。本輪損益不跨策略加總；淨部位也不加總，單位是同列「單位」欄的 base asset（例如 ETH），不同策略的數量不能直接比較；Runtime Contract、執行綁定與 Config 快照分欄，避免既有 config drift 掩蓋新的 runtime 缺失。Prometheus 告警可定位到策略；Loki 執行事故由上方獨立呈現。",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -859,7 +859,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "suffix: BTC"
+                "value": "none"
               },
               {
                 "id": "decimals",
@@ -868,6 +868,22 @@
               {
                 "id": "displayName",
                 "value": "淨部位"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Asset"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 80
+              },
+              {
+                "id": "displayName",
+                "value": "單位"
               }
             ]
           },
@@ -1065,7 +1081,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "max by (strategy) (trading_strategy_current_net_position_btc)",
+          "expr": "max by (strategy, base_asset) (trading_strategy_current_net_position_btc)",
           "format": "table",
           "instant": true,
           "range": false,
@@ -1247,16 +1263,17 @@
               "Value #C": 4,
               "Value #D": 5,
               "Value #E": 6,
-              "Value #F": 7,
-              "Value #M": 8,
-              "Value #G": 9,
-              "Value #N": 10,
-              "Value #H": 11,
-              "Value #I": 12,
-              "Value #J": 13,
-              "Value #L": 16,
-              "Value #O": 14,
-              "Value #P": 15
+              "base_asset": 7,
+              "Value #F": 8,
+              "Value #M": 9,
+              "Value #G": 10,
+              "Value #N": 11,
+              "Value #H": 12,
+              "Value #I": 13,
+              "Value #J": 14,
+              "Value #L": 17,
+              "Value #O": 15,
+              "Value #P": 16
             },
             "renameByName": {
               "strategy": "Strategy",
@@ -1266,6 +1283,7 @@
               "Value #C": "Cycles",
               "Value #D": "Run volume",
               "Value #E": "Net position",
+              "base_asset": "Asset",
               "Value #F": "Process",
               "Value #M": "RuntimeContract",
               "Value #G": "Binding",
