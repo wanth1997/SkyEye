@@ -15,9 +15,11 @@ set -euo pipefail
 # fills the empty values with stand-ins that exist only here; no host value is
 # guessed in the example or in this suite.
 #
-# An example whose comments carry the line "# CONTRACT-NAMED LOGS ONLY" says
-# that its TQ_RAW_LOG_GLOB selects the lane's contract-named raw logs and no
-# file that only resembles them. The suite holds each such example to that.
+# Every example's TQ_RAW_LOG_GLOB is DIR/<8 x [0-9]>_<6 x [0-9]>_<config
+# stem>.raw.log, the stem taken from its own TQ_CONFIG_PATH. The suite proves
+# that the glob selects the lane's contract-named raw log and no file that
+# only resembles it, as the probe, ensure-log-access.sh and the Alloy fragment
+# use it.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -229,13 +231,21 @@ expect_refused() {
 # resemble it. A glob in the contract form selects the first and none of the
 # others.
 RUN_STAMP=20261119_000000
+CONTRACT_PREFIX='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_'
 resembling_names() {
   local stem="$1"
   printf '%s\n' \
     "${RUN_STAMP}_test_$stem.raw.log" \
+    "20261119_120000_foo_$stem.raw.log" \
     "backup_${RUN_STAMP}_$stem.raw.log" \
+    "x${RUN_STAMP}_$stem.raw.log" \
+    "2026111x_000000_$stem.raw.log" \
+    "20261119_00000_$stem.raw.log" \
+    "20261119-000000_$stem.raw.log" \
     "$stem.raw.log" \
-    "${RUN_STAMP}_$stem.raw.log.1"
+    "$stem.raw.log.bak" \
+    "${RUN_STAMP}_$stem.raw.log.1" \
+    "${RUN_STAMP}_$stem.raw.log.bak"
 }
 
 # Where the loop below stages the example of STRATEGY.
@@ -248,9 +258,7 @@ STRATEGIES=()
 STAGED_REPO_ROOTS=()
 STAGED_GLOBS=()
 OWN_LOGS=()
-CONTRACT_ONLY=()
 rows_compared=0
-contract_only_count=0
 seen_paths=$'\n'
 
 for example in "${EXAMPLES[@]}"; do
@@ -360,6 +368,11 @@ for example in "${EXAMPLES[@]}"; do
 
   config_stem="$(basename "$(example_value TQ_CONFIG_PATH "$example")")"
   config_stem="${config_stem%.*}"
+  # The glob itself, as checked in, is the contract form for this lane's own
+  # config stem.
+  example_glob="$(example_value TQ_RAW_LOG_GLOB "$example")"
+  [[ "${example_glob##*/}" == "$CONTRACT_PREFIX$config_stem.raw.log" ]] || \
+    fail "$name: TQ_RAW_LOG_GLOB must end in /$CONTRACT_PREFIX$config_stem.raw.log, got ${example_glob##*/}"
   log_dir="${staged_glob%/*}"
   own_log="$log_dir/${RUN_STAMP}_$config_stem.raw.log"
   printf 'msg=own\n' >"$own_log"
@@ -371,12 +384,6 @@ for example in "${EXAMPLES[@]}"; do
   STAGED_REPO_ROOTS+=("$(example_value TQ_REPO_ROOT "$filled_env")")
   STAGED_GLOBS+=("$staged_glob")
   OWN_LOGS+=("$own_log")
-  if rg -q '^# CONTRACT-NAMED LOGS ONLY' "$example"; then
-    CONTRACT_ONLY+=(1)
-    contract_only_count=$((contract_only_count + 1))
-  else
-    CONTRACT_ONLY+=(0)
-  fi
 done
 
 printf 'case: each raw log glob selects its own contract-named log and no other lane'"'"'s\n'
@@ -400,12 +407,11 @@ for i in "${!STAGED_GLOBS[@]}"; do
   [[ "$(LC_ALL=C sort "$SETFACL_LOG")" == "$selected" ]] || \
     fail "${STRATEGIES[$i]}: ensure-log-access.sh and the probe select different files for the same glob"
 
-  # An example that says its glob takes contract-named logs only selects its
-  # own log and none of the files that resemble it. The examples that do not
-  # say so end in *<config stem>.raw.log; the envs installed on the hosts
-  # carry the same value and are not rewritten from this repo.
-  if [[ "${CONTRACT_ONLY[$i]}" -eq 1 && "$selected" != "${OWN_LOGS[$i]}" ]]; then
-    fail "${STRATEGIES[$i]}: the example says CONTRACT-NAMED LOGS ONLY, but its TQ_RAW_LOG_GLOB selects: $(tr '\n' ' ' <<<"$selected"). Use DIR/<8 x [0-9]>_<6 x [0-9]>_<config stem>.raw.log"
+  # The glob selects its own log and none of the files that resemble it.
+  # Installed host envs are not rewritten from this repo; README.md says how
+  # an operator applies the tightened glob to them.
+  if [[ "$selected" != "${OWN_LOGS[$i]}" ]]; then
+    fail "${STRATEGIES[$i]}: TQ_RAW_LOG_GLOB selects more than its own contract-named log: $(tr '\n' ' ' <<<"$selected"). Use DIR/<8 x [0-9]>_<6 x [0-9]>_<config stem>.raw.log"
   fi
 done
 
@@ -516,5 +522,5 @@ expect_stage_refused 'a strategy name with path separators' 'is not a name setup
 printf 'case: a staging target outside the test root is refused, whatever the strategy is called\n'
 expect_stage_refused 'a staging target outside the test root' 'outside the test root' "$base_example" "$victim"
 
-printf 'PASS: %d Linux instance examples, %d with an inventory row, %d held to contract-named logs only\n' \
-  "${#EXAMPLES[@]}" "$rows_compared" "$contract_only_count"
+printf 'PASS: %d Linux instance examples, %d with an inventory row, all held to contract-named logs only\n' \
+  "${#EXAMPLES[@]}" "$rows_compared"
