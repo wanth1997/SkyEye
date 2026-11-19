@@ -634,6 +634,156 @@ for bad_asset in '' eth Eth 'ETH ' 'E-TH' 'ETH"' 'BTC,x="y"' ABCDEFGHIJKLMNOPQ '
 done
 unset TQ_BASE_ASSET
 
+printf 'case: a gross-flat line publishes the filled close before the next book line\n'
+# Fixture lines 1-16 are popdex-02 evidence lines 126-141 of 2026-11-19 with IDs
+# redacted and the accounting lines cut to synthetic values: a Long 1.5 entry, a
+# close that fills at line 12 while the last book line (11) still says Long, the
+# gross_flat_verified line 15 and the next book line 16. Lines 17-24 open a new
+# Short 0.75 entry in the same shape.
+POSITION_FIXTURE="$REPO_ROOT/tests/fixtures/tnauqquant/position-flat.raw.log"
+(cd "$REPO_ROOT" && shasum -a 256 -c tests/fixtures/tnauqquant/position-flat.raw.log.sha256 >/dev/null) || {
+  printf 'FAIL: position-flat fixture does not match its checksum\n' >&2
+  exit 1
+}
+cp "$POPDEX_LOG_PATH" "$TEST_ROOT/popdex.original.log"
+
+replay_position_fixture() {
+  head -n "$1" "$POSITION_FIXTURE" >"$POPDEX_LOG_PATH"
+  run_probe
+}
+
+assert_position_series() {
+  local expected="$1"
+  local actual
+  # No series at all is a failure to report, not an rg error that stops the suite.
+  actual="$({ rg -o '^tnauqquant_current_position_btc\{.*exchange="[^"]*",side="[^"]*"\} \S+$' "$METRICS_PATH" || true; } |
+    sed -E 's/^.*exchange="([^"]*)",side="([^"]*)"\} /\1 \2 /' | tr '\n' ';')"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'FAIL: position series expected=%s actual=%s\n' "$expected" "$actual" >&2
+    sed -n '1,240p' "$METRICS_PATH" >&2
+    exit 1
+  fi
+}
+
+replay_position_fixture 14
+assert_position_series 'popdex long 1.50000000;'
+assert_metric tnauqquant_current_net_position_btc 1.5
+
+replay_position_fixture 15
+assert_metric tnauqquant_current_position_valid 1
+assert_position_series 'popdex flat 0;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795063612 'source="net"'
+
+replay_position_fixture 16
+assert_position_series 'popdex flat 0.00000000;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795063685 'source="net"'
+
+# The gross-flat line is now older than the newest book line.
+replay_position_fixture 24
+assert_position_series 'popdex short 0.75000000;'
+assert_metric tnauqquant_current_net_position_btc -0.75
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795063752 'source="net"'
+
+printf 'case: only a mapped, gross-flat readiness line counts as flat\n'
+append_after_close() {
+  head -n 14 "$POSITION_FIXTURE" >"$POPDEX_LOG_PATH"
+  printf '%s\n' "$@" >>"$POPDEX_LOG_PATH"
+  run_probe
+}
+append_after_close 'time=2026-11-19T04:46:52.883Z level=INFO msg=ui_warmup_async_ready executor=other-main reason=gross_flat_verified:coordinated_carrier_exit'
+assert_position_series 'popdex long 1.50000000;'
+append_after_close 'time=2026-11-19T04:46:52.883Z level=INFO msg=ui_warmup_async_ready executor=popdex-main reason=warmup_complete'
+assert_position_series 'popdex long 1.50000000;'
+append_after_close 'time=2026-11-19T04:46:52.883Z level=INFO msg=coordinated_signal_skipped executor=popdex-main reason=gross_flat_verified:coordinated_carrier_exit'
+assert_position_series 'popdex long 1.50000000;'
+
+printf 'case: a gross-flat line keeps the existing sample-time rules\n'
+# A future sample is refused as for any book line: nothing current is published.
+append_after_close 'time=2099-01-01T00:00:00Z level=INFO msg=ui_warmup_async_ready executor=popdex-main reason=gross_flat_verified:coordinated_carrier_exit'
+assert_metric tnauqquant_current_position_valid 0
+assert_metric_missing tnauqquant_current_position_btc
+assert_metric_missing tnauqquant_current_net_position_btc
+# An absent time still publishes the value, without a sample timestamp.
+append_after_close 'level=INFO msg=ui_warmup_async_ready executor=popdex-main reason=gross_flat_verified:coordinated_carrier_exit'
+assert_position_series 'popdex flat 0;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric_missing tnauqquant_position_sample_timestamp_seconds
+# An unparsable time is handled like an absent one.
+append_after_close 'time=not-a-time level=INFO msg=ui_warmup_async_ready executor=popdex-main reason=gross_flat_verified:coordinated_carrier_exit'
+assert_position_series 'popdex flat 0;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric_missing tnauqquant_position_sample_timestamp_seconds
+
+printf 'case: a gross-flat line clears both venues of a two-exchange lane\n'
+# A hedged book reads net Flat with both legs open; only gross flat clears the legs.
+export TQ_EXECUTOR_MAP=toobit-main=toobit,mexc-ui=mexc
+cat >"$POPDEX_LOG_PATH" <<'EOF'
+time=2026-11-19T04:30:00.100Z level=INFO msg=trade_status state=settled executor=toobit-main initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.103 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.103 net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book
+time=2026-11-19T04:31:00.200Z level=INFO msg=coordinated_attempt_terminal attempt_id=31 client_action_id=<redacted> venue=mexc-ui action_kind=close_position requested_btc=0.103 disposition=filled
+EOF
+run_probe
+assert_position_series 'toobit short 0.103;mexc long 0.103;'
+assert_metric tnauqquant_current_net_position_btc 0
+printf '%s\n' 'time=2026-11-19T04:31:07.300Z level=INFO msg=ui_warmup_async_ready executor=mexc-ui reason=gross_flat_verified:coordinated_carrier_exit' \
+  >>"$POPDEX_LOG_PATH"
+run_probe
+assert_position_series 'toobit flat 0;mexc flat 0;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795062667 'source="net"'
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795062667 'source="venue"'
+
+printf 'case: a net-only book line keeps a two-exchange lane gross flat\n'
+# waiting_entry book lines carry net but no legs: they must not bring back the
+# closed legs, and the venue time stays at the gross-flat line.
+printf '%s\n' 'time=2026-11-19T04:32:00.000Z level=INFO msg=coordinated_signal_skipped reason=entry_spread_too_wide executor=toobit-main strategy_phase=waiting_entry net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book' \
+  >>"$POPDEX_LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_position_valid 1
+assert_position_series 'toobit flat 0;mexc flat 0;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795062667 'source="venue"'
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795062720 'source="net"'
+# A new two-leg book line still replaces the gross-flat legs.
+printf '%s\n' 'time=2026-11-19T04:33:00.000Z level=INFO msg=trade_status state=settled executor=toobit-main initiator_venue=toobit-main initiator_side=Long initiator_qty_btc=0.2 carrier_venue=mexc-ui carrier_side=Short carrier_qty_btc=0.2 net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book' \
+  >>"$POPDEX_LOG_PATH"
+run_probe
+assert_position_series 'toobit long 0.2;mexc short 0.2;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795062780 'source="venue"'
+
+printf 'case: a two-exchange gross-flat line keeps the existing sample-time rules\n'
+DUAL_OPEN_LINE='time=2026-11-19T04:30:00.100Z level=INFO msg=trade_status state=settled executor=toobit-main initiator_venue=toobit-main initiator_side=Short initiator_qty_btc=0.103 carrier_venue=mexc-ui carrier_side=Long carrier_qty_btc=0.103 net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book'
+DUAL_FLAT_TAIL='level=INFO msg=ui_warmup_async_ready executor=mexc-ui reason=gross_flat_verified:coordinated_carrier_exit'
+# A future gross-flat line is refused, and the older legs are not published.
+printf '%s\n' "$DUAL_OPEN_LINE" "time=2099-01-01T00:00:00Z $DUAL_FLAT_TAIL" >"$POPDEX_LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_position_valid 0
+assert_metric_missing tnauqquant_current_position_btc
+assert_metric_missing tnauqquant_current_net_position_btc
+# An unparsable time still publishes flat, without a sample timestamp.
+printf '%s\n' "$DUAL_OPEN_LINE" "time=not-a-time $DUAL_FLAT_TAIL" >"$POPDEX_LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_position_valid 1
+assert_position_series 'toobit flat 0;mexc flat 0;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric_missing tnauqquant_position_sample_timestamp_seconds
+
+printf 'case: a gross-flat line before any two-leg line keeps two-exchange series\n'
+printf '%s\n' "time=2026-11-19T04:31:07.300Z $DUAL_FLAT_TAIL" \
+  'time=2026-11-19T04:32:00.000Z level=INFO msg=coordinated_signal_skipped executor=toobit-main strategy_phase=waiting_entry net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book' \
+  >"$POPDEX_LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_position_valid 1
+assert_position_series 'toobit flat 0;mexc flat 0;'
+assert_metric tnauqquant_current_net_position_btc 0
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795062667 'source="venue"'
+assert_metric tnauqquant_position_sample_timestamp_seconds 1795062720 'source="net"'
+export TQ_EXECUTOR_MAP=popdex-main=popdex
+cp "$TEST_ROOT/popdex.original.log" "$POPDEX_LOG_PATH"
+run_probe
+
 printf 'case: a bound PopDEX max-cycles marker makes the run not expected\n'
 jq -n \
   --arg run_id "$POPDEX_RUN_ID" \
