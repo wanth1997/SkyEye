@@ -22,9 +22,9 @@ done
 
 [[ "$TQ_ALLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || \
   die "TQ_ALLOY_USER is invalid"
+command -v awk >/dev/null 2>&1 || die "awk is required"
 command -v find >/dev/null 2>&1 || die "find is required"
 command -v getfacl >/dev/null 2>&1 || die "getfacl is required"
-command -v grep >/dev/null 2>&1 || die "grep is required"
 command -v setfacl >/dev/null 2>&1 || die "setfacl is required"
 
 repo_root="${TQ_REPO_ROOT%/}"
@@ -42,23 +42,61 @@ case "$raw_log_dir" in
   *) die "TQ_RAW_LOG_GLOB must stay below TQ_REPO_ROOT" ;;
 esac
 
-# find's own errors stay on stderr; its status is checked after the loop so a
+# find's own errors stay on stderr; its status is checked after the pipeline so a
 # failed listing is reported instead of ending the script without a message.
 set +e
-find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 |
+find "$raw_log_dir" -maxdepth 1 -type f -name "$raw_log_pattern" -print0 | {
+  set -euo pipefail
+  raw_logs=()
   while IFS= read -r -d '' raw_log; do
-    if ! acl="$(getfacl -cp -- "$raw_log" 2>/dev/null)"; then
+    raw_logs+=("$raw_log")
+  done
+
+  acl_offset=0
+  acl_chunk_size=500
+  while [[ "$acl_offset" -lt "${#raw_logs[@]}" ]]; do
+    chunk=("${raw_logs[@]:$acl_offset:$acl_chunk_size}")
+    if ! acl_output="$(getfacl -cp -- "${chunk[@]}" 2>/dev/null)"; then
       die "unable to inspect a configured raw log ACL"
     fi
-    if printf '%s\n' "$acl" | grep -Eq "^user:${TQ_ALLOY_USER}:r" &&
-      printf '%s\n' "$acl" | grep -Eq '^mask::r'
-    then
-      continue
+    if ! missing_indices="$(LC_ALL=C awk -v alloy_user="$TQ_ALLOY_USER" -v expected="${#chunk[@]}" '
+      BEGIN {
+        RS = ""
+        FS = "\n"
+        user_prefix = "user:" alloy_user ":r"
+        mask_prefix = "mask::r"
+      }
+      {
+        has_user = 0
+        has_mask = 0
+        for (i = 1; i <= NF; i++) {
+          if (index($i, user_prefix) == 1) has_user = 1
+          if (index($i, mask_prefix) == 1) has_mask = 1
+        }
+        if (!has_user || !has_mask) print NR - 1
+      }
+      END {
+        if (NR != expected) exit 2
+      }
+    ' <<<"$acl_output")"; then
+      die "unable to inspect a configured raw log ACL"
     fi
-    if ! setfacl -m "u:${TQ_ALLOY_USER}:r--" -- "$raw_log" >/dev/null 2>&1; then
-      die "unable to grant Alloy read access to a configured raw log"
+
+    missing_files=()
+    if [[ -n "$missing_indices" ]]; then
+      while IFS= read -r missing_index; do
+        [[ -n "$missing_index" ]] || continue
+        missing_files+=("${chunk[$missing_index]}")
+      done <<<"$missing_indices"
     fi
+    if [[ "${#missing_files[@]}" -gt 0 ]]; then
+      if ! setfacl -m "u:${TQ_ALLOY_USER}:r--" -- "${missing_files[@]}" >/dev/null 2>&1; then
+        die "unable to grant Alloy read access to a configured raw log"
+      fi
+    fi
+    acl_offset=$((acl_offset + acl_chunk_size))
   done
+}
 pipeline_status=("${PIPESTATUS[@]}")
 set -e
 # The loop has already printed its reason; a find stopped by its exit is not
