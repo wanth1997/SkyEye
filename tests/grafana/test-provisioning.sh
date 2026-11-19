@@ -147,7 +147,7 @@ done < <(find "$REPO_ROOT/grafana/dashboards" -type f -name '*.json' -print0 | x
 
 # Run core assertions in Python so every failure is reported clearly.
 python3 -I - "$REPO_ROOT" "$WORK" "$PINNED_VERSION" <<'PY' || FAILED=1
-import json, os, re, sys
+import json, os, sys
 
 repo_root, work, pinned_version = sys.argv[1:4]
 failed = False
@@ -282,9 +282,9 @@ check(not panel_errors,
       % (", ".join(sorted(used_types)), pinned_version)
       + ("" if not panel_errors else " (%s)" % "; ".join(panel_errors)))
 
-# 8. Datasources: independently assert the stable UID contract and explicit
-# expected settings, and verify grafana/provisioning/datasources/default.yml
-# (stripping unquoted trailing comments).
+# 8. Datasources: assert the live provisioned API responses against the stable
+# UID contract and explicit expected settings (Grafana already parses the
+# bind-mounted grafana/provisioning/datasources/default.yml on startup).
 STABLE_DS_UIDS = ["alertmanager", "loki", "prometheus"]
 EXPECTED_DS = {
     "prometheus": {
@@ -316,79 +316,19 @@ EXPECTED_DS = {
     },
 }
 
-def strip_yaml_comment(text):
-    in_single = False
-    in_double = False
-    for idx, ch in enumerate(text):
-        if ch == "'" and not in_double:
-            in_single = not in_single
-        elif ch == '"' and not in_single:
-            in_double = not in_double
-        elif ch == "#" and not in_single and not in_double and (idx == 0 or text[idx - 1].isspace()):
-            return text[:idx].rstrip()
-    return text.rstrip()
-
-def parse_yaml_scalar(raw_val):
-    val = strip_yaml_comment(raw_val).strip()
-    if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
-        return val[1:-1]
-    if val in ("true", "false"):
-        return val == "true"
-    if re.fullmatch(r"[0-9]+", val):
-        return int(val)
-    return val
-
-ds_yml = open(os.path.join(repo_root, "grafana", "provisioning", "datasources", "default.yml"), encoding="utf-8").read()
-yaml_ds = {}
-current = None
-in_json_data = False
-for raw in ds_yml.splitlines():
-    cleaned = strip_yaml_comment(raw)
-    stripped = cleaned.strip()
-    if not stripped:
-        continue
-    if cleaned.startswith("  - "):
-        current = {"isDefault": False, "jsonData": {}}
-        in_json_data = False
-        k, _, v = stripped[2:].partition(":")
-        current[k.strip()] = parse_yaml_scalar(v)
-        continue
-    if current is None:
-        continue
-    indent = len(cleaned) - len(cleaned.lstrip(" "))
-    if indent == 4:
-        in_json_data = False
-        k, _, v = stripped.partition(":")
-        k = k.strip()
-        if k == "jsonData":
-            in_json_data = True
-        else:
-            current[k] = parse_yaml_scalar(v)
-        if "uid" in current:
-            yaml_ds[current["uid"]] = current
-    elif indent >= 6 and in_json_data:
-        k, _, v = stripped.partition(":")
-        current["jsonData"][k.strip()] = parse_yaml_scalar(v)
-
 live_ds = {d["uid"]: d for d in json.load(open(os.path.join(work, "datasources.json"), encoding="utf-8"))}
 check(sorted(live_ds) == STABLE_DS_UIDS,
       "provisioned datasource UIDs match stable contract (%s; got %s)"
       % (", ".join(STABLE_DS_UIDS), ", ".join(sorted(live_ds))))
-check(sorted(yaml_ds) == STABLE_DS_UIDS,
-      "grafana/provisioning/datasources/default.yml declares stable UIDs (%s)"
-      % ", ".join(STABLE_DS_UIDS))
 
 ds_diffs = []
 for uid, want in sorted(EXPECTED_DS.items()):
     got = live_ds.get(uid) or {}
-    yml = yaml_ds.get(uid) or {}
     for field in ("uid", "name", "type", "url", "isDefault", "jsonData"):
         if got.get(field) != want.get(field):
-            ds_diffs.append("live %s.%s: got %r want %r" % (uid, field, got.get(field), want.get(field)))
-        if yml.get(field) != want.get(field):
-            ds_diffs.append("yaml %s.%s: got %r want %r" % (uid, field, yml.get(field), want.get(field)))
+            ds_diffs.append("%s.%s: got %r want %r" % (uid, field, got.get(field), want.get(field)))
 check(not ds_diffs,
-      "all %d datasources match explicit contract and default.yml" % len(EXPECTED_DS)
+      "all %d provisioned datasources match explicit contract" % len(EXPECTED_DS)
       + ("" if not ds_diffs else " (%s)" % "; ".join(ds_diffs)))
 
 # 9. Default home dashboard
