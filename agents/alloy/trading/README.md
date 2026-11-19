@@ -148,6 +148,9 @@ full shadow → canary process.
    facts are still reported. `add` and the probe refuse any value other than
    `0` or `1`. Set it back to `0` with `add` before the strategy is started
    again.
+   `TQ_BASE_ASSET` (default `BTC`) names the asset the strategy's position
+   quantities are counted in, for example `ETH` for `popdex-02`. See
+   [Position units](#position-units-tq_base_asset).
 2. Repo:
 
    ~~~bash
@@ -217,6 +220,56 @@ current probe, P&L history builder and Trading log scrub, and pinning its Alloy
 1.18.1 with `brew pin`, follows
 [the Mac mini rollout](../../../docs/macmini-m2-alloy-rollout.md). Its first
 run restarts Alloy once, because the host has no env record yet.
+
+### Position units (`TQ_BASE_ASSET`)
+
+The producer logs position quantities as `*_qty_btc` and the done marker as
+`*_btc` on every lane, including lanes whose base asset is not BTC: the names
+predate those lanes. The probe publishes the numbers as they are, in
+`tnauqquant_current_position_btc` and `tnauqquant_current_net_position_btc`,
+and those names do not change (history and queries depend on them). What the
+number is counted in comes from the env:
+
+- `TQ_BASE_ASSET`: one to 16 upper-case letters or digits, default `BTC` when
+  unset or empty. `add` and the probe refuse any other form; a probe that
+  refuses publishes nothing new, so its telemetry goes stale.
+- The probe adds `base_asset="<value>"` to the two position metrics only. Every
+  other series keeps its labels.
+- The central recordings `trading_strategy_current_position_btc` and
+  `trading_strategy_current_net_position_btc` keep `base_asset`, and record a
+  series without it (a probe from before this setting, which only ran BTC
+  lanes) as `BTC`.
+- Strategy detail names the asset in each value of "目前持倉 · 多空方向"; the
+  fleet table shows it in the "單位" column next to "淨部位". Quantities in
+  different assets are never added together.
+
+A lane is not BTC only if its env says so; nothing in SkyEye lists lanes by
+asset. Today that is `popdex-02` (`TQ_BASE_ASSET=ETH` in its example).
+
+**Rolling it out to a host.** The value only takes effect with a probe that
+reads it, and `probe.sh` is shared by every templated probe on the host, so
+`setup-linux.sh` replaces it only while every `skyeye-trading-probe@*` is
+stopped and disabled (`shared probe artifacts changed` otherwise). On
+Trading01 that is the stop-all procedure of
+[the Trading01 PopDEX rollout](../../../docs/trading01-popdex-rollout.md),
+Phase 3, run from a checkout that has this setting: before it, add
+`TQ_BASE_ASSET=ETH` to the staged popdex-02 env (BTC lanes need no edit), then
+`add` every strategy again with its own env and restore each timer to how it
+was. The other probes publish nothing while they are stopped.
+
+Order does not matter for correctness; each half alone looks like this:
+
+- Host first, central not yet deployed: series carry `base_asset` and the
+  current recordings already keep it, but the current panels drop it, so
+  `popdex-02` still shows its ETH quantity under BTC, as before.
+- Central first, host not yet updated: the recordings label every lane `BTC`
+  (no probe sends the label yet), so the panels show `BTC` for `popdex-02` too,
+  now spelled out per value. Nothing breaks; the ETH lane is still mislabelled
+  until its host is updated.
+
+Both done: `popdex-02` shows ETH and BTC lanes show BTC. A probe left on the
+old version keeps showing BTC, which is right for every lane except a non-BTC
+one.
 
 ### Legacy flag form and singleton migration
 

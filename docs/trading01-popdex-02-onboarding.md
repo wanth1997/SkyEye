@@ -40,7 +40,7 @@
 | `TQ_EXECUTABLE` | 這條 lane 的 quant binary 絕對路徑，**不是** `ExecStart` 的 launcher。producer 回報 `/home/ubuntu/tnauqquant/bin/popdex-02/quant`；Step 1 只取 lane 設定檔 `/etc/tnauqquant/instances/popdex-02/manager.env` 的 `TNAUQ_EXPECTED_BIN` 那一行核對。第一次 run 之後用 manifest 的 `.executable` 確認（Step 5）。 | 填成 launcher：它每條 lane 都相同，另一個 instance 也這樣填時 `setup-linux.sh` 的不重複檢查會拒絕；裝得上去 probe 也數不到程序（`process_count 0`），測試 cycle 不會出現 `TradingUnexpectedProcess`，並出現 `TradingRunBindingInvalid` |
 | `TQ_EXECUTOR_MAP` | 寫成 `<executor>=popdex`。`<executor>` 是 config 的 `routing.accounts[0].name`，也是 raw log 的 `executor=` 欄位。producer 回報 `popdex-main`，所以是 `popdex-main=popdex`。名稱與 `popdex-btc` 相同並不衝突：executor map 是每個 instance 自己的，probe 只讀自己這條 lane 的 raw log，跨 lane 用 `strategy`／instance 區分。Step 1 在 config 核對，Step 5 用 raw log 核對。 | 沒有告警，series 也照樣出現：`exchange="popdex"` 的成交量會是 `0`（漏計），單一 executor 的淨持倉仍掛在 `popdex` 上。**series 存在不代表映射正確**，要用 Step 5 同一個已成交 cycle 的 executor 名稱與成交額核對 |
 | `TQ_INSTANCE_ID`（example 預填 `popdex-02`，是預期值） | 等於 config 的 `instance_id:`，且與 Trading01 其他 instance 不同（Step 1）。config 是別的值時填 config 的值。第一次 run 之後用 manifest 的 `.instance_id` 確認（Step 5）。 | `strategy_identity_ok 0`；manifest 存在時出現 `TradingRunBindingInvalid` |
-| 數量欄位的名稱與單位 | 共用 probe 讀 raw log 的 `net_qty_btc`／`initiator_qty_btc`／`carrier_qty_btc`，以及 done marker 的 `long_btc`／`short_btc`／`net_btc`／`dust_tolerance_btc`，原值輸出成 `tnauqquant_current_position_btc`，沒有換算；Grafana 固定標成 BTC。producer 已確認欄位名稱仍是 `*_btc`、值是 ETH 數量。第一次 run 之後核對實際的欄位名稱，並記錄顯示限制（Step 5）。 | 名稱與 probe 讀的不同：持倉 series 不會出現，done marker 不合 schema 時每次 run 結束都有 `TradingRunBindingInvalid`。名稱相同（producer 回報的情況）：binding 全部正常，面板把 ETH 數量標成 BTC |
+| 數量欄位的名稱與單位 | 共用 probe 讀 raw log 的 `net_qty_btc`／`initiator_qty_btc`／`carrier_qty_btc`，以及 done marker 的 `long_btc`／`short_btc`／`net_btc`／`dust_tolerance_btc`，原值輸出成 `tnauqquant_current_position_btc`，沒有換算。Trading01 的共用 probe 還是本文件 `MERGE` 那一版時，Grafana 固定標成 BTC；改標 ETH 要另依 [README 的 Position units](../agents/alloy/trading/README.md#position-units-tq_base_asset) 上線（`TQ_BASE_ASSET=ETH`，需要更新共用 probe，不在本文件範圍）。producer 已確認欄位名稱仍是 `*_btc`、值是 ETH 數量。第一次 run 之後核對實際的欄位名稱，並記錄顯示限制（Step 5）。 | 名稱與 probe 讀的不同：持倉 series 不會出現，done marker 不合 schema 時每次 run 結束都有 `TradingRunBindingInvalid`。名稱相同（producer 回報的情況）：binding 全部正常，面板把 ETH 數量標成 BTC |
 
 ## 硬性限制
 
@@ -90,7 +90,7 @@ cmp "$STAGE/agents/alloy/trading/ensure-log-access.sh" /usr/local/libexec/skyeye
 
 - Alloy 版本不在 `agents/alloy/alloy-versions.env` 的 Linux 清單（目前 1.16.3、1.18.1）：STOP，回報版本。不升級，不用 `SKYEYE_ALLOY_UNTESTED_VERSION`。
 - `CanReload` 不是 `yes`，或 `CONFIG_FILE` 那一行不是剛好一行：STOP（`add` 會要求 restart）。
-- `PROBE-SAME` 或 `ACCESS-SAME` 沒印出：STOP。Trading01 上的共用 probe 檔案比 `MERGE` 舊，`add` 會以 `shared probe artifacts changed while …` 拒絕。更新共用檔案要先停下所有 `skyeye-trading-probe@*`（rollout 文件 Phase 3 的做法），會讓其他 strategy 的 probe 中斷，不在本文件範圍，由 manager 另行安排。`ensure-log-access.sh` 在 2026-11-14 rollout 之後改過，這一項很可能不符。
+- `PROBE-SAME` 或 `ACCESS-SAME` 沒印出：STOP。（`MERGE` 晚於加入 `TQ_BASE_ASSET` 的 commit 時，`probe.sh` 一定不同。）Trading01 上的共用 probe 檔案比 `MERGE` 舊，`add` 會以 `shared probe artifacts changed while …` 拒絕。更新共用檔案要先停下所有 `skyeye-trading-probe@*`（rollout 文件 Phase 3 的做法），會讓其他 strategy 的 probe 中斷，不在本文件範圍，由 manager 另行安排。`ensure-log-access.sh` 在 2026-11-14 rollout 之後改過，這一項很可能不符。
 
 **lane 實際仍停用，是進入 Step 2 的條件。** `TQ_STRATEGY_DISABLED=1` 只讓 probe 回報 `run_expected=0`，擋不住 lane 啟動。
 
@@ -386,7 +386,7 @@ grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_m
 - **數量單位：** producer 已確認：欄位名是 `*_btc`，值是 ETH 數量（config 的 `execution.quantity`，`quantity_unit: base`，這條 lane 的 base 是 ETH）。binding 不檢查單位，probe 也不換算，所以要記錄顯示限制。執行紀錄寫「`popdex-02` 的持倉顯示的是 ETH 數量，標示卻是 BTC（策略詳情的「目前持倉 · 多空方向」與策略總覽表格的「淨部位」欄），不能與 BTC lane 的持倉相加或比較」，依據寫「producer 確認（tnauqquant manager 回報）」。
   - 可以另外交叉確認，不是必要步驟：測試 cycle 持倉不為零、Wan 知道交易所實際持倉時，對照當下的 `tnauqquant_current_position_btc`（cycle 結束後持倉是 0，看不出單位）。對不上 ETH 數量時回報 manager。
 
-  本文件不改 dashboard 與共用 probe。
+  本文件不改 dashboard 與共用 probe。ETH 單位的修正（`TQ_BASE_ASSET`）另依 [README 的 Position units](../agents/alloy/trading/README.md#position-units-tq_base_asset) 上線；上線後上面這條顯示限制即解除。
 - 五個 `…_ok`／`config_snapshot_match` 都是 `1`，上面每一項都有結論，才算核對完成。
 
 ## 正式 enable 之前：把 `TQ_STRATEGY_DISABLED` 改回 `0` `[CHANGE Trading01]`
