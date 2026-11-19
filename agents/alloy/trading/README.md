@@ -149,8 +149,8 @@ full shadow → canary process.
    `0` or `1`. Set it back to `0` with `add` before the strategy is started
    again.
    `TQ_BASE_ASSET` (default `BTC`) names the asset the strategy's position
-   quantities are counted in, for example `ETH` for `popdex-02`. See
-   [Position units](#position-units-tq_base_asset).
+   quantities are counted in, for example `ETH` for `popdex-02`; leave the
+   line out for BTC. See [Position units](#position-units-tq_base_asset).
 2. Repo:
 
    ~~~bash
@@ -227,18 +227,29 @@ The producer logs position quantities as `*_qty_btc` and the done marker as
 `*_btc` on every lane, including lanes whose base asset is not BTC: the names
 predate those lanes. The probe publishes the numbers as they are, in
 `tnauqquant_current_position_btc` and `tnauqquant_current_net_position_btc`,
-and those names do not change (history and queries depend on them). What the
-number is counted in comes from the env:
+and neither those names nor their `# HELP` text change (history, queries and a
+shared textfile collector depend on them). What the number is counted in comes
+from the env:
 
-- `TQ_BASE_ASSET`: one to 16 upper-case letters or digits, default `BTC` when
-  unset or empty. `add` and the probe refuse any other form; a probe that
-  refuses publishes nothing new, so its telemetry goes stale.
+- `TQ_BASE_ASSET`: one to 16 ASCII upper-case letters or digits
+  (`ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789`, whatever the locale). With no
+  `TQ_BASE_ASSET` line the lane is `BTC`. A line with an empty value, any
+  other character (lower case, full-width `ＥＴＨ`, punctuation) or a form
+  other than a literal `TQ_BASE_ASSET=VALUE` (`export TQ_BASE_ASSET=…`,
+  `TQ_BASE_ASSET=$VAR`) is refused by `setup-linux.sh` render and `add`
+  before anything is written. systemd reads the file without a shell, so
+  only the literal form reaches the probe as written.
+- The probe refuses an empty or invalid value too; a probe that refuses
+  publishes nothing new, so its telemetry goes stale. `setup-macos.sh` does
+  not check the value: leave it out on Mac lanes (they are BTC). An invalid
+  value there makes every probe run fail.
 - The probe adds `base_asset="<value>"` to the two position metrics only. Every
   other series keeps its labels.
 - The central recordings `trading_strategy_current_position_btc` and
-  `trading_strategy_current_net_position_btc` keep `base_asset`, and record a
-  series without it (a probe from before this setting, which only ran BTC
-  lanes) as `BTC`.
+  `trading_strategy_current_net_position_btc` keep `base_asset`. A raw series
+  without it comes from a probe older than this setting, which cannot say what
+  it counts in; the recording calls it `BTC`. That is right for BTC lanes and
+  wrong for a non-BTC lane, which is why hosts go first (below).
 - Strategy detail names the asset in each value of "目前持倉 · 多空方向"; the
   fleet table shows it in the "單位" column next to "淨部位". Quantities in
   different assets are never added together.
@@ -246,30 +257,100 @@ number is counted in comes from the env:
 A lane is not BTC only if its env says so; nothing in SkyEye lists lanes by
 asset. Today that is `popdex-02` (`TQ_BASE_ASSET=ETH` in its example).
 
-**Rolling it out to a host.** The value only takes effect with a probe that
-reads it, and `probe.sh` is shared by every templated probe on the host, so
-`setup-linux.sh` replaces it only while every `skyeye-trading-probe@*` is
-stopped and disabled (`shared probe artifacts changed` otherwise). On
-Trading01 that is the stop-all procedure of
-[the Trading01 PopDEX rollout](../../../docs/trading01-popdex-rollout.md),
-Phase 3, run from a checkout that has this setting: before it, add
-`TQ_BASE_ASSET=ETH` to the staged popdex-02 env (BTC lanes need no edit), then
-`add` every strategy again with its own env and restore each timer to how it
-was. The other probes publish nothing while they are stopped.
+**Order: hosts with a non-BTC lane first, central after.** `scripts/central-deploy`
+deploys the latest `origin/master`, so once this change is merged nobody runs it
+(for any change) until step 6 below has passed on Trading01. If central goes
+first, the recordings store the non-BTC lane's quantities as `base_asset="BTC"`
+until its host runs the new probe; Prometheus keeps those samples, so that
+stretch of `popdex-02` history reads BTC on both dashboards until it ages out
+of retention. For that stretch read the raw `tnauqquant_current_*position_btc`
+series and count them as ETH. Host first has no such window: the current
+central recordings already keep the label, and the current panels drop it and
+show the old BTC unit, as before.
 
-Order does not matter for correctness; each half alone looks like this:
+**Updating Trading01.** `probe.sh` is shared by every templated probe on the
+host, so `setup-linux.sh` replaces it only while every `skyeye-trading-probe@*`
+is stopped and disabled (`shared probe artifacts changed` otherwise). Run as
+root from a staged checkout of the merge commit, with the Alloy version checked
+(see above) and outside UTC 18:15–19:30. The other lanes' probes publish
+nothing between steps 2 and 4.
 
-- Host first, central not yet deployed: series carry `base_asset` and the
-  current recordings already keep it, but the current panels drop it, so
-  `popdex-02` still shows its ETH quantity under BTC, as before.
-- Central first, host not yet updated: the recordings label every lane `BTC`
-  (no probe sends the label yet), so the panels show `BTC` for `popdex-02` too,
-  now spelled out per value. Nothing breaks; the ETH lane is still mislabelled
-  until its host is updated.
+1. Record each probe timer's state and the start time:
 
-Both done: `popdex-02` shows ETH and BTC lanes show BTC. A probe left on the
-old version keeps showing BTC, which is right for every lane except a non-BTC
-one.
+   ~~~bash
+   SETUP=<checkout>/agents/alloy/trading/setup-linux.sh
+   WORK=/root/skyeye-base-asset-$(date -u +%Y%m%dT%H%M%SZ); install -d -m 700 "$WORK"
+   date +%s >"$WORK/start-epoch"
+   for env in /etc/skyeye-trading/instances/*.env; do
+     s="$(basename "$env" .env)"; e=disabled; a=inactive
+     systemctl is-enabled --quiet "skyeye-trading-probe@$s.timer" && e=enabled
+     systemctl is-active --quiet "skyeye-trading-probe@$s.timer" && a=active
+     printf '%s %s %s\n' "$s" "$e" "$a"
+     install -m 600 "$env" "$WORK/$s.env"
+   done | tee "$WORK/timers.before"
+   ~~~
+
+2. Stop and disable every one of them, then confirm none is enabled or active:
+
+   ~~~bash
+   while read -r s _ _ <&3; do
+     systemctl disable --now "skyeye-trading-probe@$s.timer"
+     systemctl stop "skyeye-trading-probe@$s.service"
+   done 3<"$WORK/timers.before"
+   systemctl is-active --quiet 'skyeye-trading-probe@*' && echo "STOP: a probe is still active"
+   systemctl is-enabled --quiet 'skyeye-trading-probe@*.timer' && echo "STOP: a probe timer is still enabled"
+   ~~~
+
+   Any `STOP`: do not go on to step 3; restore the timers as in step 4.
+
+3. Add `TQ_BASE_ASSET=ETH` to the popdex-02 copy only (BTC lanes get no line),
+   then `add` every existing strategy with its own env from the new checkout.
+   A timer recorded `enabled active` gets `--enable-probe`; any other state is
+   added without it:
+
+   ~~~bash
+   printf 'TQ_BASE_ASSET=ETH\n' >>"$WORK/popdex-02.env"
+   while read -r s e a <&3; do
+     flag=; [ "$e $a" = "enabled active" ] && flag=--enable-probe
+     "$SETUP" add --env-file "$WORK/$s.env" $flag </dev/null 2>&1 | tee "$WORK/add-$s.out"
+     [ "${PIPESTATUS[0]}" = 0 ] || { echo "STOP: add $s failed"; break; }
+   done 3<"$WORK/timers.before"
+   ~~~
+
+   Any `STOP` or `Alloy action: restart`: stop here and report. Do not
+   `retire` anything to recover.
+4. Put every timer back as step 1 recorded it. After a full step 3 the
+   `enabled active` ones are already back; any that is not (or after a STOP)
+   gets `systemctl enable --now skyeye-trading-probe@<s>.timer`. A timer
+   recorded `enabled inactive` gets `systemctl enable` without `--now`; a
+   `disabled` one stays disabled. Run step 1's loop again into
+   `$WORK/timers.after` (it rewrites the env copies, which is harmless) and
+   `diff` it with `timers.before`: no output.
+5. Check every textfile was rewritten by the new probe. Each instance recorded
+   `enabled active` (all four on Trading01 today) must show a modification time
+   after `start-epoch`, and `popdex-02`'s file, if it has position series, must
+   carry `base_asset="ETH"`:
+
+   ~~~bash
+   start=$(cat "$WORK/start-epoch"); sleep 30
+   for f in /var/lib/skyeye-trading/textfile/tnauqquant-*.prom; do
+     printf '%s %s\n' "$f" "$([ "$(stat -c %Y "$f")" -gt "$start" ] && echo NEW || echo OLD)"
+   done
+   grep -h '^tnauqquant_current_.*position_btc{' /var/lib/skyeye-trading/textfile/tnauqquant-*.prom
+   ~~~
+
+   An `OLD` file of an `enabled active` instance: report it before step 6.
+6. On central, before `scripts/central-deploy`, query
+   `count by (strategy, base_asset) (tnauqquant_current_net_position_btc{server_id="trading01"})`:
+   every lane with a position shows its `base_asset`, `popdex-02` as `ETH`.
+   If `popdex-02` has no position series yet (the lane has not run), there is
+   nothing to mislabel; step 5's `NEW` for its file is enough. Then deploy
+   central.
+
+[The Trading01 PopDEX rollout](../../../docs/trading01-popdex-rollout.md)
+stopped and restored the probes the same way, but its lane list, new-lane `add`
+and R3 rollback (which retires `popdex-btc`) belong to that onboarding only and
+do not apply here.
 
 ### Legacy flag form and singleton migration
 
