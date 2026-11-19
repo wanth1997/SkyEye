@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-11-19 15:20 — Trading01：移除 lighter-mainnet-btc-canary，popdex-02 executor 改名
+
+**改動摘要：** `lighter-mainnet-btc-canary` 已不再交易，從 Trading01 的監控 inventory 移除；popdex-02 的帳號由 `popdex-main` 改名為 `popdex-02`，SkyEye 的 executor 對應跟著改。只 merge，Trading01 與中央都還沒部署。
+
+**修改的檔案：**
+- `prometheus/rules/trading-targets.yml`：用 `scripts/trading-target remove --server trading01 --strategy lighter-mainnet-btc-canary` 移除該 row。
+- `agents/alloy/trading/README.md`、`docs/project-brief.md`、`docs/trading-new-server-handoff.md`、`docs/trading01-popdex-rollout.md`：Trading01 剩三條 lane。mainnet env example 仍被 Linux setup 與 rollout 演練引用，保留。
+- `agents/alloy/trading/deployment-linux-popdex-02.env.example`：預填 `TQ_EXECUTOR_MAP=popdex-02=popdex`；`popdex-btc` 仍是 `popdex-main`。
+- `docs/trading01-popdex-02-onboarding.md`：記錄 executor 改名，更新 config 與 raw log 的核對步驟。
+
+**原因/備註：** Wan 在 SkyEye manager 對話中要求（Linear WAN-419、WAN-422）。executor 不改的話，popdex-02 的 `exchange="popdex"` 成交量會漏計。Prometheus／Loki 的歷史資料不刪。上線由同一個 operator 在 Trading01 先 retire mainnet，再更新其餘 lane 的 probe（popdex-02 env 一併改 `TQ_EXECUTOR_MAP`），最後部署中央一次。
+
+---
+
 ## 2026-11-19 14:30 — Trading 持倉：依 lane 標示幣別、平倉後即時顯示空倉
 
 **改動摘要：** popdex-02 交易 ETH，持倉面板卻一律標 BTC；平倉成交後，面板要等下一個 signal 行才顯示空倉（popdex-02 最長 212 秒，lighter-robinhood-btc-canary 約 15 分）。這次把兩個問題一起修好。只 merge，Trading01 與中央都還沒部署。
