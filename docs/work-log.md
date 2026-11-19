@@ -15,6 +15,19 @@
 ---
 -->
 
+## 2026-11-19 16:05 — Trading Linux examples：raw log glob 收緊為契約檔名
+
+**改動摘要：** Linux Trading env example 的 `TQ_RAW_LOG_GLOB` 從寬鬆的 `*<stem>.raw.log` 改成契約檔名，避免 probe 選到名稱相似的其他 lane log；README 新增在既有主機上收緊 glob 的一次性程序。只 merge，Trading01 還沒套用。
+
+**修改的檔案：**
+- `agents/alloy/trading/deployment-linux-{robinhood,popdex,ourbit,mainnet}.env.example`：glob 改成契約檔名；`deployment-linux-popdex-02.env.example` 本來就是嚴格 glob，只調整說明。
+- `tests/trading/test-linux-env-examples.sh`：檢查 glob 形狀與實際選到的檔案，不再比對註解字首。
+- `agents/alloy/trading/README.md`：既有 lane 收緊 glob 的主機程序。兩條 lane 都通過 pre-check（manifest 綁定、24h 掉線、timer）才 add；add 後檢查 probe 時間戳至少相隔 15 秒前進、`log_binding_ok=1`，並在中央確認 Loki 收到 reload 之後的事件；每條 lane 各自回報 RESULT，失敗時後面的 lane 標 NOT_ATTEMPTED。
+
+**原因/備註：** Linear WAN-355，Wan 11-19 要求處理（SKYEYE-POPDEX02 review 發現）。Codex review 三輪，最後 READY_WITH_MINOR；剩下的 C11（單行超過 64 KiB 時 Loki 驗證會誤報 unparseable_time）不修，log 行遠小於此，誤報也只會停下驗證，不會改到主機。Trading01 的 robinhood 與 popdex-btc 由 operator 依 README 另行套用，不碰策略。
+
+---
+
 ## 2026-11-19 15:20 — Trading01：移除 lighter-mainnet-btc-canary，popdex-02 executor 改名
 
 **改動摘要：** `lighter-mainnet-btc-canary` 已不再交易，從 Trading01 的監控 inventory 移除；popdex-02 的帳號由 `popdex-main` 改名為 `popdex-02`，SkyEye 的 executor 對應跟著改。只 merge，Trading01 與中央都還沒部署。
