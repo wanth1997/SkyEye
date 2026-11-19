@@ -578,9 +578,9 @@ do not apply here.
 
 ### Probe CPU limits and shared probe rollout
 
-`probe.sh` is stateless: it keeps no offset or cache file on disk, so every 15-second run computes metrics directly from the raw logs and needs no manual cache reset. To keep per-run CPU low on full-day logs, it pre-filters with `LC_ALL=C grep -a -b -F` in one pass over the manifest log for `pnl_status`, `ui_warmup_async_ready` and `carrier_venue=`, scans only the last 256 KiB for the newest `coordinator_book` net position (falling back to a full scan if none sits in that window), and reuses the manifest pass for `tnauqquant_completed_cycles_today`.
+`probe.sh` is stateless: it keeps no offset or cache file on disk, so every 15-second run computes metrics directly from the raw logs and needs no manual cache reset. To keep per-run CPU low on full-day logs, it reads the active manifest log once through `LC_ALL=C grep -a -n -F` (`pnl_status`, `ui_warmup_async_ready`, `coordinator_book` and `trade_status`) into one `awk` pass and reuses that pass for `tnauqquant_completed_cycles_today`.
 
-`skyeye-trading-probe@.service.tmpl` sets `Nice=10`, `CPUWeight=20` and `CPUQuota=20%` so probe runs yield to `tnauqquant` trading processes and cannot exhaust CPU credits on a 2-vCPU host. On Ubuntu (`mawk` + GNU `grep`), a synthetic full-day log matching `popdex-02` (~54 MiB / 80k lines) runs in ~0.14 CPU-s (~0.7s wall-clock under `CPUQuota=20%`), and a 205 MiB / 300k-line log runs in ~0.26 CPU-s (~1.3s wall-clock under `CPUQuota=20%`) — well inside the 15-second timer interval.
+`skyeye-trading-probe@.service.tmpl` sets `Nice=10`, `CPUWeight=20` and `CPUQuota=20%` per instance (4 lanes = up to 80% of one core in aggregate on a 2-vCPU host) so probe runs yield to `tnauqquant` trading processes and cannot exhaust CPU credits. On Ubuntu (`mawk` + GNU `grep`), a synthetic full-day log matching `popdex-02` (~54 MiB / 80k lines) runs in ~0.28 CPU-s (~1.4s probe-script wall-time estimate under `CPUQuota=20%`), and a 205 MiB / 300k-line log runs in ~0.90 CPU-s (~4.5s probe-script wall-time estimate); total unit duration (including `ExecStartPre`) is measured during the rollout.
 
 **Rolling out shared `probe.sh` and `skyeye-trading-probe@.service` changes on Trading01.** Both files are shared by every templated probe, so `setup-linux.sh` refuses to replace them while any `skyeye-trading-probe@*` service or timer is active or enabled. Run as `root` outside UTC 18:15–19:30, after checking `alloy --version | head -1`:
 
@@ -592,7 +592,7 @@ do not apply here.
    - `systemctl show skyeye-trading-probe@<s>.service -p Nice -p CPUWeight -p CPUQuotaPerSecUSec` shows `Nice=10`, `CPUWeight=20`, `CPUQuotaPerSecUSec=200ms`.
    - Every active lane's `/var/lib/skyeye-trading/textfile/tnauqquant-<s>.prom` has mtime after `start-epoch` and `tnauqquant_probe_timestamp_seconds` advances every ~15s.
 
-**Rollback:** stop and disable all `skyeye-trading-probe@*.timer` and `.service`, re-run `setup-linux.sh add` per strategy from the previous `origin/master` checkout (or restore `probe.sh` and `skyeye-trading-probe@.service` from the rollback record printed by the first `add` and run `systemctl daemon-reload`), then restore timers from `timers.before`. Neither rollout nor rollback touches any trading process or central config.
+**Rollback:** stop and disable all `skyeye-trading-probe@*.timer` and stop all `skyeye-trading-probe@*.service` (do not disable the service units), re-run `setup-linux.sh add` per strategy from the previous `origin/master` checkout (or restore `probe.sh` and `skyeye-trading-probe@.service` from the rollback record printed by the first `add` and run `systemctl daemon-reload`), then restore timers from `timers.before`. Neither rollout nor rollback touches any trading process or central config.
 
 ### Legacy flag form and singleton migration
 
