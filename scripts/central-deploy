@@ -615,6 +615,40 @@ def grafana_get(curl, url, header, path):
         sys.exit("GET %s did not return JSON" % path)
 
 
+def grafana_get_optional(curl, url, header, path):
+    done = subprocess.run(
+        [curl, "--config", "-", "-fsS", "--max-time", "10", url + path],
+        input=header, capture_output=True, text=True,
+    )
+    if done.returncode != 0:
+        return None
+    try:
+        return json.loads(done.stdout)
+    except ValueError:
+        return None
+
+
+def grafana_source_matches(curl, url, header, uid, live, want_path):
+    external_id = (live.get("meta") or {}).get("provisionedExternalId")
+    if external_id == want_path:
+        return True
+    if external_id:
+        return False
+    # Grafana 12.4 unified-storage migration copies legacy provisioning paths
+    # into grafana.app/sourcePath as relative paths, leaving legacy
+    # meta.provisionedExternalId empty until the file is rewritten.
+    resource = grafana_get_optional(
+        curl, url, header, "/apis/dashboard.grafana.app/v1beta1/namespaces/default/dashboards/" + uid
+    )
+    if not isinstance(resource, dict):
+        return False
+    annotations = (resource.get("metadata") or {}).get("annotations") or {}
+    return (
+        annotations.get("grafana.app/managedBy") == "classic-file-provisioning"
+        and annotations.get("grafana.app/sourcePath") == want_path
+    )
+
+
 def grafana_probe(curl, url, token_file, checkout):
     # A token without a role is answered with 200 and an empty list.
     header = token_header(token_file, checkout)
@@ -644,7 +678,7 @@ def grafana_confirm(curl, url, token_file, checkout, manifest_path):
         if comparable(live.get("dashboard", {})) != want["body"]:
             problems.append("%s still serves other content than %s" % (uid, want["path"]))
             differing.append(uid)
-        elif live.get("meta", {}).get("provisionedExternalId") != want["path"]:
+        elif not grafana_source_matches(curl, url, header, uid, live, want["path"]):
             problems.append("%s is not provisioned from %s" % (uid, want["path"]))
     if differing:
         problems.append("if that is a UI edit, export %s to Git and deploy that, or undo the edit" % ", ".join(differing))
