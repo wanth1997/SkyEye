@@ -90,9 +90,59 @@ promoted += case(expr(summary, "E"), "{}", len(alerts))
 # Query L also returns a zero row per inventory strategy, so sum the column.
 promoted += case(f'sum({expr(fleet, "L")})', "{}", len(alerts))
 open(output.replace("dashboard.test", "promoted.test"), "w", encoding="utf-8").write("\n".join(promoted) + "\n")
+
+# Position quantities are in each lane's base asset. An ETH lane and a BTC lane
+# must stay separate rows, each naming its own asset, on both dashboards. The
+# fixture has no ETH target, so an inventoried one stands in for it. The BTC
+# lane runs a probe from before TQ_BASE_ASSET and sends no label at all.
+ETH_SERVER, ETH_STRATEGY = "trading01", "lighter-mainnet-btc-canary"
+ETH_LABELS = f'product="tnauqquant",environment="production",server_id="{ETH_SERVER}",strategy="{ETH_STRATEGY}"'
+position = targets("trading-strategy-detail.json", "目前持倉 · 多空方向")
+
+def lane(queries, ref, server, strategy):
+    if ref not in queries:
+        sys.exit(f"FAIL: dashboard has no query {ref}")
+    return queries[ref].replace("$server_id", server).replace("$strategy", strategy)
+
+def rows(query, samples):
+    quoted = query.replace("'", "''")
+    out = [f"      - expr: '{quoted}'", "        eval_time: 1m", "        exp_samples:"]
+    for labels, value in samples:
+        out += [f"          - labels: '{labels}'", f"            value: {value}"]
+    return out
+
+units = ["rule_files:", "  - inventory.yml", "  - trading.yml", "evaluation_interval: 30s", "tests:",
+         "  - name: ETH and BTC lanes keep their own position units", "    interval: 30s", "    input_series:",
+         f"      - series: 'tnauqquant_current_net_position_btc{{{ETH_LABELS},base_asset=\"ETH\"}}'", "        values: '-0.1x5'",
+         f"      - series: 'tnauqquant_current_position_btc{{{ETH_LABELS},base_asset=\"ETH\",exchange=\"popdex\",side=\"short\"}}'", "        values: '0.1x5'",
+         f"      - series: 'tnauqquant_current_net_position_btc{scoped}'", "        values: '0.25x5'",
+         f"      - series: 'tnauqquant_current_position_btc{{{LABELS},exchange=\"toobit\",side=\"long\"}}'", "        values: '0.25x5'",
+         "    promql_expr_test:"]
+units += rows(expr(fleet, "E"), [(f'{{strategy="{ETH_STRATEGY}",base_asset="ETH"}}', -0.1),
+                                 (f'{{strategy="{STRATEGY}",base_asset="BTC"}}', 0.25)])
+units += rows(lane(position, "B", ETH_SERVER, ETH_STRATEGY), [('{exchange="popdex",base_asset="ETH"}', -0.1)])
+units += rows(lane(position, "D", ETH_SERVER, ETH_STRATEGY),
+              [(f'trading_strategy_current_net_position_btc{{{ETH_LABELS},base_asset="ETH"}}', -0.1)])
+units += rows(lane(position, "A", SERVER, STRATEGY), [('{exchange="toobit",base_asset="BTC"}', 0.25)])
+units += rows(lane(position, "D", SERVER, STRATEGY),
+              [(f'trading_strategy_current_net_position_btc{{{LABELS},base_asset="BTC"}}', 0.25)])
+open(output.replace("dashboard.test", "units.test"), "w", encoding="utf-8").write("\n".join(units) + "\n")
+
+# No position number on these panels may carry a fixed BTC unit, and every
+# detail value must name its asset.
+for name, title in [("trading-strategy-detail.json", "目前持倉 · 多空方向"),
+                    ("trading-strategy-fleet.json", "策略損益與運行狀態 · 點選策略查看詳情")]:
+    data = json.load(open(f"{dashboards}/{name}", encoding="utf-8"))
+    panel = next(p for p in data["panels"] if p["title"] == title)
+    if "BTC" in json.dumps(panel["fieldConfig"], ensure_ascii=False):
+        sys.exit(f"FAIL: {name} {title} still fixes a BTC unit")
+for target in next(p for p in json.load(open(f"{dashboards}/trading-strategy-detail.json", encoding="utf-8"))["panels"]
+                   if p["title"] == "目前持倉 · 多空方向")["targets"]:
+    if "{{base_asset}}" not in target.get("legendFormat", ""):
+        sys.exit(f"FAIL: position query {target['refId']} does not name its base asset")
 PY
 
 tar -C "$WORK" -cf - . | docker run -i --rm --network none --entrypoint /bin/sh "$IMAGE" \
-  -c 'mkdir -p /tmp/w && tar -xf - -C /tmp/w && cd /tmp/w && promtool test rules dashboard.test.yml promoted.test.yml' || \
-  fail "dashboard queries hide stale financial data, future timestamps or promoted alerts"
-printf 'PASS: Trading dashboard freshness and promoted alert semantics\n'
+  -c 'mkdir -p /tmp/w && tar -xf - -C /tmp/w && cd /tmp/w && promtool test rules dashboard.test.yml promoted.test.yml units.test.yml' || \
+  fail "dashboard queries hide stale financial data, future timestamps or promoted alerts, or merge position units"
+printf 'PASS: Trading dashboard freshness, promoted alert and position unit semantics\n'

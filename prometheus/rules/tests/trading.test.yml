@@ -724,3 +724,47 @@ tests:
             exp_annotations:
               summary: 'macmini-m2 toobit-mexc-btc P&L history is unavailable or stale'
               runbook_url: 'https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md#pnl-history-unavailable'
+
+  # The asset is a label, not the metric name: the _btc names are historical.
+  # The fixture has no ETH target, so an inventoried target stands in for one.
+  - name: position recordings carry the probe's base asset and default to BTC
+    interval: 30s
+    input_series:
+      - series: 'tnauqquant_current_net_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary",base_asset="ETH"}'
+        values: '-0.1x5'
+      - series: 'tnauqquant_current_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary",base_asset="ETH",exchange="popdex",side="short"}'
+        values: '0.1x5'
+      - series: 'tnauqquant_current_net_position_btc{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc",base_asset="BTC"}'
+        values: '0.25x5'
+      - series: 'tnauqquant_current_position_btc{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc",base_asset="BTC",exchange="toobit",side="long"}'
+        values: '0.25x5'
+      # A probe from before TQ_BASE_ASSET: no label, and it only ran BTC lanes.
+      - series: 'tnauqquant_current_net_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary"}'
+        values: '0.003x5'
+      - series: 'tnauqquant_current_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary",exchange="lighter",side="long"}'
+        values: '0.003x5'
+      # Not in the inventory: never recorded, whatever its asset.
+      - series: 'tnauqquant_current_net_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="not-a-target",base_asset="ETH"}'
+        values: '5x5'
+    promql_expr_test:
+      - expr: 'trading_strategy_current_net_position_btc'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'trading_strategy_current_net_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary",base_asset="ETH"}'
+            value: -0.1
+          - labels: 'trading_strategy_current_net_position_btc{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc",base_asset="BTC"}'
+            value: 0.25
+          - labels: 'trading_strategy_current_net_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary",base_asset="BTC"}'
+            value: 0.003
+      - expr: 'trading_strategy_current_position_btc'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'trading_strategy_current_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-mainnet-btc-canary",base_asset="ETH",exchange="popdex",side="short"}'
+            value: 0.1
+          - labels: 'trading_strategy_current_position_btc{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc",base_asset="BTC",exchange="toobit",side="long"}'
+            value: 0.25
+          - labels: 'trading_strategy_current_position_btc{product="tnauqquant",environment="production",server_id="trading01",strategy="lighter-robinhood-btc-canary",base_asset="BTC",exchange="lighter",side="long"}'
+            value: 0.003
+      - expr: 'count(trading_strategy_current_net_position_btc{base_asset=""})'
+        eval_time: 1m
+        exp_samples: []
