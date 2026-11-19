@@ -715,4 +715,138 @@ time=2025-07-17T09:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=
 EOF
 assert_identical "scenario 14b (C7): multiple exchange labels containing section markers match baseline byte-for-byte" "$NOW_DEFAULT"
 
+printf '# Scenario 15: 80 historical glob matches with varied mtimes, spaces, and shasum fallback\n'
+new_fixture many-logs many_logs_config 'lighter-main=lighter' Asia/Taipei
+# 70 older logs (days before today in Asia/Taipei), some with spaces in names.
+old_base_epoch="$(epoch_of 2025-07-10T00:00:00Z)"
+for idx in $(seq -w 1 70); do
+  if [[ "$idx" == "15" || "$idx" == "42" ]]; then
+    hist_path="$REPO/logs/live-runs/20250710_0000${idx}_with space_many_logs_config.raw.log"
+  else
+    hist_path="$REPO/logs/live-runs/20250710_0000${idx}_many_logs_config.raw.log"
+  fi
+  printf 'time=2025-07-10T01:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=old.%s session_cycle=1 real_pnl_usdt=1 cycles_completed=1\n' "$idx" >"$hist_path"
+  touch_epoch "$hist_path" "$((old_base_epoch + 10#$idx * 60))"
+done
+
+# 10 today logs (mtime >= today start in Asia/Taipei), including a name with spaces and a newest log.
+today_base_epoch="$(epoch_of 2025-07-17T00:00:00Z)"
+NEWEST_SPACED_LOG="$REPO/logs/live-runs/20250717_090000_today space_many_logs_config.raw.log"
+for idx in $(seq -w 1 9); do
+  hist_path="$REPO/logs/live-runs/20250717_0000${idx}_many_logs_config.raw.log"
+  if [[ "$idx" -le 5 ]]; then
+    printf 'time=2025-07-17T01:0%s:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=t.%s session_cycle=1 real_pnl_usdt=%s cycles_completed=1\n' "$idx" "$idx" "$idx" >"$hist_path"
+  else
+    printf 'time=2025-07-17T02:0%s:00Z level=INFO msg=unrelated_only detail=quiet\n' "$idx" >"$hist_path"
+  fi
+  touch_epoch "$hist_path" "$((today_base_epoch + 10#$idx * 300))"
+done
+cat >"$NEWEST_SPACED_LOG" <<'EOF'
+time=2025-07-17T08:30:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=space.1 session_cycle=1 real_pnl_usdt=9.5 cycles_completed=1 volume_usd_by_executor=lighter-main:2500
+EOF
+touch_epoch "$NEWEST_SPACED_LOG" "$(epoch_of 2025-07-17T09:15:00Z)"
+
+# Sub-case 15a: manifest bound to one of the today logs (not the newest spaced log).
+RUN15="20250717_000005_many_logs_config"
+LOG15="$REPO/logs/live-runs/$RUN15.raw.log"
+write_manifest "$RUN15" "$LOG15" "2025-07-17T00:05:00Z"
+assert_identical "scenario 15a: 80 historical logs (manifest-bound + today cycles + spaces)" "$NOW_DEFAULT"
+
+# Sub-case 15b: heuristic mode without manifest (exercises latest-log selection across 80 files including spaces).
+rm -f "$MANIFEST_PATH"
+export TQ_REQUIRE_RUNTIME_CONTRACT=0
+assert_identical "scenario 15b: 80 historical logs heuristic mode latest-log selection with spaces" "$NOW_DEFAULT"
+export TQ_REQUIRE_RUNTIME_CONTRACT=1
+
+# Sub-case 15c: shasum fallback when sha256sum is absent from PATH.
+write_manifest "$RUN15" "$LOG15" "2025-07-17T00:05:00Z"
+NO_SHA256SUM_BIN="$CASE_DIR/no-sha256sum-bin"
+mkdir -p "$NO_SHA256SUM_BIN"
+for tool in awk basename bash chmod date env find grep head jq lsof mkdir mktemp mv ps readlink rm sed shasum sort stat; do
+  tool_path="$(command -v "$tool" || true)"
+  [[ -n "$tool_path" ]] && ln -s "$tool_path" "$NO_SHA256SUM_BIN/$tool"
+done
+rm -f "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$SHIM:$PATH" "$OLD_PROBE"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$SHIM:$NO_SHA256SUM_BIN" "$NEW_PROBE"
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 15c: shasum fallback without sha256sum differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 15c: shasum fallback without sha256sum matches baseline byte-for-byte\n'
+
+# Sub-case 15d: GNU stat -c and GNU date -d paths match baseline byte-for-byte on macOS too.
+REAL_STAT="$(command -v stat)"
+GNU_SHIM="$CASE_DIR/gnu-shim"
+mkdir -p "$GNU_SHIM"
+GNU_STAT_CALLS="$CASE_DIR/gnu-stat.calls"
+: >"$GNU_STAT_CALLS"
+cat >"$GNU_SHIM/stat" <<SHIM_EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'call\n' >>"$GNU_STAT_CALLS"
+if [[ "\${1:-}" == "-c" && "\${2:-}" == "%Y" ]]; then
+  shift 2
+  if [[ "\${1:-}" == "--" ]]; then shift; fi
+  if "$REAL_STAT" -c '%Y' -- "\$@" 2>/dev/null; then
+    exit 0
+  fi
+  exec "$REAL_STAT" -f '%m' -- "\$@"
+fi
+exit 1
+SHIM_EOF
+cat >"$GNU_SHIM/date" <<SHIM_EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "\${FAKE_NOW:-}" ]]; then
+  case "\$*" in
+    +%s) printf '%s\n' "\$FAKE_NOW"; exit 0 ;;
+    +%F) "$REAL_DATE" -r "\$FAKE_NOW" +%F 2>/dev/null || "$REAL_DATE" -d "@\$FAKE_NOW" +%F; exit ;;
+  esac
+fi
+if [[ "\${1:-}" == "-d" ]]; then
+  spec="\$2"
+  fmt="\$3"
+  if "$REAL_DATE" -d "\$spec" "\$fmt" 2>/dev/null; then
+    exit 0
+  fi
+  case "\$spec" in
+    *" + 1 day")
+      day="\${spec% + 1 day}"
+      exec "$REAL_DATE" -j -v+1d -f '%Y-%m-%d' "\$day" "\$fmt"
+      ;;
+    *" 00:00:00"|*" 01:00:00")
+      exec "$REAL_DATE" -j -f '%Y-%m-%d %H:%M:%S' "\$spec" "\$fmt"
+      ;;
+    *Z)
+      norm="\$(printf '%s' "\$spec" | sed -E 's/\\.[0-9]+Z\$/Z/')"
+      exec "$REAL_DATE" -j -f '%Y-%m-%dT%H:%M:%SZ' "\$norm" "\$fmt"
+      ;;
+    *)
+      norm="\$(printf '%s' "\$spec" | sed -E 's/\\.[0-9]+([+-][0-9]{2}):([0-9]{2})\$/\\1\\2/; s/([+-][0-9]{2}):([0-9]{2})\$/\\1\\2/')"
+      exec "$REAL_DATE" -j -f '%Y-%m-%dT%H:%M:%S%z' "\$norm" "\$fmt"
+      ;;
+  esac
+fi
+exec "$REAL_DATE" "\$@"
+SHIM_EOF
+chmod 755 "$GNU_SHIM/stat" "$GNU_SHIM/date"
+rm -f "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$SHIM:$PATH" "$OLD_PROBE"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$GNU_SHIM:$PATH" "$NEW_PROBE"
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 15d: GNU stat/date path differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+gnu_stat_count="$(wc -l <"$GNU_STAT_CALLS" | tr -d ' ')"
+if [[ "$gnu_stat_count" != "1" ]]; then
+  printf 'FAIL: scenario 15d: expected 1 batched GNU stat call for 80 logs, got %s\n' "$gnu_stat_count" >&2
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 15d: GNU stat/date path matches baseline with 1 stat call for 80 logs\n'
+
 printf 'PASS: %s probe equivalence checks matched baseline byte-for-byte\n' "$PASS_COUNT"
