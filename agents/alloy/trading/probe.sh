@@ -309,6 +309,12 @@ mapped_executor_volumes() {
   ' "$log_path"
 }
 
+# Prints line, time, initiator venue/side/qty, carrier venue/side/qty and source
+# ("book" or "gross_flat") of the newest venue observation. A gross-flat line
+# (see latest_net_position_snapshot) is one too, with "-" venues: otherwise a
+# later book line that carries only net, as every waiting_entry line does, would
+# bring back the closed legs of a two-exchange lane. A one-exchange lane takes
+# it only after a two-leg line, so it never gains a venue source of its own.
 latest_position_snapshot() {
   local log_path="$1"
   awk -v mapping="$TQ_EXECUTOR_MAP" '
@@ -338,6 +344,9 @@ latest_position_snapshot() {
       carrier_venue = ""
       carrier_side = ""
       carrier_qty = ""
+      message = ""
+      executor = ""
+      reason = ""
 
       for (i = 1; i <= NF; i++) {
         equals = index($i, "=")
@@ -353,6 +362,19 @@ latest_position_snapshot() {
         if (key == "carrier_venue") carrier_venue = value
         if (key == "carrier_side") carrier_side = normalize_side(value)
         if (key == "carrier_qty_btc") carrier_qty = value
+        # The record names these first; a quoted summary may repeat them.
+        if (key == "msg" && message == "") message = value
+        if (key == "executor" && executor == "") executor = value
+        if (key == "reason" && reason == "") reason = value
+      }
+
+      if (message == "ui_warmup_async_ready" &&
+          index(reason, "gross_flat_verified:") == 1 &&
+          executor != "" && mapped_executor[executor]) {
+        if (mapping_count > 1 || latest != "") {
+          latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t-\tflat\t0\t-\tflat\t0\tgross_flat"
+        }
+        next
       }
 
       if (projection != "coordinator_book" ||
@@ -367,18 +389,18 @@ latest_position_snapshot() {
       # read would otherwise shift every field when an event has no time.
       latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t" \
         initiator_venue "\t" initiator_side "\t" initiator_qty "\t" \
-        carrier_venue "\t" carrier_side "\t" carrier_qty
+        carrier_venue "\t" carrier_side "\t" carrier_qty "\tbook"
     }
     END { if (latest != "") print latest }
   ' "$log_path"
 }
 
-# Prints line, time, side, quantity and source ("book" or "gross_flat") of the
-# newest net observation. The producer logs the coordinator book before a close
-# order fills and nothing with position fields after it, so book lines alone keep
-# the pre-close position until the next signal line. Its gross_flat_verified
-# readiness line is the post-fill proof that every venue is flat; a filled
-# close_position is not, because it may be partial.
+# Prints line, time, side and quantity of the newest net observation. The
+# producer logs the coordinator book before a close order fills and nothing with
+# position fields after it, so book lines alone keep the pre-close position
+# until the next signal line. Its gross_flat_verified readiness line is the
+# post-fill proof that every venue is flat; a filled close_position is not,
+# because it may be partial.
 latest_net_position_snapshot() {
   local log_path="$1"
   awk -v mapping="$TQ_EXECUTOR_MAP" '
@@ -423,11 +445,11 @@ latest_net_position_snapshot() {
       }
       if (projection == "coordinator_book" && net_side != "" &&
           valid_number(net_qty) && net_qty + 0 >= 0) {
-        latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t" net_side "\t" net_qty "\tbook"
+        latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\t" net_side "\t" net_qty
       } else if (message == "ui_warmup_async_ready" &&
                  index(reason, "gross_flat_verified:") == 1 &&
                  executor != "" && mapped_executor[executor]) {
-        latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\tflat\t0\tgross_flat"
+        latest = NR "\t" (sample_time == "" ? "-" : sample_time) "\tflat\t0"
       }
     }
     END { if (latest != "") print latest }
@@ -1010,30 +1032,41 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
           current_initiator_qty \
           current_carrier_venue \
           current_carrier_side \
-          current_carrier_qty <<<"$POSITION_SNAPSHOT"
+          current_carrier_qty \
+          current_venue_source <<<"$POSITION_SNAPSHOT"
 
-        current_initiator_exchange="$(exchange_for_executor "$current_initiator_venue" || true)"
-        current_carrier_exchange="$(exchange_for_executor "$current_carrier_venue" || true)"
-        if [[ -n "$current_initiator_exchange" && -n "$current_carrier_exchange" ]] &&
-           is_number "$current_initiator_qty" &&
-           is_number "$current_carrier_qty" &&
-           [[ "$current_initiator_side" =~ ^(long|short|flat)$ ]] &&
-           [[ "$current_carrier_side" =~ ^(long|short|flat)$ ]] &&
-           VENUE_POSITION_TIMESTAMP="$(position_sample_epoch "$current_venue_time")"
-        then
-          CURRENT_POSITION_VALID=1
-          VENUE_POSITION_LINE="$current_venue_line"
-          CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n%s\t%s\t%s\n' \
-            "$current_initiator_exchange" "$current_initiator_side" "$current_initiator_qty" \
-            "$current_carrier_exchange" "$current_carrier_side" "$current_carrier_qty")"
-          CURRENT_NET_POSITION_BTC="$(sum_signed_position_series <<<"$CURRENT_POSITION_SERIES")"
+        if [[ "$current_venue_source" == "gross_flat" ]]; then
+          # Gross flat means every venue is flat, so no older leg survives.
+          if VENUE_POSITION_TIMESTAMP="$(position_sample_epoch "$current_venue_time")"; then
+            CURRENT_POSITION_VALID=1
+            VENUE_POSITION_LINE="$current_venue_line"
+            CURRENT_POSITION_SERIES="$(flat_position_series)"
+            CURRENT_NET_POSITION_BTC=0
+          fi
+        else
+          current_initiator_exchange="$(exchange_for_executor "$current_initiator_venue" || true)"
+          current_carrier_exchange="$(exchange_for_executor "$current_carrier_venue" || true)"
+          if [[ -n "$current_initiator_exchange" && -n "$current_carrier_exchange" ]] &&
+             is_number "$current_initiator_qty" &&
+             is_number "$current_carrier_qty" &&
+             [[ "$current_initiator_side" =~ ^(long|short|flat)$ ]] &&
+             [[ "$current_carrier_side" =~ ^(long|short|flat)$ ]] &&
+             VENUE_POSITION_TIMESTAMP="$(position_sample_epoch "$current_venue_time")"
+          then
+            CURRENT_POSITION_VALID=1
+            VENUE_POSITION_LINE="$current_venue_line"
+            CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n%s\t%s\t%s\n' \
+              "$current_initiator_exchange" "$current_initiator_side" "$current_initiator_qty" \
+              "$current_carrier_exchange" "$current_carrier_side" "$current_carrier_qty")"
+            CURRENT_NET_POSITION_BTC="$(sum_signed_position_series <<<"$CURRENT_POSITION_SERIES")"
+          fi
         fi
       fi
 
       NET_POSITION_SNAPSHOT="$(latest_net_position_snapshot "$MANIFEST_LOG_PATH")"
       if [[ -n "$NET_POSITION_SNAPSHOT" ]]; then
         IFS=$'\t' read -r current_net_line current_net_time current_net_side current_net_qty \
-          current_net_source <<<"$NET_POSITION_SNAPSHOT"
+          <<<"$NET_POSITION_SNAPSHOT"
         if [[ "$current_net_side" =~ ^(long|short|flat)$ ]] && is_number "$current_net_qty" &&
            net_position_applies "$current_net_line" \
              "$(signed_position "$current_net_side" "$current_net_qty")" &&
@@ -1041,12 +1074,7 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
         then
           CURRENT_POSITION_VALID=1
           CURRENT_NET_POSITION_BTC="$(signed_position "$current_net_side" "$current_net_qty")"
-          if [[ "$current_net_source" == "gross_flat" ]]; then
-            # Gross flat means every venue is flat, so no older venue side survives.
-            CURRENT_POSITION_SERIES="$(flat_position_series)"
-            [[ -z "$VENUE_POSITION_TIMESTAMP" ]] ||
-              VENUE_POSITION_TIMESTAMP="$NET_POSITION_TIMESTAMP"
-          elif [[ "$(executor_map_size)" -eq 1 ]]; then
+          if [[ "$(executor_map_size)" -eq 1 ]]; then
             CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n' \
               "$(first_mapped_exchange)" "$current_net_side" "$current_net_qty")"
           fi
