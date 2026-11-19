@@ -29,7 +29,7 @@ file_mtime() {
     stat -c '%Y' -- "$path"
   elif [[ "$STAT_FLAVOR" == "bsd" ]]; then
     stat -f '%m' -- "$path"
-  elif mtime="$(stat -c '%Y' -- "$path" 2>/dev/null)" && [[ "$mtime" =~ ^[0-9]+$ ]]; then
+  elif mtime="$(stat -c '%Y' -- "$path" 2>/dev/null)" && [[ "$mtime" =~ ^-?[0-9]+$ ]]; then
     printf '%s\n' "$mtime"
   else
     stat -f '%m' -- "$path"
@@ -548,7 +548,7 @@ exchange_for_executor() {
 }
 
 executor_map_size() {
-  printf '%s\n' "${#executor_entries[@]}"
+  printf '%s\n' "$EXECUTOR_MAP_SIZE"
 }
 
 first_mapped_exchange() {
@@ -824,6 +824,9 @@ old_ifs="$IFS"
 IFS=',' read -r -a executor_entries <<<"$TQ_EXECUTOR_MAP"
 IFS="$old_ifs"
 [[ "${#executor_entries[@]}" -gt 0 ]] || die "TQ_EXECUTOR_MAP must not be empty"
+# Preserve awk -F, '{ print NF }' semantics (including any trailing empty field).
+_executor_map_commas="${TQ_EXECUTOR_MAP//[^,]/}"
+EXECUTOR_MAP_SIZE=$(( ${#_executor_map_commas} + 1 ))
 seen_executors=","
 for executor_entry in "${executor_entries[@]}"; do
   [[ "$executor_entry" == *=* ]] || die "invalid TQ_EXECUTOR_MAP entry: $executor_entry"
@@ -868,7 +871,7 @@ TQ_CURL_PATH="${TQ_CURL_PATH:-$(command -v curl || true)}"
 CONFIG_REL="${TQ_CONFIG_PATH#"$TQ_REPO_ROOT"/}"
 CONFIG_STEM="${TQ_CONFIG_PATH##*/}"
 CONFIG_STEM="${CONFIG_STEM%.*}"
-config_sha_line="$("${SHA256_CMD[@]}" "$TQ_CONFIG_PATH")"
+config_sha_line="$("${SHA256_CMD[@]}" <"$TQ_CONFIG_PATH")"
 CONFIG_SHA256="${config_sha_line%%[[:space:]]*}"
 ACTUAL_INSTANCE_ID="$(config_instance_id)"
 
@@ -932,10 +935,32 @@ $(compgen -G "$TQ_RAW_LOG_GLOB" || true)
 EOF
 
 if [[ "${#RAW_LOG_FILES[@]}" -gt 0 ]]; then
+  stat_total_bytes=0
+  for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
+    stat_total_bytes=$((stat_total_bytes + ${#RAW_LOG_FILES[$raw_log_index]} + 16))
+  done
+  stat_arg_budget=131072
+  if [[ "$stat_total_bytes" -gt "$stat_arg_budget" ]]; then
+    platform_arg_max="$(getconf ARG_MAX 2>/dev/null || printf '262144')"
+    if [[ "$platform_arg_max" =~ ^[0-9]+$ && "$platform_arg_max" -gt 131072 ]]; then
+      stat_arg_budget=$((platform_arg_max / 2))
+      [[ "$stat_arg_budget" -le 1048576 ]] || stat_arg_budget=1048576
+    fi
+  fi
+
   stat_offset=0
-  stat_chunk_size=500
   while [[ "$stat_offset" -lt "${#RAW_LOG_FILES[@]}" ]]; do
-    stat_chunk=("${RAW_LOG_FILES[@]:$stat_offset:$stat_chunk_size}")
+    stat_batch_bytes=0
+    stat_end="$stat_offset"
+    while [[ "$stat_end" -lt "${#RAW_LOG_FILES[@]}" ]]; do
+      stat_entry_bytes=$(( ${#RAW_LOG_FILES[$stat_end]} + 16 ))
+      if [[ "$stat_end" -gt "$stat_offset" && $((stat_batch_bytes + stat_entry_bytes)) -gt "$stat_arg_budget" ]]; then
+        break
+      fi
+      stat_batch_bytes=$((stat_batch_bytes + stat_entry_bytes))
+      stat_end=$((stat_end + 1))
+    done
+    stat_chunk=("${RAW_LOG_FILES[@]:$stat_offset:$((stat_end - stat_offset))}")
     if [[ "$STAT_FLAVOR" == "gnu" ]]; then
       stat_output="$(stat -c '%Y' -- "${stat_chunk[@]}")"
     elif [[ "$STAT_FLAVOR" == "bsd" ]]; then
@@ -948,13 +973,13 @@ if [[ "${#RAW_LOG_FILES[@]}" -gt 0 ]]; then
     fi
     chunk_mtimes=()
     while IFS= read -r mtime_line; do
-      [[ "$mtime_line" =~ ^[0-9]+$ ]] || die "unexpected stat mtime output: $mtime_line"
+      [[ "$mtime_line" =~ ^-?[0-9]+$ ]] || die "unexpected stat mtime output: $mtime_line"
       chunk_mtimes+=("$mtime_line")
     done <<<"$stat_output"
     [[ "${#chunk_mtimes[@]}" -eq "${#stat_chunk[@]}" ]] || \
       die "stat returned ${#chunk_mtimes[@]} mtimes for ${#stat_chunk[@]} files"
     RAW_LOG_MTIMES+=("${chunk_mtimes[@]}")
-    stat_offset=$((stat_offset + stat_chunk_size))
+    stat_offset="$stat_end"
   done
 fi
 
@@ -974,6 +999,7 @@ STRATEGY_IDENTITY_OK=0
 CONFIG_SNAPSHOT_MATCH=0
 LOG_BINDING_OK=0
 MANIFEST_SCANNED=0
+MANIFEST_RAW_LOG_INDEX=-1
 MANIFEST_LOG_PATH=""
 MANIFEST_TODAY_CYCLES=""
 MARKER_BINDING_OK=0
@@ -1089,15 +1115,15 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
     then
       LOG_BINDING_OK=1
       MANIFEST_SCANNED=1
-      manifest_mtime_found=0
+      MANIFEST_RAW_LOG_INDEX=-1
       for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
         if [[ "${RAW_LOG_FILES[$raw_log_index]}" == "$MANIFEST_LOG_PATH" ]]; then
           LATEST_LOG_MTIME="${RAW_LOG_MTIMES[$raw_log_index]}"
-          manifest_mtime_found=1
+          MANIFEST_RAW_LOG_INDEX="$raw_log_index"
           break
         fi
       done
-      if [[ "$manifest_mtime_found" -eq 0 ]]; then
+      if [[ "$MANIFEST_RAW_LOG_INDEX" -lt 0 ]]; then
         LATEST_LOG_MTIME="$(file_mtime "$MANIFEST_LOG_PATH")"
       fi
       CURRENT_RUN_ID="$MANIFEST_RUN_ID"
@@ -1124,6 +1150,18 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       scan_after_cycles=$'\n'"${scan_after_volumes#*$'\n__SKYEYE_TODAY__\n'}"
       MANIFEST_TODAY_CYCLES="${scan_after_cycles%%$'\n__SKYEYE_END__\n'*}"
       MANIFEST_TODAY_CYCLES="${MANIFEST_TODAY_CYCLES#$'\n'}"
+
+      # Reconcile first-write-of-the-day race: if the manifest log was cached
+      # with a pre-today mtime before today's first cycle was written, refresh
+      # its live mtime so both LATEST_LOG_MTIME and the history loop see it.
+      if [[ "$MANIFEST_RAW_LOG_INDEX" -ge 0 && -n "$MANIFEST_TODAY_CYCLES" &&
+            "${RAW_LOG_MTIMES[$MANIFEST_RAW_LOG_INDEX]}" -lt "$TODAY_START_EPOCH" &&
+            -f "$MANIFEST_LOG_PATH" ]]
+      then
+        refreshed_manifest_mtime="$(file_mtime "$MANIFEST_LOG_PATH")"
+        RAW_LOG_MTIMES[MANIFEST_RAW_LOG_INDEX]="$refreshed_manifest_mtime"
+        LATEST_LOG_MTIME="$refreshed_manifest_mtime"
+      fi
 
       while IFS= read -r scan_line; do
         [[ -n "$scan_line" && "$scan_line" != "__SKYEYE_HEADER__" ]] || continue
@@ -1341,6 +1379,7 @@ for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ 
   history_log="${RAW_LOG_FILES[$raw_log_index]}"
   history_mtime="${RAW_LOG_MTIMES[$raw_log_index]}"
   [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
+  [[ -f "$history_log" ]] || continue
   if [[ "$MANIFEST_SCANNED" -eq 1 && "$history_log" == "$MANIFEST_LOG_PATH" ]]; then
     history_cycles="$MANIFEST_TODAY_CYCLES"
   else
@@ -1356,6 +1395,35 @@ for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ 
     fi
   fi
 done
+# If the bound manifest log appeared in-glob after the initial enumeration,
+# include its already-parsed daily cycles once when its mtime qualifies while
+# keeping out-of-glob manifest logs excluded.
+if [[ "$MANIFEST_SCANNED" -eq 1 && "$MANIFEST_RAW_LOG_INDEX" -lt 0 &&
+      -n "$MANIFEST_TODAY_CYCLES" && -f "$MANIFEST_LOG_PATH" ]]
+then
+  manifest_in_glob=0
+  while IFS= read -r glob_candidate; do
+    if [[ "$glob_candidate" == "$MANIFEST_LOG_PATH" ]]; then
+      manifest_in_glob=1
+      break
+    fi
+  done <<EOF
+$(compgen -G "$TQ_RAW_LOG_GLOB" || true)
+EOF
+  if [[ "$manifest_in_glob" -eq 1 ]]; then
+    manifest_history_mtime="$LATEST_LOG_MTIME"
+    if [[ "$manifest_history_mtime" -lt "$TODAY_START_EPOCH" ]]; then
+      manifest_history_mtime="$(file_mtime "$MANIFEST_LOG_PATH")"
+    fi
+    if [[ "$manifest_history_mtime" -ge "$TODAY_START_EPOCH" ]]; then
+      if [[ -n "$TODAY_CYCLE_LINES" ]]; then
+        TODAY_CYCLE_LINES+=$'\n'"$MANIFEST_TODAY_CYCLES"
+      else
+        TODAY_CYCLE_LINES="$MANIFEST_TODAY_CYCLES"
+      fi
+    fi
+  fi
+fi
 if [[ -n "$TODAY_CYCLE_LINES" ]]; then
   TODAY_COMPLETED_CYCLES="$(printf '%s\n' "$TODAY_CYCLE_LINES" | sort -u | awk 'END { print NR + 0 }')"
 else

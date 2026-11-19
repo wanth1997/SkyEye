@@ -715,60 +715,96 @@ time=2025-07-17T09:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=
 EOF
 assert_identical "scenario 14b (C7): multiple exchange labels containing section markers match baseline byte-for-byte" "$NOW_DEFAULT"
 
-printf '# Scenario 15: 80 historical glob matches with varied mtimes, spaces, and shasum fallback\n'
+printf '# Scenario 15 (C4): 80 historical glob matches with varied mtimes, spaces, genuine bound manifest, and shasum fallback\n'
 new_fixture many-logs many_logs_config 'lighter-main=lighter' Asia/Taipei
 # 70 older logs (days before today in Asia/Taipei), some with spaces in names.
 old_base_epoch="$(epoch_of 2025-07-10T00:00:00Z)"
-for idx in $(seq -w 1 70); do
+for (( n = 1; n <= 70; n++ )); do
+  printf -v idx '%02d' "$n"
   if [[ "$idx" == "15" || "$idx" == "42" ]]; then
     hist_path="$REPO/logs/live-runs/20250710_0000${idx}_with space_many_logs_config.raw.log"
   else
     hist_path="$REPO/logs/live-runs/20250710_0000${idx}_many_logs_config.raw.log"
   fi
   printf 'time=2025-07-10T01:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=old.%s session_cycle=1 real_pnl_usdt=1 cycles_completed=1\n' "$idx" >"$hist_path"
-  touch_epoch "$hist_path" "$((old_base_epoch + 10#$idx * 60))"
+  touch_epoch "$hist_path" "$((old_base_epoch + n * 60))"
 done
 
 # 10 today logs (mtime >= today start in Asia/Taipei), including a name with spaces and a newest log.
 today_base_epoch="$(epoch_of 2025-07-17T00:00:00Z)"
 NEWEST_SPACED_LOG="$REPO/logs/live-runs/20250717_090000_today space_many_logs_config.raw.log"
-for idx in $(seq -w 1 9); do
+NEWEST_SPACED_MTIME="$(epoch_of 2025-07-17T09:15:00Z)"
+LOG15=""
+LOG15_MTIME=0
+for (( n = 1; n <= 9; n++ )); do
+  printf -v idx '%02d' "$n"
   hist_path="$REPO/logs/live-runs/20250717_0000${idx}_many_logs_config.raw.log"
-  if [[ "$idx" -le 5 ]]; then
-    printf 'time=2025-07-17T01:0%s:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=t.%s session_cycle=1 real_pnl_usdt=%s cycles_completed=1\n' "$idx" "$idx" "$idx" >"$hist_path"
+  if [[ "$n" -le 5 ]]; then
+    printf 'time=2025-07-17T01:%s:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=t.%s session_cycle=1 real_pnl_usdt=%s cycles_completed=1\n' "$idx" "$idx" "$n" >"$hist_path"
   else
-    printf 'time=2025-07-17T02:0%s:00Z level=INFO msg=unrelated_only detail=quiet\n' "$idx" >"$hist_path"
+    printf 'time=2025-07-17T02:%s:00Z level=INFO msg=unrelated_only detail=quiet\n' "$idx" >"$hist_path"
   fi
-  touch_epoch "$hist_path" "$((today_base_epoch + 10#$idx * 300))"
+  hist_mtime="$((today_base_epoch + n * 300))"
+  touch_epoch "$hist_path" "$hist_mtime"
+  if [[ "$n" -eq 5 ]]; then
+    LOG15="$hist_path"
+    LOG15_MTIME="$hist_mtime"
+  fi
 done
 cat >"$NEWEST_SPACED_LOG" <<'EOF'
 time=2025-07-17T08:30:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=space.1 session_cycle=1 real_pnl_usdt=9.5 cycles_completed=1 volume_usd_by_executor=lighter-main:2500
 EOF
-touch_epoch "$NEWEST_SPACED_LOG" "$(epoch_of 2025-07-17T09:15:00Z)"
+touch_epoch "$NEWEST_SPACED_LOG" "$NEWEST_SPACED_MTIME"
 
-# Sub-case 15a: manifest bound to one of the today logs (not the newest spaced log).
-RUN15="20250717_000005_many_logs_config"
-LOG15="$REPO/logs/live-runs/$RUN15.raw.log"
+# Verify fixture invariants: exactly 80 matches and LOG15 exists with distinct mtime < newest.
+match_count_15="$(compgen -G "$TQ_RAW_LOG_GLOB" | wc -l | tr -d ' ')"
+if [[ "$match_count_15" != "80" || ! -f "$LOG15" || "$LOG15_MTIME" -ge "$NEWEST_SPACED_MTIME" ]]; then
+  printf 'FAIL: scenario 15 fixture invariant failed (matches=%s, log15=%s, mtime=%s, newest=%s)\n' \
+    "$match_count_15" "$LOG15" "$LOG15_MTIME" "$NEWEST_SPACED_MTIME" >&2
+  exit 1
+fi
+RUN15="${LOG15##*/}"
+RUN15="${RUN15%.raw.log}"
+
+assert_metric_value() {
+  local description="$1"
+  local file="$2"
+  local metric="$3"
+  local expected="$4"
+  if ! grep -Eq "^${metric}\\{[^}]+\\} ${expected}\$" "$file"; then
+    printf 'FAIL: %s: expected %s=%s in %s\n' "$description" "$metric" "$expected" "$file" >&2
+    grep -E "^${metric}\{" "$file" >&2 || true
+    exit 1
+  fi
+}
+
+# Sub-case 15a: manifest genuinely bound to LOG15 (not the newest spaced log).
 write_manifest "$RUN15" "$LOG15" "2025-07-17T00:05:00Z"
-assert_identical "scenario 15a: 80 historical logs (manifest-bound + today cycles + spaces)" "$NOW_DEFAULT"
+assert_identical "scenario 15a (C4): 80 historical logs (manifest-bound + today cycles + spaces)" "$NOW_DEFAULT"
+assert_metric_value "scenario 15a (C4)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+assert_metric_value "scenario 15a (C4)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG15_MTIME"
+assert_metric_value "scenario 15a (C4)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 6
 
 # Sub-case 15b: heuristic mode without manifest (exercises latest-log selection across 80 files including spaces).
 rm -f "$MANIFEST_PATH"
 export TQ_REQUIRE_RUNTIME_CONTRACT=0
 assert_identical "scenario 15b: 80 historical logs heuristic mode latest-log selection with spaces" "$NOW_DEFAULT"
+assert_metric_value "scenario 15b" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$NEWEST_SPACED_MTIME"
 export TQ_REQUIRE_RUNTIME_CONTRACT=1
 
 # Sub-case 15c: shasum fallback when sha256sum is absent from PATH.
 write_manifest "$RUN15" "$LOG15" "2025-07-17T00:05:00Z"
 NO_SHA256SUM_BIN="$CASE_DIR/no-sha256sum-bin"
 mkdir -p "$NO_SHA256SUM_BIN"
-for tool in awk basename bash chmod date env find grep head jq lsof mkdir mktemp mv ps readlink rm sed shasum sort stat; do
+for tool in awk basename bash chmod date env find getconf grep head jq lsof mkdir mktemp mv ps readlink rm sed shasum sort stat; do
   tool_path="$(command -v "$tool" || true)"
   [[ -n "$tool_path" ]] && ln -s "$tool_path" "$NO_SHA256SUM_BIN/$tool"
 done
 rm -f "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
 FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$SHIM:$PATH" "$OLD_PROBE"
 FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$SHIM:$NO_SHA256SUM_BIN" "$NEW_PROBE"
+assert_metric_value "scenario 15c" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+assert_metric_value "scenario 15c" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG15_MTIME"
 if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
   printf 'FAIL: scenario 15c: shasum fallback without sha256sum differed from baseline\n' >&2
   diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
@@ -836,17 +872,273 @@ chmod 755 "$GNU_SHIM/stat" "$GNU_SHIM/date"
 rm -f "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
 FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$SHIM:$PATH" "$OLD_PROBE"
 FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$GNU_SHIM:$PATH" "$NEW_PROBE"
+assert_metric_value "scenario 15d (C4)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+assert_metric_value "scenario 15d (C4)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG15_MTIME"
 if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
-  printf 'FAIL: scenario 15d: GNU stat/date path differed from baseline\n' >&2
+  printf 'FAIL: scenario 15d (C4): GNU stat/date path differed from baseline\n' >&2
   diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
   exit 1
 fi
 gnu_stat_count="$(wc -l <"$GNU_STAT_CALLS" | tr -d ' ')"
 if [[ "$gnu_stat_count" != "1" ]]; then
-  printf 'FAIL: scenario 15d: expected 1 batched GNU stat call for 80 logs, got %s\n' "$gnu_stat_count" >&2
+  printf 'FAIL: scenario 15d (C4): expected 1 batched GNU stat call for 80 bound logs, got %s\n' "$gnu_stat_count" >&2
   exit 1
 fi
 PASS_COUNT=$((PASS_COUNT + 1))
-printf 'ok      scenario 15d: GNU stat/date path matches baseline with 1 stat call for 80 logs\n'
+printf 'ok      scenario 15d (C4): GNU stat/date path matches baseline with 1 stat call for 80 genuinely bound logs\n'
+
+printf '# Scenario 16 (C3): >500 short matching paths use 1 stat batch on both BSD and GNU paths\n'
+new_fixture big-glob big_glob_config 'lighter-main=lighter' Asia/Taipei
+SHORT_LOG_DIR="$REPO/l"
+mkdir -p "$SHORT_LOG_DIR"
+export TQ_RAW_LOG_GLOB="$SHORT_LOG_DIR/*.raw.log"
+for (( n = 1; n <= 504; n++ )); do
+  printf -v idx '%03d' "$n"
+  p="$SHORT_LOG_DIR/o${idx}_big_glob_config.raw.log"
+  : >"$p"
+  touch_epoch "$p" "$((old_base_epoch + n))"
+done
+RUN16="20250717_000001_big_glob_config"
+LOG16="$SHORT_LOG_DIR/$RUN16.raw.log"
+LOG16_MTIME="$(epoch_of 2025-07-17T06:00:00Z)"
+printf 'time=2025-07-17T06:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=4 cycles_completed=1\n' >"$LOG16"
+touch_epoch "$LOG16" "$LOG16_MTIME"
+write_manifest "$RUN16" "$LOG16" "2025-07-17T05:00:00Z"
+
+match_count_16="$(compgen -G "$TQ_RAW_LOG_GLOB" | wc -l | tr -d ' ')"
+[[ "$match_count_16" == "505" ]] || {
+  printf 'FAIL: scenario 16 (C3): expected 505 matches, got %s\n' "$match_count_16" >&2
+  exit 1
+}
+
+# 16a: BSD/native stat success-batch count == 1 for 505 short paths.
+STAT_OK_SHIM="$CASE_DIR/stat-ok-shim"
+mkdir -p "$STAT_OK_SHIM"
+STAT_OK_CALLS="$CASE_DIR/stat-ok.calls"
+: >"$STAT_OK_CALLS"
+cat >"$STAT_OK_SHIM/stat" <<SHIM_EOF
+#!/usr/bin/env bash
+rc=0
+"$REAL_STAT" "\$@" || rc=\$?
+if [[ "\$rc" -eq 0 ]]; then
+  printf 'ok\n' >>"$STAT_OK_CALLS"
+fi
+exit "\$rc"
+SHIM_EOF
+chmod 755 "$STAT_OK_SHIM/stat"
+rm -f "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$SHIM:$PATH" "$OLD_PROBE"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$STAT_OK_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 16a (C3): 505 short paths differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+stat_ok_count="$(wc -l <"$STAT_OK_CALLS" | tr -d ' ')"
+if [[ "$stat_ok_count" != "1" ]]; then
+  printf 'FAIL: scenario 16a (C3): expected 1 successful stat batch for 505 short paths, got %s\n' "$stat_ok_count" >&2
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 16a (C3): 505 short paths use 1 successful stat batch and match baseline\n'
+
+# 16b: GNU stat call count == 1 for 505 short paths.
+: >"$GNU_STAT_CALLS"
+rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$GNU_SHIM:$PATH" "$NEW_PROBE"
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 16b (C3): 505 short paths on GNU stat differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+gnu_stat_count_16="$(wc -l <"$GNU_STAT_CALLS" | tr -d ' ')"
+if [[ "$gnu_stat_count_16" != "1" ]]; then
+  printf 'FAIL: scenario 16b (C3): expected 1 GNU stat call for 505 short paths, got %s\n' "$gnu_stat_count_16" >&2
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 16b (C3): 505 short paths use 1 GNU stat call and match baseline\n'
+
+printf '# Scenario 17 (C1): manifest log created after enumeration, first write after midnight, and out-of-glob exclusion\n'
+REAL_JQ="$(command -v jq)"
+new_fixture race-c1 race_c1_config 'lighter-main=lighter' Asia/Taipei
+RUN17="20250717_060000_race_c1_config"
+LOG17="$REPO/logs/live-runs/$RUN17.raw.log"
+TODAY_TOUCH_17="$(epoch_of 2025-07-17T06:05:00Z)"
+YEST_TOUCH_17="$(epoch_of 2025-07-16T12:00:00Z)"
+write_manifest "$RUN17" "$LOG17" "2025-07-17T06:00:00Z"
+
+# 17a: in-glob manifest log created between initial glob enumeration and manifest read.
+C1A_SHIM="$CASE_DIR/c1a-jq-shim"
+mkdir -p "$C1A_SHIM"
+C1A_FLAG="$CASE_DIR/c1a-triggered"
+cat >"$C1A_SHIM/jq" <<SHIM_EOF
+#!/usr/bin/env bash
+if [[ ! -f "$C1A_FLAG" ]]; then
+  : >"$C1A_FLAG"
+  printf 'time=2025-07-17T06:01:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=late.1 session_cycle=1 real_pnl_usdt=3 cycles_completed=1\n' >"$LOG17"
+  TZ=UTC touch -t "\$(TZ=UTC "$REAL_DATE" -r "$TODAY_TOUCH_17" +%Y%m%d%H%M.%S 2>/dev/null || TZ=UTC "$REAL_DATE" -d "@$TODAY_TOUCH_17" +%Y%m%d%H%M.%S)" "$LOG17"
+fi
+exec "$REAL_JQ" "\$@"
+SHIM_EOF
+chmod 755 "$C1A_SHIM/jq"
+rm -f "$LOG17" "$C1A_FLAG" "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$C1A_SHIM:$SHIM:$PATH" "$OLD_PROBE"
+rm -f "$LOG17" "$C1A_FLAG"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$C1A_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+assert_metric_value "scenario 17a (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_current_cycles_completed 1
+assert_metric_value "scenario 17a (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 17a (C1): late-created manifest log differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 17a (C1): in-glob manifest log created after enumeration counts daily cycle once and matches baseline\n'
+
+# 17b: existing in-glob manifest log receives first write of the day after mtime snapshot.
+C1B_SHIM="$CASE_DIR/c1b-jq-shim"
+mkdir -p "$C1B_SHIM"
+C1B_FLAG="$CASE_DIR/c1b-triggered"
+cat >"$C1B_SHIM/jq" <<SHIM_EOF
+#!/usr/bin/env bash
+if [[ ! -f "$C1B_FLAG" ]]; then
+  : >"$C1B_FLAG"
+  printf 'time=2025-07-17T06:02:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=midnight.1 session_cycle=1 real_pnl_usdt=5 cycles_completed=1\n' >>"$LOG17"
+  TZ=UTC touch -t "\$(TZ=UTC "$REAL_DATE" -r "$TODAY_TOUCH_17" +%Y%m%d%H%M.%S 2>/dev/null || TZ=UTC "$REAL_DATE" -d "@$TODAY_TOUCH_17" +%Y%m%d%H%M.%S)" "$LOG17"
+fi
+exec "$REAL_JQ" "\$@"
+SHIM_EOF
+chmod 755 "$C1B_SHIM/jq"
+: >"$LOG17"
+touch_epoch "$LOG17" "$YEST_TOUCH_17"
+rm -f "$C1B_FLAG" "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$C1B_SHIM:$SHIM:$PATH" "$OLD_PROBE"
+: >"$LOG17"
+touch_epoch "$LOG17" "$YEST_TOUCH_17"
+rm -f "$C1B_FLAG"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$C1B_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+assert_metric_value "scenario 17b (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_current_cycles_completed 1
+assert_metric_value "scenario 17b (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 17b (C1): first write after midnight race differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 17b (C1): first write of the day after mtime snapshot counts daily cycle and matches baseline\n'
+
+# 17c: out-of-glob manifest log stays excluded from completed_cycles_today.
+rm -f "$LOG17"
+OUT_OF_GLOB_DIR="$REPO/logs/other-runs"
+mkdir -p "$OUT_OF_GLOB_DIR"
+LOG17_OUT="$OUT_OF_GLOB_DIR/$RUN17.raw.log"
+printf 'time=2025-07-17T06:03:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=out.1 session_cycle=1 real_pnl_usdt=7 cycles_completed=1\n' >"$LOG17_OUT"
+touch_epoch "$LOG17_OUT" "$TODAY_TOUCH_17"
+write_manifest "$RUN17" "$LOG17_OUT" "2025-07-17T06:00:00Z"
+assert_identical "scenario 17c (C1): out-of-glob manifest log stays excluded from completed_cycles_today" "$NOW_DEFAULT"
+assert_metric_value "scenario 17c (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_current_cycles_completed 1
+assert_metric_value "scenario 17c (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 0
+
+printf '# Scenario 18 (C2): same-day history log archived between enumeration and history scan\n'
+new_fixture race-c2 race_c2_config 'lighter-main=lighter' Asia/Taipei
+RUN18_HIST="20250717_010000_race_c2_config"
+RUN18_CURR="20250717_050000_race_c2_config"
+LOG18_HIST="$REPO/logs/live-runs/$RUN18_HIST.raw.log"
+LOG18_CURR="$REPO/logs/live-runs/$RUN18_CURR.raw.log"
+ARCHIVE_DIR="$CASE_DIR/archive"
+mkdir -p "$ARCHIVE_DIR"
+printf 'time=2025-07-17T05:30:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=curr.1 session_cycle=1 real_pnl_usdt=4 cycles_completed=1\n' >"$LOG18_CURR"
+touch_epoch "$LOG18_CURR" "$(epoch_of 2025-07-17T05:35:00Z)"
+write_manifest "$RUN18_CURR" "$LOG18_CURR" "2025-07-17T05:00:00Z"
+
+C2_SHIM="$CASE_DIR/c2-jq-shim"
+mkdir -p "$C2_SHIM"
+C2_FLAG="$CASE_DIR/c2-triggered"
+cat >"$C2_SHIM/jq" <<SHIM_EOF
+#!/usr/bin/env bash
+if [[ ! -f "$C2_FLAG" ]]; then
+  : >"$C2_FLAG"
+  mv "$LOG18_HIST" "$ARCHIVE_DIR/"
+fi
+exec "$REAL_JQ" "\$@"
+SHIM_EOF
+chmod 755 "$C2_SHIM/jq"
+
+seed_c2_hist() {
+  printf 'time=2025-07-17T01:30:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=hist.1 session_cycle=1 real_pnl_usdt=2 cycles_completed=1\n' >"$LOG18_HIST"
+  touch_epoch "$LOG18_HIST" "$(epoch_of 2025-07-17T02:00:00Z)"
+  rm -f "$C2_FLAG" "$ARCHIVE_DIR/${LOG18_HIST##*/}"
+}
+rm -f "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+seed_c2_hist
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$C2_SHIM:$SHIM:$PATH" "$OLD_PROBE"
+seed_c2_hist
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$C2_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 18 (C2): archived history log differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 18 (C2): archived same-day history log skipped cleanly and matches baseline\n'
+
+printf '# Scenario 19 (C5): negative pre-epoch mtime (-1) on historical log is accepted\n'
+new_fixture neg-mtime neg_mtime_config 'lighter-main=lighter' Asia/Taipei
+RUN19="20250717_060000_neg_mtime_config"
+LOG19="$REPO/logs/live-runs/$RUN19.raw.log"
+LOG19_OLD="$REPO/logs/live-runs/19691231_235959_neg_mtime_config.raw.log"
+printf 'time=2025-07-17T06:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=6 cycles_completed=1\n' >"$LOG19"
+touch_epoch "$LOG19" "$(epoch_of 2025-07-17T06:05:00Z)"
+printf 'time=1969-12-31T23:59:59Z level=INFO msg=unrelated\n' >"$LOG19_OLD"
+perl -e 'utime -1, -1, $ARGV[0]' "$LOG19_OLD"
+write_manifest "$RUN19" "$LOG19" "2025-07-17T06:00:00Z"
+assert_identical "scenario 19a (C5): negative mtime -1 in glob matches baseline" "$NOW_DEFAULT"
+# Also check GNU stat path with negative mtime -1.
+rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$GNU_SHIM:$PATH" "$NEW_PROBE"
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 19b (C5): negative mtime -1 on GNU stat path differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 19b (C5): negative mtime -1 on GNU stat path matches baseline\n'
+
+printf '# Scenario 20 (C6): accepted trailing-comma TQ_EXECUTOR_MAP preserves awk field count\n'
+new_fixture trailing-comma trailing_comma_config 'x=venue,' Asia/Taipei
+RUN20="20250717_070000_trailing_comma_config"
+LOG20="$REPO/logs/live-runs/$RUN20.raw.log"
+printf 'time=2025-07-17T07:00:00Z level=INFO msg=position_update net_side=Long net_qty_btc=1.50000000 portfolio_projection=coordinator_book\n' >"$LOG20"
+touch_epoch "$LOG20" "$(epoch_of 2025-07-17T07:05:00Z)"
+write_manifest "$RUN20" "$LOG20" "2025-07-17T07:00:00Z"
+assert_identical "scenario 20 (C6): trailing-comma mapping omits single-exchange series just like baseline" "$NOW_DEFAULT"
+if grep -q '^tnauqquant_current_position_btc{' "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 20 (C6): trailing-comma mapping unexpectedly emitted exchange-level position series\n' >&2
+  exit 1
+fi
+
+printf '# Scenario 21 (C7): config basename containing backslash hashes identically with sha256sum and shasum\n'
+new_fixture bs-cfg 'bs\config' 'lighter-main=lighter' Asia/Taipei
+# Recompute CONFIG_SHA via stdin so neither backend adds a leading backslash.
+CONFIG_SHA="$(shasum -a 256 <"$CONFIG_PATH" | awk '{print $1}')"
+RUN21="20250717_080000_bs_cfg"
+LOG21="$REPO/logs/live-runs/$RUN21.raw.log"
+export TQ_RAW_LOG_GLOB="$REPO/logs/live-runs/*bs_cfg.raw.log"
+printf 'time=2025-07-17T08:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=2 cycles_completed=1\n' >"$LOG21"
+touch_epoch "$LOG21" "$(epoch_of 2025-07-17T08:05:00Z)"
+write_manifest "$RUN21" "$LOG21" "2025-07-17T08:00:00Z"
+rm -f "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$SHIM:$PATH" "$NEW_PROBE"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$SHIM:$NO_SHA256SUM_BIN" "$NEW_PROBE"
+assert_metric_value "scenario 21 (C7) sha256sum" "$TEXT_OLD/$TQ_TEXTFILE_NAME" tnauqquant_config_snapshot_match 1
+assert_metric_value "scenario 21 (C7) shasum" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_config_snapshot_match 1
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 21 (C7): sha256sum and shasum outputs differed on backslash config basename\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 21 (C7): sha256sum and shasum match with config_snapshot_match=1 on backslash basename\n'
 
 printf 'PASS: %s probe equivalence checks matched baseline byte-for-byte\n' "$PASS_COUNT"
