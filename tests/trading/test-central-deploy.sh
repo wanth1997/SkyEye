@@ -633,7 +633,7 @@ for bad in broken-json zero-byte emptied-existing array empty-object no-title no
   restore
 done
 
-# The values below are what pinned Grafana 11.2.0 was seen to rewrite or keep.
+# The values below are what pinned Grafana 12.4.15 was seen to rewrite or keep.
 printf 'case: a dashboard Grafana would rewrite is refused before the checkout moves\n'
 for refresh in 1s 4s 0s 0m 500ms 1.5s 30 abc; do
   set_dashboard "$FLEET" refresh "\"$refresh\""
