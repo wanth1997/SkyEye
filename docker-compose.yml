@@ -62,7 +62,7 @@ services:
     # No env var needed.
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:12.4.15@sha256:2894082f6cf7081aefdc1389265c04000812309208c190d75e8c65f7a30e4b7e
     restart: unless-stopped
     logging: *default-logging
     depends_on:
@@ -103,6 +103,13 @@ services:
       # --- Disable anonymous + snapshots ---
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_SNAPSHOTS_EXTERNAL_ENABLED=false
+      # 12.x downloads and auto-updates 4 Drilldown apps from grafana.com at startup;
+      # keep the instance plugin-free and pinned to the image digest.
+      - GF_PLUGINS_PREINSTALL_DISABLED=true
+      # Official opt-in: migrate folders and dashboards to unified storage regardless
+      # of the 12.4 10-item auto-migration threshold so prod matches test runs.
+      - GF_UNIFIED_STORAGE_FOLDERS_FOLDER_GRAFANA_APP_ENABLEMIGRATION=true
+      - GF_UNIFIED_STORAGE_DASHBOARDS_DASHBOARD_GRAFANA_APP_ENABLEMIGRATION=true
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
