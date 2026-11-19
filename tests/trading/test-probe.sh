@@ -92,6 +92,26 @@ export TQ_TEXTFILE_MODE=600
 export TQ_SIDECAR_SESSION=skyeye-fixture-missing
 export TQ_SIDECAR_IDENTITY_FILE="$TEST_ROOT/missing-sidecar.identity"
 export TQ_SIDECAR_HEALTH_URL=http://127.0.0.1:9/health
+# Unset, not empty: the default (BTC) applies only to an undefined variable,
+# whatever the shell that runs this suite exported.
+unset TQ_BASE_ASSET
+
+# The HELP text of the position families as master published it before
+# TQ_BASE_ASSET existed. One textfile collector drops a family whose HELP
+# differs between .prom files, and old and new probe outputs share a collector
+# while a host's probes are re-added one at a time, so it must never change.
+PINNED_POSITION_HELP='# HELP tnauqquant_current_position_btc Latest coordinator-reported position quantity by exchange and side.
+# HELP tnauqquant_current_net_position_btc Signed net BTC position from the latest coordinator book.'
+
+assert_position_help_pinned() {
+  local actual
+  actual="$(rg '^# HELP tnauqquant_current_(net_)?position_btc ' "$METRICS_PATH" || true)"
+  if [[ "$actual" != "$PINNED_POSITION_HELP" ]]; then
+    printf 'FAIL: position HELP text differs from the pinned master text; old and new .prom files could not share a collector\nexpected:\n%s\nactual:\n%s\n' \
+      "$PINNED_POSITION_HELP" "$actual" >&2
+    exit 1
+  fi
+}
 
 run_probe() {
   "$PROBE"
@@ -310,6 +330,7 @@ base_asset_metrics="$(rg -o '^[a-z_]+\{[^}]*base_asset=' "$METRICS_PATH" | sed '
   printf 'FAIL: base_asset must label only the position quantities, found it on: %s\n' "$base_asset_metrics" >&2
   exit 1
 }
+assert_position_help_pinned
 assert_metric tnauqquant_current_run_exchange_volume_usd 100.25 'exchange="toobit"'
 assert_metric tnauqquant_current_run_exchange_volume_usd 99.75 'exchange="mexc"'
 assert_metric tnauqquant_risk_stopped 0
@@ -590,12 +611,15 @@ if rg -q 'base_asset="BTC"' "$METRICS_PATH"; then
   printf 'FAIL: an ETH lane still published a BTC quantity\n' >&2
   exit 1
 fi
+assert_position_help_pinned
 
 printf 'case: invalid TQ_BASE_ASSET is refused before any output\n'
 eth_output="$(cat "$METRICS_PATH")"
-for bad_asset in eth Eth 'ETH ' 'E-TH' 'ETH"' 'BTC,x="y"' ABCDEFGHIJKLMNOPQ; do
+# '' is set but empty: only an unset variable means BTC. The full-width ETH
+# runs under a UTF-8 locale, where a range class can match it.
+for bad_asset in '' eth Eth 'ETH ' 'E-TH' 'ETH"' 'BTC,x="y"' ABCDEFGHIJKLMNOPQ 'ＥＴＨ'; do
   export TQ_BASE_ASSET="$bad_asset"
-  if bad_output="$("$PROBE" 2>&1)"; then
+  if bad_output="$(LC_ALL=en_US.UTF-8 "$PROBE" 2>&1)"; then
     printf 'FAIL: probe accepted TQ_BASE_ASSET=%s\n' "$bad_asset" >&2
     exit 1
   fi

@@ -178,7 +178,10 @@ groups:
 
       # Position quantities are in the base_asset label, not necessarily BTC:
       # the _btc names are historical. A probe from before TQ_BASE_ASSET sends
-      # no label and only had BTC lanes, so an empty label records as BTC.
+      # no label and cannot say its asset; it is recorded as BTC, which is wrong
+      # for a non-BTC lane (popdex-02 is ETH). So hosts with a non-BTC lane run
+      # the new probe before this rule is deployed (agents/alloy/trading/README.md,
+      # "Position units").
       - record: trading_strategy_current_net_position_btc
         expr: |
           label_replace(

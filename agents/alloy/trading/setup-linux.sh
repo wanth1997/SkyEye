@@ -218,6 +218,8 @@ fi
 mode="$(file_mode "$ENV_FILE")"
 [[ "$mode" == "600" ]] || die "env file must have mode 600, found $mode"
 
+# systemd reads TQ_BASE_ASSET from the file, not from this shell; only the file counts.
+unset TQ_BASE_ASSET
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
@@ -297,9 +299,22 @@ done
 [[ -z "${TQ_STRATEGY_DISABLED:-}" || "$TQ_STRATEGY_DISABLED" == "0" ||
    "$TQ_STRATEGY_DISABLED" == "1" ]] || \
   die "TQ_STRATEGY_DISABLED must be 0 or 1 when set"
-# Optional, default BTC; the probe refuses any other form and would stop publishing.
-[[ -z "${TQ_BASE_ASSET:-}" || "$TQ_BASE_ASSET" =~ ^[A-Z0-9]{1,16}$ ]] || \
-  die "TQ_BASE_ASSET must be 1-16 upper-case letters or digits, such as BTC or ETH, when set"
+# Optional: no TQ_BASE_ASSET line means BTC. The probe refuses any other value
+# and would stop publishing. systemd's EnvironmentFile= reads the file without
+# a shell, so the line must be a literal assignment that gives systemd the same
+# value bash did: `export TQ_BASE_ASSET=ETH` is no assignment to systemd (the
+# probe would fall back to BTC) and `TQ_BASE_ASSET=$X` reaches it unexpanded.
+base_asset_literal="$(installed_env_value TQ_BASE_ASSET "$ENV_FILE")" || \
+  die "TQ_BASE_ASSET in $ENV_FILE must be a literal TQ_BASE_ASSET=VALUE line"
+if grep -q '^TQ_BASE_ASSET=' "$ENV_FILE"; then
+  [[ -n "${TQ_BASE_ASSET+set}" && "$TQ_BASE_ASSET" == "$base_asset_literal" ]] || \
+    die "TQ_BASE_ASSET in $ENV_FILE must be a literal TQ_BASE_ASSET=VALUE line that nothing else in the file changes"
+  valid_base_asset "$TQ_BASE_ASSET" || \
+    die "TQ_BASE_ASSET must be 1-16 ASCII upper-case letters or digits, such as BTC or ETH; delete the line for BTC"
+else
+  [[ -z "${TQ_BASE_ASSET+set}" ]] || \
+    die "TQ_BASE_ASSET in $ENV_FILE must be a literal TQ_BASE_ASSET=VALUE line; systemd does not read the form this file uses"
+fi
 [[ "$TQ_TEXTFILE_MODE" == "640" ]] || \
   die "Linux coexistence requires TQ_TEXTFILE_MODE=640"
 

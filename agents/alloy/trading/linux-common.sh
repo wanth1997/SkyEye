@@ -15,6 +15,12 @@ valid_label_value() {
   [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
 }
 
+# The probe's TQ_BASE_ASSET rule: 1-16 ASCII upper-case letters or digits,
+# spelled out so no locale widens the class. Keep it equal to probe.sh.
+valid_base_asset() {
+  [[ "$1" =~ ^[ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789]{1,16}$ ]]
+}
+
 path_exists() {
   [[ -e "$1" || -L "$1" ]]
 }

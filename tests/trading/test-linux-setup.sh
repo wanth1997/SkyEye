@@ -1282,28 +1282,73 @@ for bad_disabled in yes 2 true; do
   }
 done
 
-printf 'case: add refuses a TQ_BASE_ASSET that is not an upper-case asset code\n'
-BASE_ASSET_BAD_ENV="$TEST_ROOT/$MAINNET.base-asset-bad.env"
-for bad_asset in eth 'E-TH' 'ETH"x' ABCDEFGHIJKLMNOPQ; do
+# Each env is the Mainnet env plus the given lines. Both render and add must
+# refuse it before writing anything, naming TQ_BASE_ASSET.
+refuse_base_asset_env() {
+  local label="$1" render_dir add_output render_output
+  shift
   cp "$MAINNET_ENV" "$BASE_ASSET_BAD_ENV"
-  printf "TQ_BASE_ASSET='%s'\n" "$bad_asset" >>"$BASE_ASSET_BAD_ENV"
+  printf '%s\n' "$@" >>"$BASE_ASSET_BAD_ENV"
   chmod 600 "$BASE_ASSET_BAD_ENV"
-  : >"$SYSTEMCTL_LOG"
-  if add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
-    "$SETUP" add --env-file "$BASE_ASSET_BAD_ENV" 2>&1)"; then
-    printf 'FAIL: add accepted TQ_BASE_ASSET=%s\n' "$bad_asset" >&2
+  render_dir="$TEST_ROOT/base-asset-render"
+  rm -rf "$render_dir"
+  if render_output="$(LC_ALL=en_US.UTF-8 "$SETUP" --render-only "$render_dir" \
+    --env-file "$BASE_ASSET_BAD_ENV" 2>&1)"; then
+    printf 'FAIL: render accepted %s\n' "$label" >&2
     exit 1
   fi
-  [[ "$add_output" == *'TQ_BASE_ASSET must be'* ]] || {
-    printf 'FAIL: refusal did not name TQ_BASE_ASSET: %s\n' "$add_output" >&2
+  [[ "$render_output" == *TQ_BASE_ASSET* && ! -e "$render_dir" ]] || {
+    printf 'FAIL: render refusal of %s did not name TQ_BASE_ASSET or still wrote: %s\n' "$label" "$render_output" >&2
     exit 1
   }
-  assert_no_mutation "add with TQ_BASE_ASSET=$bad_asset"
+  : >"$SYSTEMCTL_LOG"
+  if add_output="$(LC_ALL=en_US.UTF-8 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+    "$SETUP" add --env-file "$BASE_ASSET_BAD_ENV" 2>&1)"; then
+    printf 'FAIL: add accepted %s\n' "$label" >&2
+    exit 1
+  fi
+  [[ "$add_output" == *TQ_BASE_ASSET* ]] || {
+    printf 'FAIL: add refusal of %s did not name TQ_BASE_ASSET: %s\n' "$label" "$add_output" >&2
+    exit 1
+  }
+  assert_no_mutation "add with $label"
   [[ ! -e "$MAINNET_INSTALLED_ENV" ]] || {
-    printf 'FAIL: refused add installed the env with TQ_BASE_ASSET=%s\n' "$bad_asset" >&2
+    printf 'FAIL: refused add installed the env with %s\n' "$label" >&2
     exit 1
   }
+}
+BASE_ASSET_BAD_ENV="$TEST_ROOT/$MAINNET.base-asset-bad.env"
+
+printf 'case: render and add refuse a TQ_BASE_ASSET that is not an ASCII upper-case asset code\n'
+# '' is set but empty: only a missing line means BTC. The full-width ETH is
+# checked under a UTF-8 locale, where a range class can match it.
+for bad_asset in '' eth 'E-TH' 'ETH"x' ABCDEFGHIJKLMNOPQ 'ＥＴＨ'; do
+  refuse_base_asset_env "TQ_BASE_ASSET='$bad_asset'" "TQ_BASE_ASSET='$bad_asset'"
 done
+
+printf 'case: render and add refuse a TQ_BASE_ASSET that systemd would read differently\n'
+# systemd ignores "export NAME=..." (the probe would fall back to BTC) and
+# passes "$LANE_ASSET" through unexpanded (the probe would refuse it).
+refuse_base_asset_env 'export TQ_BASE_ASSET=ETH' 'export TQ_BASE_ASSET=ETH'
+refuse_base_asset_env 'TQ_BASE_ASSET=$LANE_ASSET' 'LANE_ASSET=ETH' 'TQ_BASE_ASSET=$LANE_ASSET'
+# A literal line that a later line overrides is no more what systemd reads.
+refuse_base_asset_env 'a literal TQ_BASE_ASSET overridden by export' 'TQ_BASE_ASSET=ETH' 'export TQ_BASE_ASSET=BTC'
+
+printf 'case: render accepts a literal TQ_BASE_ASSET and ignores an inherited one\n'
+cp "$MAINNET_ENV" "$BASE_ASSET_BAD_ENV"
+printf 'TQ_BASE_ASSET="ETH"\n' >>"$BASE_ASSET_BAD_ENV"
+rm -rf "$TEST_ROOT/base-asset-render"
+"$SETUP" --render-only "$TEST_ROOT/base-asset-render" --env-file "$BASE_ASSET_BAD_ENV" >/dev/null
+rg -q '^TQ_BASE_ASSET="ETH"$' "$TEST_ROOT/base-asset-render/instances/$MAINNET.env" || {
+  printf 'FAIL: render did not keep the literal TQ_BASE_ASSET line\n' >&2
+  exit 1
+}
+rm -rf "$TEST_ROOT/base-asset-render"
+TQ_BASE_ASSET=eth "$SETUP" --render-only "$TEST_ROOT/base-asset-render" --env-file "$MAINNET_ENV" >/dev/null || {
+  printf 'FAIL: a TQ_BASE_ASSET exported by the caller, not in the env file, refused the render\n' >&2
+  exit 1
+}
+rm -rf "$TEST_ROOT/base-asset-render"
 
 if rg -q 'tnauqquant' "$SYSTEMCTL_LOG_ALL"; then
   printf 'FAIL: monitoring installer attempted to control a trading service\n' >&2
