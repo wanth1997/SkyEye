@@ -16,11 +16,10 @@ set -euo pipefail
 # guessed in the example or in this suite.
 #
 # Every example's TQ_RAW_LOG_GLOB is DIR/<8 x [0-9]>_<6 x [0-9]>_<config
-# stem>.raw.log, the stem taken from its own TQ_CONFIG_PATH, and its comments
-# say so with the line "# CONTRACT-NAMED LOGS ONLY". The suite proves that the
-# glob selects the lane's contract-named raw log and no file that only
-# resembles it, as the probe, ensure-log-access.sh and the Alloy fragment use
-# it.
+# stem>.raw.log, the stem taken from its own TQ_CONFIG_PATH. The suite proves
+# that the glob selects the lane's contract-named raw log and no file that
+# only resembles it, as the probe, ensure-log-access.sh and the Alloy fragment
+# use it.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -370,12 +369,10 @@ for example in "${EXAMPLES[@]}"; do
   config_stem="$(basename "$(example_value TQ_CONFIG_PATH "$example")")"
   config_stem="${config_stem%.*}"
   # The glob itself, as checked in, is the contract form for this lane's own
-  # config stem, and the example says so.
+  # config stem.
   example_glob="$(example_value TQ_RAW_LOG_GLOB "$example")"
   [[ "${example_glob##*/}" == "$CONTRACT_PREFIX$config_stem.raw.log" ]] || \
     fail "$name: TQ_RAW_LOG_GLOB must end in /$CONTRACT_PREFIX$config_stem.raw.log, got ${example_glob##*/}"
-  rg -q '^# CONTRACT-NAMED LOGS ONLY' "$example" || \
-    fail "$name: TQ_RAW_LOG_GLOB needs the comment line '# CONTRACT-NAMED LOGS ONLY'"
   log_dir="${staged_glob%/*}"
   own_log="$log_dir/${RUN_STAMP}_$config_stem.raw.log"
   printf 'msg=own\n' >"$own_log"

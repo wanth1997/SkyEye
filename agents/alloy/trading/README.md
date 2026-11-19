@@ -232,135 +232,181 @@ fragment all take `TQ_RAW_LOG_GLOB` as written, so changing that one line and
 re-running `add` changes all three. Installed envs are never rewritten from the
 repo; this procedure does it on the host.
 
-On Trading01 that is `lighter-robinhood-btc-canary` and `popdex-btc`
-(`popdex-02` was installed with the strict glob). The retired lanes' archived
+On Trading01 that is `lighter-robinhood-btc-canary` and `popdex-btc`. The
+`popdex-02` example already uses the strict glob. The retired lanes' archived
 envs under `/etc/skyeye-trading/retired/` keep the old glob: to re-onboard
 `ourbit-spot` or `lighter-mainnet-btc-canary`, start from the current example
 (or replace that line) instead of re-adding the archive verbatim.
 
 `add` with an env that differs only in this line updates the env and the Loki
-fragment in place, **reloads** Alloy and keeps the probe timer as it was. The
-label set of the Loki target does not change, so Alloy keeps its read position
-for files it already tails. Run as root on Trading01 from a staged SkyEye
-checkout of the merge commit, with the Alloy version checked (see above). Run
-all three steps in one root `bash` shell: they share `$WORK`, `$LANES` and the
-two helper functions. Lane names below are the installed instance names;
-nothing else on the host is touched.
+fragment in place, **reloads** Alloy and keeps the probe timer as it was. Each
+`add` is its own transaction, so a lane that was added keeps the strict glob if
+a later lane fails. The label set of the Loki target does not change, so Alloy
+keeps its read position for files it already tails.
 
-1. Pre-check (read-only: lists file names and times, does not read any log
-   or write anything outside `$WORK`):
+Run as root on Trading01 from a staged SkyEye checkout of the merge commit,
+with the Alloy version checked (see above), all three steps in one `bash`
+shell. Steps 1 and 3 check both lanes on every run, including a re-run after a
+partial one; a lane whose env already has the strict glob is only left out of
+the `add` in step 2. Nothing else on the host is touched.
+
+1. Helpers and pre-check (read-only: reads the envs, manifests, file names and
+   times and the probe textfiles, writes only `$WORK`):
 
    ~~~bash
    CHECKOUT=<checkout>; SETUP="$CHECKOUT/agents/alloy/trading/setup-linux.sh"
+   . "$CHECKOUT/agents/alloy/trading/linux-common.sh"   # installed_env_value, as setup-linux.sh reads an env
    WORK=/root/skyeye-strict-glob-$(date -u +%Y%m%dT%H%M%SZ); install -d -m 700 "$WORK"
-   LANES="lighter-robinhood-btc-canary popdex-btc"
-   val() { sed -n "s/^$1=//p" "$2" | tail -n 1; }
+   LANES="lighter-robinhood-btc-canary popdex-btc"; INST=/etc/skyeye-trading/instances
+   TEXT=/var/lib/skyeye-trading/textfile; D8='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+   v() { installed_env_value "$1" "$INST/$2.env"; }
+   stem() { local c; c="$(v TQ_CONFIG_PATH "$1")" || return 1; c="${c##*/}"; printf '%s\n' "${c%.*}"; }
+   logdir() { local g; g="$(v TQ_RAW_LOG_GLOB "$1")" || return 1; printf '%s\n' "${g%/*}"; }
+   legacy() { printf '%s/*%s.raw.log\n' "$(logdir "$1")" "$(stem "$1")"; }
+   strict() { printf '%s/%s_%s_%s.raw.log\n' "$(logdir "$1")" "$D8" "${D8%??????????}" "$(stem "$1")"; }
    newest() { compgen -G "$1" | while IFS= read -r f; do stat -c '%Y %n' "$f"; done | sort -n | tail -n 1 | cut -d' ' -f2-; }
+   timer() { local e=disabled a=inactive
+     systemctl is-enabled --quiet "skyeye-trading-probe@$1.timer" && e=enabled
+     systemctl is-active --quiet "skyeye-trading-probe@$1.timer" && a=active; echo "$e/$a"; }
+   ts() { awk 'index($1, "tnauqquant_probe_timestamp_seconds{") == 1 { printf "%d\n", $2 }' "$TEXT/tnauqquant-$1.prom"; }
+   # The manifest names the newest lane log (by the old, wider pattern), the strict
+   # glob selects it, and the probe's last sample is bound to that run.
+   bound() {
+     local s="$1" m n p b id
+     m="$(jq -er '.log_path | strings | select(. != "")' "$(v TQ_RUN_MANIFEST "$s")" 2>/dev/null)" ||
+       { echo "STOP: $s manifest is missing, unreadable or has no log_path"; return 1; }
+     n="$(newest "$(legacy "$s")")"
+     [ "$n" = "$m" ] || { echo "STOP: $s newest log ${n##*/} is not the manifest log ${m##*/}"; return 1; }
+     compgen -G "$(strict "$s")" | grep -qxF "$m" || { echo "STOP: $s manifest log ${m##*/} does not match the strict glob"; return 1; }
+     p="$(cat "$TEXT/tnauqquant-$s.prom")"   # one probe sample: the probe replaces the file whole
+     b="$(awk 'index($1, "tnauqquant_log_binding_ok{") == 1 { print $2 }' <<<"$p")"
+     id="$(sed -n 's/^tnauqquant_current_run_info{.*run_id="\([^"]*\)"}.*/\1/p' <<<"$p")"
+     [ "$b" = 1 ] && [ "$id.raw.log" = "${m##*/}" ] ||
+       { echo "STOP: $s probe sample has log_binding_ok=${b:-none} run_id=${id:-none}, manifest log ${m##*/}"; return 1; }
+     echo "$s bound ${m##*/}"
+   }
+   # A run that rotates between the reads above is observed again, up to three times.
+   again() { local i out; for i in 1 2 3; do out="$("$@")" && { echo "$out"; return 0; }; [ "$i" = 3 ] || sleep 20; done; echo "$out"; return 1; }
    for s in $LANES; do
-     env=/etc/skyeye-trading/instances/$s.env
-     ex="$(grep -lx "TQ_STRATEGY=$s" "$CHECKOUT"/agents/alloy/trading/deployment-linux-*.env.example)"
-     [ -f "$env" ] && [ -n "$ex" ] || { echo "STOP: $s has no installed env or no example"; continue; }
-     old="$(val TQ_RAW_LOG_GLOB "$env")"; new="$(val TQ_RAW_LOG_GLOB "$ex")"
-     stem="$(basename "$(val TQ_CONFIG_PATH "$env")")"; stem="${stem%.*}"
-     printf '%s\n' "$new" >"$WORK/$s.new-glob"
-     [ "$old" = "$new" ] && { echo "$s ALREADY-STRICT (skip it below)"; continue; }
-     [ "$old" = "${new%/*}/*$stem.raw.log" ] || { echo "STOP: $s has TQ_RAW_LOG_GLOB=$old, not the old form"; continue; }
-     n="$(newest "$old")"; m="$(jq -r '.log_path // empty' "$(val TQ_RUN_MANIFEST "$env")" 2>/dev/null)"
-     [ -n "$n" ] || { echo "STOP: $s has no raw log under $old"; continue; }
-     compgen -G "$new" | grep -qxF "$n" || { echo "STOP: $s newest log $(basename "$n") does not match the new glob"; continue; }
-     [ -z "$m" ] || compgen -G "$new" | grep -qxF "$m" || { echo "STOP: $s manifest log_path $(basename "$m") does not match the new glob"; continue; }
-     drops="$(comm -23 <(compgen -G "$old" | sort) <(compgen -G "$new" | sort) | while IFS= read -r f; do
-       age=$(( $(date +%s) - $(stat -c %Y "$f") ))
-       if [ "$age" -lt 86400 ]; then echo "STOP: $s would drop $(basename "$f"), modified ${age}s ago"
-       else echo "$s drops $(basename "$f") (older than 24h)"; fi
-     done)"
-     [ -z "$drops" ] || printf '%s\n' "$drops"
-     case "$drops" in *STOP:*) continue ;; esac
-     e=disabled; a=inactive
-     systemctl is-enabled --quiet "skyeye-trading-probe@$s.timer" && e=enabled
-     systemctl is-active --quiet "skyeye-trading-probe@$s.timer" && a=active
-     printf '%s %s\n' "$e" "$a" >"$WORK/$s.timer.before"
-     printf '%s\n' "$n" >"$WORK/$s.newest.before"
-     grep -E '^tnauqquant_(log_mtime_seconds|log_binding_ok|probe_timestamp_seconds)[{ ]' \
-       /var/lib/skyeye-trading/textfile/tnauqquant-$s.prom >"$WORK/$s.metrics.before"
-     echo "$s OK newest=$(basename "$n") manifest=$(basename "${m:-none}") timer=$e/$a"
+     g="$(v TQ_RAW_LOG_GLOB "$s")" && [ -n "$g" ] && stem "$s" >/dev/null ||
+       { echo "STOP: $s env has no readable TQ_RAW_LOG_GLOB or TQ_CONFIG_PATH"; continue; }
+     case "$g" in
+       "$(strict "$s")") echo "$s ALREADY-STRICT" ;;
+       "$(legacy "$s")") echo "$s APPLY" ;;
+       *) echo "STOP: $s has TQ_RAW_LOG_GLOB=$g, neither the old nor the strict form"; continue ;;
+     esac
+     again bound "$s"
+     comm -23 <(compgen -G "$(legacy "$s")" | sort) <(compgen -G "$(strict "$s")" | sort) | while IFS= read -r f; do
+       if [ $(( $(date +%s) - $(stat -c %Y "$f") )) -lt 86400 ]; then echo "STOP: $s would drop ${f##*/}, modified in the last 24h"
+       else echo "$s drops ${f##*/} (older than 24h)"; fi
+     done
+     echo "$s timer $(timer "$s")"
    done | tee "$WORK/precheck.out"
    ~~~
 
-   Go on only if every lane prints `OK` or `ALREADY-STRICT` and nothing
-   prints `STOP`. Any `STOP`: do not change anything, report the output. Do
-   not widen the new glob or rename a log to make it pass; a newest log that
-   the strict glob misses means the producer writes names outside the
-   contract, which is a tnauqquant question. A `drops ... (older than 24h)`
-   line is expected only for a stray file; list it in the report.
+   Go on only if no line starts with `STOP`. Any `STOP`: change nothing and
+   report the output. Do not widen the strict glob or rename a log to make it
+   pass; a newest log the strict glob misses means the producer writes names
+   outside the contract, which is a tnauqquant question. A `drops ... (older
+   than 24h)` line is expected only for a stray file; list it in the report.
 
-2. Apply, one lane at a time. The env copy differs from the installed one in
-   that one line; `add` runs without `--enable-probe` so the timer keeps its
-   recorded state:
+2. Apply. Each env copy differs from the installed one in that one line; `add`
+   runs without `--enable-probe` so the timer keeps its state:
 
    ~~~bash
-   grep -q '^STOP' "$WORK/precheck.out" && { echo "STOP: the pre-check did not pass"; LANES=; }
+   if grep -q '^STOP' "$WORK/precheck.out"; then echo "STOP: the pre-check did not pass; nothing applied"; else
    for s in $LANES; do
-     grep -q "^$s OK " "$WORK/precheck.out" || continue
-     env=/etc/skyeye-trading/instances/$s.env
-     install -m 600 "$env" "$WORK/$s.env.before"; install -m 600 "$env" "$WORK/$s.env"
-     NEW="$(cat "$WORK/$s.new-glob")" awk 'index($0, "TQ_RAW_LOG_GLOB=") == 1 { print "TQ_RAW_LOG_GLOB=" ENVIRON["NEW"]; next } { print }' \
-       "$WORK/$s.env.before" >"$WORK/$s.env"
-     [ "$(diff "$WORK/$s.env.before" "$WORK/$s.env" | grep -c '^[<>]')" = 2 ] || { echo "STOP: $s env copy changed more than one line"; break; }
-     "$SETUP" add --env-file "$WORK/$s.env" </dev/null 2>&1 | tee "$WORK/add-$s.out"
-     [ "${PIPESTATUS[0]}" = 0 ] || { echo "STOP: add $s failed"; break; }
-     grep -q '^Alloy action: reload' "$WORK/add-$s.out" || { echo "STOP: add $s did not reload Alloy"; break; }
-   done
+     grep -qx "$s APPLY" "$WORK/precheck.out" || { echo "RESULT $s not added (already strict)"; continue; }
+     install -m 600 "$INST/$s.env" "$WORK/$s.env.before"
+     (umask 077; NEW="$(strict "$s")" awk 'index($0, "TQ_RAW_LOG_GLOB=") == 1 { print "TQ_RAW_LOG_GLOB=" ENVIRON["NEW"]; next } { print }' \
+       "$WORK/$s.env.before" >"$WORK/$s.env")
+     [ "$(diff "$WORK/$s.env.before" "$WORK/$s.env" | grep -c '^[<>]')" = 2 ] ||
+       { echo "RESULT $s STOP: the env copy changed more than one line; not added"; break; }
+     "$SETUP" add --env-file "$WORK/$s.env" </dev/null 2>&1 | tee "$WORK/add-$s.out"; rc=${PIPESTATUS[0]}
+     if [ "$rc" = 0 ] && grep -q '^Alloy action: reload' "$WORK/add-$s.out"; then echo "RESULT $s added"; continue; fi
+     rec="$(sed -n 's/^Rollback record: //p' "$WORK/add-$s.out" | tail -n 1)"
+     if grep -q "restoring 'systemctl reload alloy' failed" "$WORK/add-$s.out" ||
+       { [ -n "$rec" ] && grep -qx 'alloy_recovery=reload_pending' "$rec/transaction.meta"; }; then
+       echo "RESULT $s FAILED rc=$rc reload_pending: files and timer restored, Alloy may still run the failed config"
+     else
+       echo "RESULT $s FAILED rc=$rc"
+     fi
+     break
+   done | tee "$WORK/apply.out"; fi
    ~~~
 
-   Any `STOP` or failure: stop and report; `add` has already restored its
-   rollback record. `shared probe artifacts changed` means the checkout's
-   `probe.sh` or units differ from the installed ones. This procedure does not
-   stop the other probes, so report it; do not switch to the stop-every-probe
-   update under [Position units](#position-units-tq_base_asset). Do not re-run
-   with `--restart-alloy` and do not `retire` anything to recover.
+   Report every `RESULT` line: it is that lane's outcome, and a lane `added`
+   before a later failure stays on the strict glob. `FAILED rc=N` alone means
+   `add` restored that lane's files and timer. `FAILED ... reload_pending`
+   means the restoring reload failed: Alloy may still run the configuration of
+   the failed attempt. Report that before anything else; the add output names
+   the remaining recovery action. `shared probe artifacts changed` means the
+   checkout's `probe.sh` or units differ from the installed ones; this
+   procedure does not stop the other probes, so report it and do not switch to
+   the stop-every-probe update under
+   [Position units](#position-units-tq_base_asset). Do not re-run with
+   `--restart-alloy` and do not `retire` anything to recover. After any
+   `RESULT`, including a failure, run step 3 and report its output too.
 
-3. Post-check, at least 45 seconds after step 2 (the probe runs every 15
-   seconds):
+3. Post-check, for both lanes. The probe timer fires every 15 seconds; each
+   lane needs two probe runs after its `add`, at least one interval apart:
 
    ~~~bash
-   sleep 45
+   fresh() { local a=$(( $(date +%s) - $1 )); [ "${a#-}" -lt 60 ]; }
+   sleep 20
    for s in $LANES; do
-     [ -f "$WORK/$s.env.before" ] || continue
-     env=/etc/skyeye-trading/instances/$s.env; new="$(cat "$WORK/$s.new-glob")"
-     prom=/var/lib/skyeye-trading/textfile/tnauqquant-$s.prom; now=$(date +%s)
-     e=disabled; a=inactive
-     systemctl is-enabled --quiet "skyeye-trading-probe@$s.timer" && e=enabled
-     systemctl is-active --quiet "skyeye-trading-probe@$s.timer" && a=active
-     [ "$e $a" = "$(cat "$WORK/$s.timer.before")" ] || echo "STOP: $s timer is $e/$a, was $(cat "$WORK/$s.timer.before")"
-     grep -qxF "TQ_RAW_LOG_GLOB=$new" "$env" || echo "STOP: $s installed env lacks the new glob"
-     grep -qF "\"$new\"" "/etc/alloy/trading-$s.alloy" || echo "STOP: $s Loki fragment does not tail the new glob"
-     n="$(newest "$new")"
-     [ "$n" = "$(cat "$WORK/$s.newest.before")" ] || echo "NOTE: $s newest log is now $(basename "$n") (a new run started?)"
-     getfacl -cp -- "$n" 2>/dev/null | grep -q "^user:$(val TQ_ALLOY_USER "$env"):r" || echo "STOP: $s Alloy has no read ACL on $(basename "$n")"
-     ts="$(awk '$1 ~ /^tnauqquant_probe_timestamp_seconds/ { print $2 }' "$prom")"
-     lm="$(awk '$1 ~ /^tnauqquant_log_mtime_seconds/ { print $2 }' "$prom")"
-     [ "${ts%.*}" -gt $((now - 60)) ] 2>/dev/null || echo "STOP: $s probe_timestamp $ts is not from the last minute"
-     [ "${lm%.*}" -gt 0 ] 2>/dev/null && [ "${lm%.*}" -le "$(stat -c %Y "$n")" ] || echo "STOP: $s log_mtime $lm is not the newest log's"
-     diff <(grep '^tnauqquant_log_binding_ok' "$WORK/$s.metrics.before") <(grep '^tnauqquant_log_binding_ok' "$prom") >/dev/null ||
-       echo "STOP: $s log_binding_ok changed: $(grep -h '^tnauqquant_log_binding_ok' "$WORK/$s.metrics.before" "$prom" | tr '\n' ' ')"
-     echo "$s checked: newest=$(basename "$n") log_mtime=$lm probe_timestamp=$ts"
+     g="$(v TQ_RAW_LOG_GLOB "$s")"
+     [ "$g" = "$(strict "$s")" ] || echo "STOP: $s env still has TQ_RAW_LOG_GLOB=$g"
+     grep -qF "\"$g\"" "/etc/alloy/trading-$s.alloy" || echo "STOP: $s Loki fragment does not tail its env's glob"
+     [ "$s timer $(timer "$s")" = "$(grep "^$s timer " "$WORK/precheck.out")" ] || echo "STOP: $s timer is now $(timer "$s")"
+     since="$(stat -c %Y "$WORK/add-$s.out" 2>/dev/null || stat -c %Y "$WORK/precheck.out")"
+     t1="$(ts "$s")"; sleep 20; t2="$(ts "$s")"
+     [ -n "$t1" ] && [ -n "$t2" ] && [ "$t1" -gt "$since" ] && [ "$t2" -gt "$t1" ] && fresh "$t1" && fresh "$t2" ||
+       echo "STOP: $s probe timestamps ${t1:-none} then ${t2:-none} are not two fresh runs after $since"
+     again bound "$s"
+     m="$(newest "$g")"
+     getfacl -cp -- "$m" 2>/dev/null | grep -q "^user:$(v TQ_ALLOY_USER "$s"):r" || echo "STOP: $s Alloy has no read ACL on ${m##*/}"
+     # The last complete line of the newest log at or after SINCE, as Loki stores it (epoch ns), or none.
+     b="$(tail -c 65536 "$m"; echo .)"; b="${b%.}"
+     case "$b" in *$'\n') line="${b%$'\n'}" ;; *$'\n'*) line="${b%$'\n'*}" ;; *) line= ;; esac
+     t="$(grep -oE '(^|[[:space:]])time=[^[:space:]]+' <<<"${line##*$'\n'}" | head -n 1 | sed -E 's/^[[:space:]]*time=//; s/"//g')"
+     ns=none; [ -n "$t" ] && n="$(date -u -d "$t" +%s%N 2>/dev/null)" && [ $(( n / 1000000000 )) -ge "$since" ] && ns="$n"
+     echo "loki_event $s $ns"
    done | tee "$WORK/postcheck.out"
    journalctl -u alloy --since "@$(stat -c %Y "$WORK/precheck.out")" --no-pager | grep -E 'level=(error|warn)' | tail -n 20
    ~~~
 
-   Every lane must print `checked` and no `STOP`, and the last command should
-   print nothing new about a `skyeye_trading_` component. `log_mtime` is the
-   newest log's modification time when the probe ran, so a log that is still
-   being written may show a later `stat` time; it may not show a later
-   `log_mtime`. Then, read-only on central (Grafana Explore), for each lane:
-   `time() - tnauqquant_probe_timestamp_seconds{server_id="trading01",strategy="<s>"}`
-   stays under 180 (`TradingTelemetryMissing` stays quiet), and for a lane that
-   is running, `count_over_time({server_id="trading01",strategy="<s>"}[5m])`
-   in Loki is above zero.
+   Every lane must print `bound` and a `loki_event` line and no `STOP`, and
+   the `journalctl` line should print nothing about a `skyeye_trading_`
+   component. Then on monitoring-prod (read-only), at least 60 seconds later,
+   define `loki_event` and paste the two `loki_event ...` lines as printed:
 
-Rollback for one lane: `"$SETUP" add --env-file "$WORK/<s>.env.before"`, the
-untouched copy from step 2. It restores the old line in place the same way
+   ~~~bash
+   curl -fsS --get http://127.0.0.1:9090/api/v1/query --data-urlencode \
+     'query=abs(time() - tnauqquant_probe_timestamp_seconds{server_id="trading01",strategy=~"lighter-robinhood-btc-canary|popdex-btc"}) < 180' |
+     jq -c '[.data.result[].metric.strategy] | sort'
+   loki_event() {
+     local n
+     [ "$2" = none ] && { echo "LOKI-PENDING $1: no source log line since the add"; return; }
+     n="$(curl -fsS --get http://127.0.0.1:3100/loki/api/v1/query_range \
+       --data-urlencode "query={product=\"tnauqquant\",server_id=\"trading01\",strategy=\"$1\"}" \
+       --data-urlencode "start=$(( $2 - 1000000000 ))" --data-urlencode "end=$(( $2 + 1000000000 ))" \
+       --data-urlencode limit=5000 | jq -r --arg ns "$2" '[.data.result[].values[] | select(.[0] == $ns)] | length')"
+     case "$n" in '' | *[!0-9]*) echo "LOKI-ERROR $1" ;; 0) echo "LOKI-MISSING $1: no line at $2" ;; *) echo "LOKI-ACCEPTED $1" ;; esac
+   }
+   ~~~
+
+   The first command must print both strategies (the `TradingTelemetryMissing`
+   comparison). `LOKI-ACCEPTED` means Loki has the source line written after
+   the `add`. `LOKI-PENDING`: the lane wrote no complete line since then, which
+   is not an Alloy fault; re-run step 3's lane loop and paste again after 2
+   minutes, up to three times in all, then record it as pending and report.
+   `LOKI-MISSING` after three tries means the lane writes but Loki does not
+   receive it: report it with step 3's output. `LOKI-ERROR`: the query failed;
+   report it.
+
+Rollback for one lane: `"$SETUP" add --env-file "$WORK/<lane>.env.before"`,
+the untouched copy from step 2. It restores the old line in place the same way
 (Alloy reload, timer kept).
 
 ### Position units (`TQ_BASE_ASSET`)
