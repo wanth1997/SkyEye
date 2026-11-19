@@ -176,15 +176,24 @@ groups:
           and on (product, environment, server_id, strategy)
           trading_target_info
 
+      # Position quantities are in the base_asset label, not necessarily BTC:
+      # the _btc names are historical. A probe from before TQ_BASE_ASSET sends
+      # no label and only had BTC lanes, so an empty label records as BTC.
       - record: trading_strategy_current_net_position_btc
         expr: |
-          tnauqquant_current_net_position_btc{product="tnauqquant",environment="production"}
+          label_replace(
+            tnauqquant_current_net_position_btc{product="tnauqquant",environment="production"},
+            "base_asset", "BTC", "base_asset", ""
+          )
           and on (product, environment, server_id, strategy)
           trading_target_info
 
       - record: trading_strategy_current_position_btc
         expr: |
-          tnauqquant_current_position_btc{product="tnauqquant",environment="production"}
+          label_replace(
+            tnauqquant_current_position_btc{product="tnauqquant",environment="production"},
+            "base_asset", "BTC", "base_asset", ""
+          )
           and on (product, environment, server_id, strategy)
           trading_target_info
 

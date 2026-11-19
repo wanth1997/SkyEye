@@ -1128,7 +1128,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "依交易所顯示 signed BTC 持倉與 coordinator 淨部位。多單為正、空單為負、空倉為零。",
+      "description": "依交易所顯示 signed 持倉數量與 coordinator 淨部位。單位是該策略的 base asset，標在每個數值的名稱最後（例如 ETH）；metric 名稱的 _btc 是沿用的舊名，不代表單位。多單為正、空單為負、空倉為零。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1153,7 +1153,7 @@
               }
             ]
           },
-          "unit": "suffix: BTC"
+          "unit": "none"
         },
         "overrides": []
       },
@@ -1187,9 +1187,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"long\"})",
+          "expr": "sum by (exchange, base_asset) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"long\"})",
           "instant": true,
-          "legendFormat": "{{exchange}} · 多",
+          "legendFormat": "{{exchange}} · 多 · {{base_asset}}",
           "range": false,
           "refId": "A"
         },
@@ -1199,9 +1199,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "-sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"short\"})",
+          "expr": "-sum by (exchange, base_asset) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"short\"})",
           "instant": true,
-          "legendFormat": "{{exchange}} · 空",
+          "legendFormat": "{{exchange}} · 空 · {{base_asset}}",
           "range": false,
           "refId": "B"
         },
@@ -1211,9 +1211,9 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (exchange) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"flat\"})",
+          "expr": "sum by (exchange, base_asset) (trading_strategy_current_position_btc{server_id=\"$server_id\",strategy=\"$strategy\",side=\"flat\"})",
           "instant": true,
-          "legendFormat": "{{exchange}} · 空倉",
+          "legendFormat": "{{exchange}} · 空倉 · {{base_asset}}",
           "range": false,
           "refId": "C"
         },
@@ -1225,7 +1225,7 @@
           "editorMode": "code",
           "expr": "trading_strategy_current_net_position_btc{server_id=\"$server_id\",strategy=\"$strategy\"}",
           "instant": true,
-          "legendFormat": "淨部位",
+          "legendFormat": "淨部位 · {{base_asset}}",
           "range": false,
           "refId": "D"
         }

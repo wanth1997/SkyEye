@@ -11,6 +11,7 @@ SERVICE_TEMPLATE="$TRADING_DIR/skyeye-trading-probe@.service.tmpl"
 TIMER_TEMPLATE="$TRADING_DIR/skyeye-trading-probe@.timer.tmpl"
 ROBINHOOD_EXAMPLE="$TRADING_DIR/deployment-linux-robinhood.env.example"
 MAINNET_EXAMPLE="$TRADING_DIR/deployment-linux-mainnet.env.example"
+POPDEX_02_EXAMPLE="$TRADING_DIR/deployment-linux-popdex-02.env.example"
 ACCESS_HELPER="$TRADING_DIR/ensure-log-access.sh"
 RETIRE="$TRADING_DIR/retire-linux.sh"
 COMMON_LIB="$TRADING_DIR/linux-common.sh"
@@ -89,6 +90,9 @@ assert_contains "$MAINNET_EXAMPLE" '^TQ_TEXTFILE_NAME=tnauqquant-lighter-mainnet
 assert_contains "$MAINNET_EXAMPLE" '^TQ_POC_RUN_EXPECTED=0$'
 # The operator disabled Mainnet on 2026-11-07; its leftover manifest must not page.
 assert_contains "$MAINNET_EXAMPLE" '^TQ_STRATEGY_DISABLED=1$'
+# popdex-02 counts its *_qty_btc fields in ETH; BTC lanes leave the default.
+assert_contains "$POPDEX_02_EXAMPLE" '^TQ_BASE_ASSET=ETH$'
+assert_not_contains "$ROBINHOOD_EXAMPLE" '^TQ_BASE_ASSET='
 assert_contains "$ROBINHOOD_EXAMPLE" '/bin/lighter-robinhood-btc-canary/quant$'
 assert_contains "$MAINNET_EXAMPLE" '/bin/lighter-mainnet-btc-canary/quant$'
 assert_contains "$SETUP" 'run_as_user "[$]TQ_PROBE_USER" test -x "[$]TQ_TEXTFILE_DIR"'
@@ -1274,6 +1278,29 @@ for bad_disabled in yes 2 true; do
   assert_no_mutation "add with TQ_STRATEGY_DISABLED=$bad_disabled"
   [[ ! -e "$MAINNET_INSTALLED_ENV" ]] || {
     printf 'FAIL: refused add installed the env with TQ_STRATEGY_DISABLED=%s\n' "$bad_disabled" >&2
+    exit 1
+  }
+done
+
+printf 'case: add refuses a TQ_BASE_ASSET that is not an upper-case asset code\n'
+BASE_ASSET_BAD_ENV="$TEST_ROOT/$MAINNET.base-asset-bad.env"
+for bad_asset in eth 'E-TH' 'ETH"x' ABCDEFGHIJKLMNOPQ; do
+  cp "$MAINNET_ENV" "$BASE_ASSET_BAD_ENV"
+  printf "TQ_BASE_ASSET='%s'\n" "$bad_asset" >>"$BASE_ASSET_BAD_ENV"
+  chmod 600 "$BASE_ASSET_BAD_ENV"
+  : >"$SYSTEMCTL_LOG"
+  if add_output="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+    "$SETUP" add --env-file "$BASE_ASSET_BAD_ENV" 2>&1)"; then
+    printf 'FAIL: add accepted TQ_BASE_ASSET=%s\n' "$bad_asset" >&2
+    exit 1
+  fi
+  [[ "$add_output" == *'TQ_BASE_ASSET must be'* ]] || {
+    printf 'FAIL: refusal did not name TQ_BASE_ASSET: %s\n' "$add_output" >&2
+    exit 1
+  }
+  assert_no_mutation "add with TQ_BASE_ASSET=$bad_asset"
+  [[ ! -e "$MAINNET_INSTALLED_ENV" ]] || {
+    printf 'FAIL: refused add installed the env with TQ_BASE_ASSET=%s\n' "$bad_asset" >&2
     exit 1
   }
 done

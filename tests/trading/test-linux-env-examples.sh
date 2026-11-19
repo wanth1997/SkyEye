@@ -291,6 +291,11 @@ for example in "${EXAMPLES[@]}"; do
     *) fail "$name: TQ_STRATEGY_DISABLED=$disabled" ;;
   esac
 
+  # Unset means BTC; a set value must be one the probe accepts.
+  base_asset="$(example_value TQ_BASE_ASSET "$example")"
+  [[ -z "$base_asset" || "$base_asset" =~ ^[A-Z0-9]{1,16}$ ]] || \
+    fail "$name: TQ_BASE_ASSET=$base_asset is not an upper-case asset code"
+
   # An example and an inventory row for the same strategy on the same server
   # are one target and must agree on the rest of its identity. Neither has to
   # exist for the other.

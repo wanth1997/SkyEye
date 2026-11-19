@@ -297,6 +297,9 @@ done
 [[ -z "${TQ_STRATEGY_DISABLED:-}" || "$TQ_STRATEGY_DISABLED" == "0" ||
    "$TQ_STRATEGY_DISABLED" == "1" ]] || \
   die "TQ_STRATEGY_DISABLED must be 0 or 1 when set"
+# Optional, default BTC; the probe refuses any other form and would stop publishing.
+[[ -z "${TQ_BASE_ASSET:-}" || "$TQ_BASE_ASSET" =~ ^[A-Z0-9]{1,16}$ ]] || \
+  die "TQ_BASE_ASSET must be 1-16 upper-case letters or digits, such as BTC or ETH, when set"
 [[ "$TQ_TEXTFILE_MODE" == "640" ]] || \
   die "Linux coexistence requires TQ_TEXTFILE_MODE=640"
 
