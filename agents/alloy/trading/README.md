@@ -576,6 +576,24 @@ stopped and restored the probes the same way, but its lane list, new-lane `add`
 and R3 rollback (which retires `popdex-btc`) belong to that onboarding only and
 do not apply here.
 
+### Probe CPU limits and shared probe rollout
+
+`probe.sh` is stateless: it keeps no offset or cache file on disk, so every 15-second run computes metrics directly from the raw logs and needs no manual cache reset. To keep per-run CPU low on full-day logs, it reads the active manifest log once through `LC_ALL=C grep -a -n -F` (`pnl_status`, `ui_warmup_async_ready`, `coordinator_book` and `trade_status`) into one `awk` pass and reuses that pass for `tnauqquant_completed_cycles_today`.
+
+`skyeye-trading-probe@.service.tmpl` sets `Nice=10`, `CPUWeight=20` and `CPUQuota=20%` per instance (4 lanes = up to 80% of one core in aggregate on a 2-vCPU host) so probe runs yield to `tnauqquant` trading processes. On Ubuntu (`mawk` + GNU `grep`), a synthetic full-day log matching `popdex-02` (~54 MiB / 80k lines) runs in 0.279 CPU-s (~1.4s probe-script wall-time estimate under `CPUQuota=20%`), and a 205 MiB / 300k-line log runs in ~1.24 CPU-s (~6.2s probe-script wall-time estimate under `CPUQuota=20%`); total unit duration (including `ExecStartPre`) is measured during the rollout.
+
+**Rolling out shared `probe.sh` and `skyeye-trading-probe@.service` changes on Trading01.** Both files are shared by every templated probe, so `setup-linux.sh` refuses to replace them while any `skyeye-trading-probe@*` service or timer is active or enabled. Run as `root` outside UTC 18:15–19:30, after checking `alloy --version | head -1`:
+
+1. Record every installed strategy's timer state (`enabled`/`active`), copy `/etc/skyeye-trading/instances/*.env` into a mode-`0700` work directory (`$WORK`), and record `start-epoch` (same loop as step 1 under [Position units](#position-units-tq_base_asset)).
+2. Stop and disable all `skyeye-trading-probe@*.timer` and stop all `skyeye-trading-probe@*.service`; verify neither `systemctl is-active --quiet 'skyeye-trading-probe@*'` nor `systemctl is-enabled --quiet 'skyeye-trading-probe@*.timer'` succeeds.
+3. Re-run `setup-linux.sh add --env-file "$WORK/$s.env"` for each strategy (passing `--enable-probe` only for lanes recorded `enabled active`). The first `add` replaces the shared `probe.sh` and `skyeye-trading-probe@.service`, runs `systemctl daemon-reload`, and reloads Alloy (`Alloy action: reload`). No one-time cleanup is needed.
+4. Restore any non-`enabled active` timers from `timers.before` and confirm `diff timers.before timers.after` is empty.
+5. Verify limits and freshness after two timer intervals (~35s):
+   - `systemctl show skyeye-trading-probe@<s>.service -p Nice -p CPUWeight -p CPUQuotaPerSecUSec` shows `Nice=10`, `CPUWeight=20`, `CPUQuotaPerSecUSec=200ms`.
+   - Every active lane's `/var/lib/skyeye-trading/textfile/tnauqquant-<s>.prom` has mtime after `start-epoch` and `tnauqquant_probe_timestamp_seconds` advances every ~15s.
+
+**Rollback:** stop and disable all `skyeye-trading-probe@*.timer` and stop all `skyeye-trading-probe@*.service` (do not disable the service units), re-run `setup-linux.sh add` per strategy from the previous `origin/master` checkout (or restore `probe.sh` and `skyeye-trading-probe@.service` from the rollback record printed by the first `add` and run `systemctl daemon-reload`), then restore timers from `timers.before`. Neither rollout nor rollback touches any trading process or central config.
+
 ### Legacy flag form and singleton migration
 
 Without a subcommand, `setup-linux.sh --env-file PATH` keeps its original
