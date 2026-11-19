@@ -796,7 +796,7 @@ export TQ_REQUIRE_RUNTIME_CONTRACT=1
 write_manifest "$RUN15" "$LOG15" "2025-07-17T00:05:00Z"
 NO_SHA256SUM_BIN="$CASE_DIR/no-sha256sum-bin"
 mkdir -p "$NO_SHA256SUM_BIN"
-for tool in awk basename bash chmod date env find getconf grep head jq lsof mkdir mktemp mv ps readlink rm sed shasum sort stat; do
+for tool in awk basename bash chmod date env find grep head jq lsof mkdir mktemp mv ps readlink rm sed shasum sort stat xargs; do
   tool_path="$(command -v "$tool" || true)"
   [[ -n "$tool_path" ]] && ln -s "$tool_path" "$NO_SHA256SUM_BIN/$tool"
 done
@@ -959,6 +959,84 @@ fi
 PASS_COUNT=$((PASS_COUNT + 1))
 printf 'ok      scenario 16b (C3): 505 short paths use 1 GNU stat call and match baseline\n'
 
+# 16c & 16d: large ASCII argument list (>1 MiB on 2 MiB ARG_MAX Linux; >650 KiB on 1 MiB macOS)
+# uses 1 stat call, and UTF-8 paths exceeding ARG_MAX in encoded bytes succeed without E2BIG.
+PLATFORM_ARG_MAX="$(getconf ARG_MAX 2>/dev/null || printf '1048576')"
+if [[ "$PLATFORM_ARG_MAX" -ge 1500000 ]]; then
+  ASCII16_DEPTH=9
+  ASCII16_SEG="$(printf 'a%.0s' {1..200})"
+  ASCII16_COUNT=600
+  UTF816_DEPTH=20
+  UTF816_SEG="$(printf '中%.0s' {1..60})"
+  UTF816_COUNT=600
+else
+  ASCII16_DEPTH=4
+  ASCII16_SEG="$(printf 'a%.0s' {1..200})"
+  ASCII16_COUNT=800
+  UTF816_DEPTH=4
+  UTF816_SEG="$(printf '中%.0s' {1..65})"
+  UTF816_COUNT=1350
+fi
+
+ASCII16_DIR="$REPO"
+for (( d = 1; d <= ASCII16_DEPTH; d++ )); do
+  ASCII16_DIR="$ASCII16_DIR/$ASCII16_SEG"
+done
+mkdir -p "$ASCII16_DIR"
+export TQ_RAW_LOG_GLOB="$ASCII16_DIR/*.raw.log"
+for (( n = 1; n < ASCII16_COUNT; n++ )); do
+  printf -v idx '%04d' "$n"
+  p="$ASCII16_DIR/o${idx}_big_glob_config.raw.log"
+  : >"$p"
+  touch_epoch "$p" "$((old_base_epoch + n))"
+done
+LOG16C="$ASCII16_DIR/$RUN16.raw.log"
+printf 'time=2025-07-17T06:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=4 cycles_completed=1\n' >"$LOG16C"
+touch_epoch "$LOG16C" "$LOG16_MTIME"
+write_manifest "$RUN16" "$LOG16C" "2025-07-17T05:00:00Z"
+: >"$STAT_OK_CALLS"
+rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$STAT_OK_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+assert_metric_value "scenario 16c (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+assert_metric_value "scenario 16c (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG16_MTIME"
+assert_metric_value "scenario 16c (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+stat_ok_16c="$(wc -l <"$STAT_OK_CALLS" | tr -d ' ')"
+if [[ "$stat_ok_16c" != "1" ]]; then
+  printf 'FAIL: scenario 16c (C3): expected 1 successful stat batch for %s large ASCII paths, got %s\n' "$ASCII16_COUNT" "$stat_ok_16c" >&2
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 16c (C3): %s large ASCII paths use 1 stat call\n' "$ASCII16_COUNT"
+
+UTF816_DIR="$REPO"
+for (( d = 1; d <= UTF816_DEPTH; d++ )); do
+  UTF816_DIR="$UTF816_DIR/$UTF816_SEG"
+done
+mkdir -p "$UTF816_DIR"
+export TQ_RAW_LOG_GLOB="$UTF816_DIR/*.raw.log"
+for (( n = 1; n < UTF816_COUNT; n++ )); do
+  printf -v idx '%04d' "$n"
+  p="$UTF816_DIR/o${idx}_big_glob_config.raw.log"
+  : >"$p"
+  touch_epoch "$p" "$((old_base_epoch + n))"
+done
+LOG16D="$UTF816_DIR/$RUN16.raw.log"
+printf 'time=2025-07-17T06:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=4 cycles_completed=1\n' >"$LOG16D"
+touch_epoch "$LOG16D" "$LOG16_MTIME"
+utf8_bytes_16d="$(find "$UTF816_DIR" -maxdepth 1 -type f -name '*.raw.log' -print0 | wc -c | tr -d ' ')"
+if [[ "$utf8_bytes_16d" -le "$PLATFORM_ARG_MAX" ]]; then
+  printf 'FAIL: scenario 16d (C3): UTF-8 fixture (%s bytes) did not exceed ARG_MAX (%s)\n' "$utf8_bytes_16d" "$PLATFORM_ARG_MAX" >&2
+  exit 1
+fi
+write_manifest "$RUN16" "$LOG16D" "2025-07-17T05:00:00Z"
+rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$SHIM:$PATH" "$NEW_PROBE"
+assert_metric_value "scenario 16d (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+assert_metric_value "scenario 16d (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$LOG16_MTIME"
+assert_metric_value "scenario 16d (C3)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 16d (C3): %s UTF-8 paths (%s bytes > ARG_MAX %s) succeed without E2BIG\n' "$UTF816_COUNT" "$utf8_bytes_16d" "$PLATFORM_ARG_MAX"
+
 printf '# Scenario 17 (C1): manifest log created after enumeration, first write after midnight, and out-of-glob exclusion\n'
 REAL_JQ="$(command -v jq)"
 new_fixture race-c1 race_c1_config 'lighter-main=lighter' Asia/Taipei
@@ -1039,6 +1117,57 @@ write_manifest "$RUN17" "$LOG17_OUT" "2025-07-17T06:00:00Z"
 assert_identical "scenario 17c (C1): out-of-glob manifest log stays excluded from completed_cycles_today" "$NOW_DEFAULT"
 assert_metric_value "scenario 17c (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_current_cycles_completed 1
 assert_metric_value "scenario 17c (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 0
+
+# 17d (C1): late-created manifest log with canonical path and equivalent /./ glob directory.
+write_manifest "$RUN17" "$LOG17" "2025-07-17T06:00:00Z"
+export TQ_RAW_LOG_GLOB="$REPO/logs/./live-runs/*race_c1_config.raw.log"
+rm -f "$LOG17" "$C1A_FLAG" "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$C1A_SHIM:$SHIM:$PATH" "$OLD_PROBE"
+rm -f "$LOG17" "$C1A_FLAG"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$C1A_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+assert_metric_value "scenario 17d (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_binding_ok 1
+assert_metric_value "scenario 17d (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_current_cycles_completed 1
+assert_metric_value "scenario 17d (C1)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 1
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 17d (C1): late-created manifest log with /./ glob differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+export TQ_RAW_LOG_GLOB="$REPO/logs/live-runs/*race_c1_config.raw.log"
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 17d (C1): late-created manifest log with /./ equivalent glob counts daily cycle once and matches baseline\n'
+
+# 17e (C9): first-write heartbeat (no completed cycle) between enumeration and manifest read updates mtime.
+C9_SHIM="$CASE_DIR/c9-jq-shim"
+mkdir -p "$C9_SHIM"
+C9_FLAG="$CASE_DIR/c9-triggered"
+cat >"$C9_SHIM/jq" <<SHIM_EOF
+#!/usr/bin/env bash
+if [[ ! -f "$C9_FLAG" ]]; then
+  : >"$C9_FLAG"
+  printf 'time=2025-07-17T06:04:00Z level=INFO msg=heartbeat status=alive\n' >>"$LOG17"
+  TZ=UTC touch -t "\$(TZ=UTC "$REAL_DATE" -r "$TODAY_TOUCH_17" +%Y%m%d%H%M.%S 2>/dev/null || TZ=UTC "$REAL_DATE" -d "@$TODAY_TOUCH_17" +%Y%m%d%H%M.%S)" "$LOG17"
+fi
+exec "$REAL_JQ" "\$@"
+SHIM_EOF
+chmod 755 "$C9_SHIM/jq"
+: >"$LOG17"
+touch_epoch "$LOG17" "$YEST_TOUCH_17"
+rm -f "$C9_FLAG" "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$C9_SHIM:$SHIM:$PATH" "$OLD_PROBE"
+: >"$LOG17"
+touch_epoch "$LOG17" "$YEST_TOUCH_17"
+rm -f "$C9_FLAG"
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$C9_SHIM:$SHIM:$PATH" "$NEW_PROBE"
+assert_metric_value "scenario 17e (C9)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_log_mtime_seconds "$TODAY_TOUCH_17"
+assert_metric_value "scenario 17e (C9)" "$TEXT_NEW/$TQ_TEXTFILE_NAME" tnauqquant_completed_cycles_today 0
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 17e (C9): first-write heartbeat mtime refresh differed from baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
+  exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+printf 'ok      scenario 17e (C9): first-write heartbeat without completed cycle refreshes log_mtime_seconds and matches baseline\n'
 
 printf '# Scenario 18 (C2): same-day history log archived between enumeration and history scan\n'
 new_fixture race-c2 race_c2_config 'lighter-main=lighter' Asia/Taipei

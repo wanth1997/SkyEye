@@ -77,9 +77,11 @@ printf 'call\n' >>"$SETFACL_CALLS"
 targets=()
 seen_dashdash=0
 expect_mod=0
+mod_count=0
 mod_spec=""
 for argument in "$@"; do
   if [[ "$expect_mod" -eq 1 ]]; then
+    mod_count=$((mod_count + 1))
     mod_spec="$argument"
     expect_mod=0
     continue
@@ -94,8 +96,9 @@ for argument in "$@"; do
     targets+=("$argument")
   fi
 done
-if [[ "$mod_spec" != "u:alloy:r--" ]]; then
-  printf 'fake setfacl: unexpected -m operand: %s\n' "$mod_spec" >&2
+if [[ "$expect_mod" -eq 1 || "$mod_count" -ne 1 || "$mod_spec" != "u:alloy:r--" ]]; then
+  printf 'fake setfacl: expected exactly one -m u:alloy:r-- operand (count=%s, spec=%s)\n' \
+    "$mod_count" "$mod_spec" >&2
   exit 1
 fi
 for target in "${targets[@]}"; do
@@ -279,7 +282,7 @@ rg -q '^SkyEye trading log access: listing configured raw logs with find failed 
   exit 1
 }
 
-printf 'case: fake setfacl rejects any modification other than exact u:alloy:r--\n'
+printf 'case: fake setfacl rejects any modification other than exactly one u:alloy:r--\n'
 : >"$SETFACL_LOG"
 rm -f "$ACCESS_STATE/probe-spec-check.raw.log"
 for wrong_spec in 'u:other:r--' 'u:alloy:rw-' 'u:alloy:r-x' ''; do
@@ -288,11 +291,35 @@ for wrong_spec in 'u:other:r--' 'u:alloy:rw-' 'u:alloy:r-x' ''; do
     exit 1
   fi
 done
+if "$FAKE_BIN/setfacl" -m 'u:other:r--' -m 'u:alloy:r--' -- "$RAW_LOG_DIR/probe-spec-check.raw.log" >/dev/null 2>&1; then
+  printf 'FAIL: fake setfacl accepted duplicate -m operands (extra user first)\n' >&2
+  exit 1
+fi
+if "$FAKE_BIN/setfacl" -m 'u:alloy:r--' -m 'u:other:r--' -- "$RAW_LOG_DIR/probe-spec-check.raw.log" >/dev/null 2>&1; then
+  printf 'FAIL: fake setfacl accepted duplicate -m operands (extra user second)\n' >&2
+  exit 1
+fi
 if [[ -e "$ACCESS_STATE/probe-spec-check.raw.log" ]]; then
-  printf 'FAIL: fake setfacl recorded repair despite wrong -m operand\n' >&2
+  printf 'FAIL: fake setfacl recorded repair despite invalid -m operand(s)\n' >&2
   exit 1
 fi
 assert_line_count "wrong -m operand setfacl log" "$SETFACL_LOG" 0
+
+if bash -O lastpipe -c : 2>/dev/null; then
+  printf 'case: empty failed find is reported even with Bash lastpipe enabled (C10)\n'
+  if PATH="$FAILING_FIND_BIN:$FAKE_BIN:/usr/bin:/bin" bash -O lastpipe "$ACCESS_HELPER" \
+    >"$TEST_ROOT/lastpipe-fail.out" 2>"$TEST_ROOT/lastpipe-fail.err"
+  then
+    printf 'FAIL: access helper exited 0 on failed empty find with lastpipe enabled\n' >&2
+    exit 1
+  fi
+  rg -q '^SkyEye trading log access: listing configured raw logs with find failed [(]rc=1[)]' \
+    "$TEST_ROOT/lastpipe-fail.err" || {
+    printf 'FAIL: access helper with lastpipe did not report failed find:\n' >&2
+    cat "$TEST_ROOT/lastpipe-fail.err" >&2
+    exit 1
+  }
+fi
 
 printf 'case: >500 short matching paths use 1 getfacl call, 1 awk pass, and 1 setfacl call\n'
 MANY_REPO="$TEST_ROOT/many"
@@ -330,5 +357,82 @@ ACCESS_STATE="$MANY_STATE" TQ_REPO_ROOT="$MANY_REPO" TQ_RAW_LOG_GLOB="$MANY_LOGS
 assert_line_count "505 already-OK getfacl calls" "$GETFACL_CALLS" 1
 assert_line_count "505 already-OK awk calls" "$AWK_CALLS" 1
 assert_line_count "505 already-OK setfacl calls" "$SETFACL_CALLS" 0
+
+# C3: large ASCII argument list (>1 MiB on 2 MiB ARG_MAX Linux; >650 KiB on 1 MiB macOS)
+# fits in one getfacl + one awk + one setfacl call, and UTF-8 paths exceeding ARG_MAX
+# in encoded bytes split cleanly across xargs without E2BIG.
+PLATFORM_ARG_MAX="$(getconf ARG_MAX 2>/dev/null || printf '1048576')"
+if [[ "$PLATFORM_ARG_MAX" -ge 1500000 ]]; then
+  # Linux (ARG_MAX=2097152, PATH_MAX=4096): 600 ASCII paths ~= 1.10 MiB (>1 MiB) in 1 call.
+  ASCII_DEPTH=9
+  ASCII_SEG="$(printf 'a%.0s' {1..200})"
+  ASCII_COUNT=600
+  # UTF-8: 600 paths * ~3680 bytes ~= 2.21 MiB (>2 MiB ARG_MAX), ~1280 chars/path (<ARG_MAX chars).
+  UTF8_DEPTH=20
+  UTF8_SEG="$(printf '中%.0s' {1..60})"
+  UTF8_COUNT=600
+else
+  # macOS (ARG_MAX=1048576, PATH_MAX=1024): 800 ASCII paths ~= 680 KiB (>512 KiB) in 1 call.
+  ASCII_DEPTH=4
+  ASCII_SEG="$(printf 'a%.0s' {1..200})"
+  ASCII_COUNT=800
+  # UTF-8: 1350 paths * ~860 bytes ~= 1.16 MiB (>1 MiB ARG_MAX), ~320 chars/path (<ARG_MAX chars).
+  UTF8_DEPTH=4
+  UTF8_SEG="$(printf '中%.0s' {1..65})"
+  UTF8_COUNT=1350
+fi
+
+printf 'case: large ASCII argument list (%s paths) fits in 1 getfacl, 1 awk, 1 setfacl (C3)\n' "$ASCII_COUNT"
+ASCII_REPO="$TEST_ROOT/ascii-repo"
+ASCII_DIR="$ASCII_REPO"
+for (( d = 1; d <= ASCII_DEPTH; d++ )); do
+  ASCII_DIR="$ASCII_DIR/$ASCII_SEG"
+done
+ASCII_STATE="$TEST_ROOT/ascii-state"
+mkdir -p "$ASCII_DIR" "$ASCII_STATE"
+for (( i = 1; i <= ASCII_COUNT; i++ )); do
+  printf -v idx '%04d' "$i"
+  : >"$ASCII_DIR/$idx.raw.log"
+done
+: >"$SETFACL_LOG"
+: >"$GETFACL_CALLS"
+: >"$SETFACL_CALLS"
+: >"$AWK_CALLS"
+ACCESS_STATE="$ASCII_STATE" TQ_REPO_ROOT="$ASCII_REPO" TQ_RAW_LOG_GLOB="$ASCII_DIR/*.raw.log" \
+  PATH="$MANY_AWK_BIN:$FAKE_BIN:/usr/bin:/bin" "$ACCESS_HELPER"
+assert_line_count "large ASCII repaired files" "$SETFACL_LOG" "$ASCII_COUNT"
+assert_line_count "large ASCII getfacl calls" "$GETFACL_CALLS" 1
+assert_line_count "large ASCII awk calls" "$AWK_CALLS" 1
+assert_line_count "large ASCII setfacl calls" "$SETFACL_CALLS" 1
+
+printf 'case: UTF-8 paths exceeding ARG_MAX in bytes succeed with 1 awk pass (C3)\n'
+UTF8_REPO="$TEST_ROOT/utf8-repo"
+UTF8_DIR="$UTF8_REPO"
+for (( d = 1; d <= UTF8_DEPTH; d++ )); do
+  UTF8_DIR="$UTF8_DIR/$UTF8_SEG"
+done
+UTF8_STATE="$TEST_ROOT/utf8-state"
+mkdir -p "$UTF8_DIR" "$UTF8_STATE"
+for (( i = 1; i <= UTF8_COUNT; i++ )); do
+  printf -v idx '%04d' "$i"
+  : >"$UTF8_DIR/$idx.raw.log"
+done
+utf8_bytes="$(find "$UTF8_DIR" -maxdepth 1 -type f -name '*.raw.log' -print0 | wc -c | tr -d ' ')"
+if [[ "$utf8_bytes" -le "$PLATFORM_ARG_MAX" ]]; then
+  printf 'FAIL: UTF-8 fixture (%s bytes) did not exceed ARG_MAX (%s)\n' "$utf8_bytes" "$PLATFORM_ARG_MAX" >&2
+  exit 1
+fi
+: >"$SETFACL_LOG"
+: >"$GETFACL_CALLS"
+: >"$SETFACL_CALLS"
+: >"$AWK_CALLS"
+ACCESS_STATE="$UTF8_STATE" TQ_REPO_ROOT="$UTF8_REPO" TQ_RAW_LOG_GLOB="$UTF8_DIR/*.raw.log" \
+  PATH="$MANY_AWK_BIN:$FAKE_BIN:/usr/bin:/bin" "$ACCESS_HELPER"
+assert_line_count "UTF-8 over ARG_MAX repaired files" "$SETFACL_LOG" "$UTF8_COUNT"
+assert_line_count "UTF-8 over ARG_MAX awk calls" "$AWK_CALLS" 1
+: >"$SETFACL_CALLS"
+ACCESS_STATE="$UTF8_STATE" TQ_REPO_ROOT="$UTF8_REPO" TQ_RAW_LOG_GLOB="$UTF8_DIR/*.raw.log" \
+  PATH="$MANY_AWK_BIN:$FAKE_BIN:/usr/bin:/bin" "$ACCESS_HELPER"
+assert_line_count "UTF-8 over ARG_MAX already-OK setfacl calls" "$SETFACL_CALLS" 0
 
 printf 'PASS: Linux raw-log ACL repair contract\n'

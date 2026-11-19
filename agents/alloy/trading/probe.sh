@@ -738,7 +738,7 @@ do
   require_env "$required_name"
 done
 
-for command_name in awk date find grep jq mktemp ps sed sort stat
+for command_name in awk date find grep jq mktemp ps sed sort stat xargs
 do
   require_command "$command_name"
 done
@@ -935,52 +935,42 @@ $(compgen -G "$TQ_RAW_LOG_GLOB" || true)
 EOF
 
 if [[ "${#RAW_LOG_FILES[@]}" -gt 0 ]]; then
-  stat_total_bytes=0
+  xargs_args=(-0)
+  xargs_max_chars=0
   for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
-    stat_total_bytes=$((stat_total_bytes + ${#RAW_LOG_FILES[$raw_log_index]} + 16))
+    xargs_max_chars=$((xargs_max_chars + ${#RAW_LOG_FILES[$raw_log_index]} + 4))
   done
-  stat_arg_budget=131072
-  if [[ "$stat_total_bytes" -gt "$stat_arg_budget" ]]; then
-    platform_arg_max="$(getconf ARG_MAX 2>/dev/null || printf '262144')"
-    if [[ "$platform_arg_max" =~ ^[0-9]+$ && "$platform_arg_max" -gt 131072 ]]; then
-      stat_arg_budget=$((platform_arg_max / 2))
-      [[ "$stat_arg_budget" -le 1048576 ]] || stat_arg_budget=1048576
-    fi
-  fi
-
-  stat_offset=0
-  while [[ "$stat_offset" -lt "${#RAW_LOG_FILES[@]}" ]]; do
-    stat_batch_bytes=0
-    stat_end="$stat_offset"
-    while [[ "$stat_end" -lt "${#RAW_LOG_FILES[@]}" ]]; do
-      stat_entry_bytes=$(( ${#RAW_LOG_FILES[$stat_end]} + 16 ))
-      if [[ "$stat_end" -gt "$stat_offset" && $((stat_batch_bytes + stat_entry_bytes)) -gt "$stat_arg_budget" ]]; then
+  if [[ $((xargs_max_chars * 4)) -gt 100000 ]]; then
+    xargs_limits="$(LC_ALL=C xargs --show-limits </dev/null 2>&1 || true)"
+    while IFS= read -r limit_line; do
+      if [[ "$limit_line" == *"Maximum length of command we could actually use:"* ]]; then
+        xargs_max_bytes="${limit_line##*:}"
+        xargs_max_bytes="${xargs_max_bytes//[^0-9]/}"
+        if [[ "$xargs_max_bytes" =~ ^[0-9]+$ && "$xargs_max_bytes" -gt 131072 ]]; then
+          xargs_args=(-0 -s "$xargs_max_bytes")
+        fi
         break
       fi
-      stat_batch_bytes=$((stat_batch_bytes + stat_entry_bytes))
-      stat_end=$((stat_end + 1))
-    done
-    stat_chunk=("${RAW_LOG_FILES[@]:$stat_offset:$((stat_end - stat_offset))}")
-    if [[ "$STAT_FLAVOR" == "gnu" ]]; then
-      stat_output="$(stat -c '%Y' -- "${stat_chunk[@]}")"
-    elif [[ "$STAT_FLAVOR" == "bsd" ]]; then
-      stat_output="$(stat -f '%m' -- "${stat_chunk[@]}")"
-    elif stat_output="$(stat -c '%Y' -- "${stat_chunk[@]}" 2>/dev/null)" && [[ -n "$stat_output" ]]; then
-      STAT_FLAVOR="gnu"
-    else
-      stat_output="$(stat -f '%m' -- "${stat_chunk[@]}")"
-      STAT_FLAVOR="bsd"
-    fi
-    chunk_mtimes=()
-    while IFS= read -r mtime_line; do
-      [[ "$mtime_line" =~ ^-?[0-9]+$ ]] || die "unexpected stat mtime output: $mtime_line"
-      chunk_mtimes+=("$mtime_line")
-    done <<<"$stat_output"
-    [[ "${#chunk_mtimes[@]}" -eq "${#stat_chunk[@]}" ]] || \
-      die "stat returned ${#chunk_mtimes[@]} mtimes for ${#stat_chunk[@]} files"
-    RAW_LOG_MTIMES+=("${chunk_mtimes[@]}")
-    stat_offset="$stat_end"
-  done
+    done <<<"$xargs_limits"
+  fi
+
+  if [[ "$STAT_FLAVOR" == "gnu" ]]; then
+    stat_output="$(printf '%s\0' "${RAW_LOG_FILES[@]}" | xargs "${xargs_args[@]}" stat -c '%Y' --)"
+  elif [[ "$STAT_FLAVOR" == "bsd" ]]; then
+    stat_output="$(printf '%s\0' "${RAW_LOG_FILES[@]}" | xargs "${xargs_args[@]}" stat -f '%m' --)"
+  elif stat_output="$(printf '%s\0' "${RAW_LOG_FILES[@]}" | xargs "${xargs_args[@]}" stat -c '%Y' -- 2>/dev/null)" && [[ -n "$stat_output" ]]; then
+    STAT_FLAVOR="gnu"
+  else
+    stat_output="$(printf '%s\0' "${RAW_LOG_FILES[@]}" | xargs "${xargs_args[@]}" stat -f '%m' --)"
+    STAT_FLAVOR="bsd"
+  fi
+
+  while IFS= read -r mtime_line; do
+    [[ "$mtime_line" =~ ^-?[0-9]+$ ]] || die "unexpected stat mtime output: $mtime_line"
+    RAW_LOG_MTIMES+=("$mtime_line")
+  done <<<"$stat_output"
+  [[ "${#RAW_LOG_MTIMES[@]}" -eq "${#RAW_LOG_FILES[@]}" ]] || \
+    die "stat returned ${#RAW_LOG_MTIMES[@]} mtimes for ${#RAW_LOG_FILES[@]} files"
 fi
 
 LATEST_LOG=""
@@ -1117,14 +1107,22 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       MANIFEST_SCANNED=1
       MANIFEST_RAW_LOG_INDEX=-1
       for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ )); do
-        if [[ "${RAW_LOG_FILES[$raw_log_index]}" == "$MANIFEST_LOG_PATH" ]]; then
-          LATEST_LOG_MTIME="${RAW_LOG_MTIMES[$raw_log_index]}"
+        if [[ "${RAW_LOG_FILES[$raw_log_index]}" == "$MANIFEST_LOG_PATH" ||
+              "${RAW_LOG_FILES[$raw_log_index]}" -ef "$MANIFEST_LOG_PATH" ]]
+        then
           MANIFEST_RAW_LOG_INDEX="$raw_log_index"
           break
         fi
       done
-      if [[ "$MANIFEST_RAW_LOG_INDEX" -lt 0 ]]; then
+      if [[ "$MANIFEST_RAW_LOG_INDEX" -ge 0 &&
+            "${RAW_LOG_MTIMES[$MANIFEST_RAW_LOG_INDEX]}" -ge "$TODAY_START_EPOCH" ]]
+      then
+        LATEST_LOG_MTIME="${RAW_LOG_MTIMES[$MANIFEST_RAW_LOG_INDEX]}"
+      else
         LATEST_LOG_MTIME="$(file_mtime "$MANIFEST_LOG_PATH")"
+        if [[ "$MANIFEST_RAW_LOG_INDEX" -ge 0 ]]; then
+          RAW_LOG_MTIMES[MANIFEST_RAW_LOG_INDEX]="$LATEST_LOG_MTIME"
+        fi
       fi
       CURRENT_RUN_ID="$MANIFEST_RUN_ID"
       CURRENT_RUN_STARTED_TIMESTAMP="$(timestamp_to_epoch "$MANIFEST_PROCESS_STARTED_AT" || true)"
@@ -1150,18 +1148,6 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       scan_after_cycles=$'\n'"${scan_after_volumes#*$'\n__SKYEYE_TODAY__\n'}"
       MANIFEST_TODAY_CYCLES="${scan_after_cycles%%$'\n__SKYEYE_END__\n'*}"
       MANIFEST_TODAY_CYCLES="${MANIFEST_TODAY_CYCLES#$'\n'}"
-
-      # Reconcile first-write-of-the-day race: if the manifest log was cached
-      # with a pre-today mtime before today's first cycle was written, refresh
-      # its live mtime so both LATEST_LOG_MTIME and the history loop see it.
-      if [[ "$MANIFEST_RAW_LOG_INDEX" -ge 0 && -n "$MANIFEST_TODAY_CYCLES" &&
-            "${RAW_LOG_MTIMES[$MANIFEST_RAW_LOG_INDEX]}" -lt "$TODAY_START_EPOCH" &&
-            -f "$MANIFEST_LOG_PATH" ]]
-      then
-        refreshed_manifest_mtime="$(file_mtime "$MANIFEST_LOG_PATH")"
-        RAW_LOG_MTIMES[MANIFEST_RAW_LOG_INDEX]="$refreshed_manifest_mtime"
-        LATEST_LOG_MTIME="$refreshed_manifest_mtime"
-      fi
 
       while IFS= read -r scan_line; do
         [[ -n "$scan_line" && "$scan_line" != "__SKYEYE_HEADER__" ]] || continue
@@ -1380,7 +1366,11 @@ for (( raw_log_index = 0; raw_log_index < ${#RAW_LOG_FILES[@]}; raw_log_index++ 
   history_mtime="${RAW_LOG_MTIMES[$raw_log_index]}"
   [[ "$history_mtime" -ge "$TODAY_START_EPOCH" ]] || continue
   [[ -f "$history_log" ]] || continue
-  if [[ "$MANIFEST_SCANNED" -eq 1 && "$history_log" == "$MANIFEST_LOG_PATH" ]]; then
+  if [[ "$MANIFEST_SCANNED" -eq 1 &&
+        ( "$raw_log_index" -eq "$MANIFEST_RAW_LOG_INDEX" ||
+          "$history_log" == "$MANIFEST_LOG_PATH" ||
+          "$history_log" -ef "$MANIFEST_LOG_PATH" ) ]]
+  then
     history_cycles="$MANIFEST_TODAY_CYCLES"
   else
     history_run_id="${history_log##*/}"
@@ -1403,7 +1393,10 @@ if [[ "$MANIFEST_SCANNED" -eq 1 && "$MANIFEST_RAW_LOG_INDEX" -lt 0 &&
 then
   manifest_in_glob=0
   while IFS= read -r glob_candidate; do
-    if [[ "$glob_candidate" == "$MANIFEST_LOG_PATH" ]]; then
+    [[ -n "$glob_candidate" ]] || continue
+    if [[ "$glob_candidate" == "$MANIFEST_LOG_PATH" ||
+          "$glob_candidate" -ef "$MANIFEST_LOG_PATH" ]]
+    then
       manifest_in_glob=1
       break
     fi
