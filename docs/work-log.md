@@ -15,6 +15,18 @@
 ---
 -->
 
+## 2026-11-19 12:59 — Trading probe：改為批次取 mtime 與 ACL，去掉逐檔外部程式呼叫
+
+**改動摘要：** `probe.sh` 原本對 glob 比對到的每個 log 各跑多次 `stat`，`ensure-log-access.sh` 對每個檔案各跑一次 `getfacl` 和兩次 `grep`。現在改成用 `xargs -0` 一次 `stat` 全部檔案、一次 `getfacl` 加一個 awk 檢查全部檔案，只對缺權限的檔案跑 `setfacl`；`date` 種類只在啟動時判斷一次，有 `sha256sum` 就優先用它。輸出的 metrics 與舊版逐 byte 相同。以 73 個 log 的 robinhood 形狀測試資料量，每次執行外部程式呼叫從 565 降到 41，CPU 從約 1.44 秒降到 0.28 秒。尚未部署到 Trading01。
+
+**修改的檔案：**
+- `agents/alloy/trading/probe.sh`：批次 mtime（只受實際參數長度限制分批）；manifest 綁定的 log 在舊版相同的時間點重新取 mtime；log 比對用檔名加所在目錄；接受負數 epoch；config checksum 改由 stdin 讀入。
+- `agents/alloy/trading/ensure-log-access.sh`：批次 `getfacl`／`setfacl`，`find` 失敗時一定回報錯誤。
+- `tests/trading/test-probe-equivalence.sh`：新增 80 個歷史 log、執行中途建立／寫入／搬移 log、hard link、symlink、超過 ARG_MAX、5001 個路徑等情境，共 66 項逐 byte 等價檢查。
+- `tests/trading/test-log-access.sh`：假 `getfacl`／`setfacl` 支援批次與呼叫計數，並只接受 `u:alloy:r--`。
+
+**原因/備註：** Linear WAN-460 第二輪。不另存狀態、不改 unit 或 timer。經 Codex review 四輪後收下；剩一項測試在極小 ARG_MAX 主機上可能誤判的 minor，另開建議。
+
 ## 2026-11-19 18:38 — Trading probe：log 改為單次預先過濾掃描，並限制 unit 的 CPU
 
 **改動摘要：** `probe.sh` 原本每 15 秒對當天 live-run log 全讀 7–8 次，改成只用一次 `grep -a -n -F` 預先過濾，再由單一 awk 掃描。輸出的 metrics 與舊版逐 byte 相同。合成的 popdex-02 全天 log（54 MiB）每次執行從 4.1 CPU 秒降到 0.28 秒。`skyeye-trading-probe@.service` 加上 `Nice=10`、`CPUWeight=20`、`CPUQuota=20%`。尚未部署到 Trading01。
