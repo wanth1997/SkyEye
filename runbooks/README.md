@@ -36,6 +36,7 @@ Add a row + a runbook here every time you add a rule with `severity: High` or `M
 - [`trading-alert-promotion.md`](./trading-alert-promotion.md) — Trading silence rule, SMTP fill-in, real canary and the promotion checklist.
 - [`windows-host-onboarding.md`](./windows-host-onboarding.md) — Windows host: pinned Alloy, token placement, Check, elevated Install, central verification, rollback, uninstall, adding a runner.
 - [`alertmanager-upgrade.md`](./alertmanager-upgrade.md) — Manual Alertmanager image upgrade (v0.27.0 → v0.34.2): pre-pull, `up -d`, `--manual-applied`, post-checks and rollback.
+- [`grafana-upgrade.md`](./grafana-upgrade.md) — Manual Grafana major upgrade (11.2.0 → 12.4.15): pre-checks, `grafana_data` backup, offline migration rehearsal, `up -d`, post-checks and backup-restore rollback.
 - [`skyeye-watchdog.md`](./skyeye-watchdog.md) — External dead man's switch: hosted check, `deadman_url` secret, deploy, the one-time Alertmanager stop test and planned-downtime pauses.
 
 ## Template
