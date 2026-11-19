@@ -31,6 +31,8 @@ Volume 優先取最新 stable `pnl_status.volume_usd_by_executor`，避免只加
 
 Probe 只在 net 所在的行不早於最新 venue 行時才採用 net，同一行矛盾時改採 venue 加總，避免舊 net 蓋過新 venue。讀 tnauqquant `d273d69` 原始碼確認 net 與 venue 一定同行，所以這個順序目前不會發生，檢查是防禦性的；實際 log 沒有讀過。net 行較新時（等待平倉，或只有一腿），各 venue 的持倉序列會停在舊值，要看 `tnauqquant_position_sample_timestamp_seconds{source="venue"}` 的年齡。這些欄位是 Engine 記憶體帳本的投影，不是交易所讀回。持倉事件的時間鍵是 `time=`，只有 `logging.format=text` 時讀得到。
 
+Producer 送平倉單時用成交前帳本寫 coordinator_book 行，成交後的行都不帶 position 欄位，所以只看 book 行時，平倉後要等下一個 signal 行才會變空倉（2026-11-19 popdex-02 最長 212 秒，lighter-robinhood 約 15 分）。Probe 因此把 `msg=ui_warmup_async_ready`、`reason` 以 `gross_flat_verified:` 開頭、`executor` 在 `TQ_EXECUTOR_MAP` 裡的行當成空倉觀測：它比最新 book 行新時，net 是 0、每個 mapped exchange 都是 `side="flat"` 0，`source="net"` 時間取該行，原本有 venue 時間的 lane 也一起更新。之後的 book 行照常覆寫；時間在未來或缺少時沿用 book 行的規則。`close_position disposition=filled` 不算空倉，因為可能是部分平倉。
+
 中央 target source 改為 `trading_target_info`。Raw `tnauqquant_*` metric 不改名，透過 `trading_strategy_*` recording rules 提供 dashboard/alerts 的 engine-neutral 介面。新 detail dashboard 以 `server_id` / `strategy` 變數選取 target；fleet dashboard 每策略一列顯示 current-run P&L、cycles、volume、position、process/binding/risk 與 telemetry freshness。不同 run 沒有共同 accounting period，因此禁止 fleet current-run P&L total。
 
 所有 generalized Prometheus/Loki alerts 保持 `notification_mode=shadow`。Trading01 若 manifest 仍為 running、但 process 已正常退出且沒有 bound done marker，監控必須顯示 process down / stale telemetry；不得由 SkyEye 偽造 done marker 或重啟交易程序。
