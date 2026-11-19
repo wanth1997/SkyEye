@@ -15,6 +15,17 @@
 ---
 -->
 
+## 2026-11-19 16:18 — cloudflared README：補 WAF 規則與目前的 Access token
+
+**改動摘要：** `cloudflared/README.md` 補上 11-19 啟用的 WAF custom rule `skyeye-push-write-only`（push host 只放行寫入用的 POST），並把 push 的 Access policy 與 service token 表更新到現況。只改文件。
+
+**修改的檔案：**
+- `cloudflared/README.md`：push app 的三條 Service Auth policy；service token 現況表（只記名稱、用途、狀態）；WAF 規則的位置、expression、驗證與 rollback；強調不可刪除重建 `SkyEye Grafana` Access app。
+
+**原因/備註：** Linear WAN-438。WAF 規則由 Wan 在 Cloudflare 套用，operator 於 07:38Z～08:07Z 驗證各來源持續寫入（WAN-430）。`skyeye-agent-push`（Not Seen Yet）與 `learnerllm-agent` 是之後可清理的候選。
+
+---
+
 ## 2026-11-19 16:05 — Trading Linux examples：raw log glob 收緊為契約檔名
 
 **改動摘要：** Linux Trading env example 的 `TQ_RAW_LOG_GLOB` 從寬鬆的 `*<stem>.raw.log` 改成契約檔名，避免 probe 選到名稱相似的其他 lane log；README 新增在既有主機上收緊 glob 的一次性程序。只 merge，Trading01 還沒套用。
