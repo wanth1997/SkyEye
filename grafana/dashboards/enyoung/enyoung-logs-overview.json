@@ -102,7 +102,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({product=\"enyoung\"} | regexp `\"(?P<method>\\w+) (?P<url>\\S+) HTTP/\\S+\" from \\S+ - (?P<status>\\d+) (?P<bytes>\\d+)B in (?P<duration>\\S+)` | status =~ \"5..\" [30m])) / clamp_min(sum(count_over_time({product=\"enyoung\"} [30m])), 1)",
+          "expr": "(sum(count_over_time({product=\"enyoung\"} | regexp `\"(?P<method>\\w+) (?P<url>\\S+) HTTP/\\S+\" from \\S+ - (?P<status>\\d+) (?P<bytes>\\d+)B in (?P<duration>\\S+)` | status =~ \"5..\" [30m])) or vector(0)) / (sum(count_over_time({product=\"enyoung\"} | regexp `\"(?P<method>\\w+) (?P<url>\\S+) HTTP/\\S+\" from \\S+ - (?P<status>\\d+) (?P<bytes>\\d+)B in (?P<duration>\\S+)` | status != \"\" [30m])) > 0)",
           "refId": "A",
           "queryType": "instant",
           "instant": true
@@ -139,8 +139,7 @@
               }
             ]
           },
-          "decimals": 3,
-          "noValue": "0"
+          "decimals": 3
         },
         "overrides": []
       },
@@ -166,7 +165,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({product=\"enyoung\"} | regexp `\"(?P<method>\\w+) (?P<url>\\S+) HTTP/\\S+\" from \\S+ - (?P<status>\\d+) (?P<bytes>\\d+)B in (?P<duration>\\S+)` | status =~ \"4..\" [30m])) / clamp_min(sum(count_over_time({product=\"enyoung\"} [30m])), 1)",
+          "expr": "(sum(count_over_time({product=\"enyoung\"} | regexp `\"(?P<method>\\w+) (?P<url>\\S+) HTTP/\\S+\" from \\S+ - (?P<status>\\d+) (?P<bytes>\\d+)B in (?P<duration>\\S+)` | status =~ \"4..\" [30m])) or vector(0)) / (sum(count_over_time({product=\"enyoung\"} | regexp `\"(?P<method>\\w+) (?P<url>\\S+) HTTP/\\S+\" from \\S+ - (?P<status>\\d+) (?P<bytes>\\d+)B in (?P<duration>\\S+)` | status != \"\" [30m])) > 0)",
           "refId": "A",
           "queryType": "instant",
           "instant": true
@@ -203,8 +202,7 @@
               }
             ]
           },
-          "decimals": 3,
-          "noValue": "0"
+          "decimals": 3
         },
         "overrides": []
       },
