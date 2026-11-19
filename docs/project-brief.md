@@ -6,7 +6,7 @@
 
 ## 架構 / 技術棧
 
-- 中央端：Docker Compose、Prometheus 2.54、Loki 3.1、Grafana 11.2、Alertmanager 0.34、Blackbox Exporter、Node Exporter 1.12（`monitoring-host` job）、Cloudflare Tunnel。
+- 中央端：Docker Compose、Prometheus 2.54、Loki 3.1、Grafana 12.4、Alertmanager 0.34、Blackbox Exporter、Node Exporter 1.12（`monitoring-host` job）、Cloudflare Tunnel。
 - 遠端主機：Grafana Alloy；metrics 經 Prometheus remote write，logs 經 Loki push API。
 - 儲存：Prometheus TSDB 與 Grafana SQLite 位於 EBS，Loki chunks 位於 S3。
 - 存取：Grafana 經 Cloudflare Access；agent 使用 Cloudflare Access Service Token。

@@ -100,7 +100,7 @@ case "$*" in
       [[ "$*" != *-fsS* ]] || exit 22
       printf '%s\n' "$FAKE_LOKI_STORE_ERROR"
     fi ;;
-  */api/search*|*/api/dashboards/uid/*) exec "$FAKE_BIN/grafana" "$@" ;;
+  */api/search*|*/api/dashboards/uid/*|*/apis/dashboard.grafana.app/v1beta1/namespaces/default/dashboards/*) exec "$FAKE_BIN/grafana" "$@" ;;
   *query=trading_target_info*)
     printf '{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"trading_target_info","server_id":"trading02","strategy":"deploy-lane-btc","quote_currency":"USDT"},"value":[0,"1"]}]}}\n' ;;
   *) exit 22 ;;
@@ -150,12 +150,31 @@ for directory, _, names in os.walk(root):
 url = sys.argv[-1]
 if "/api/search" in url:
     print(json.dumps([] if os.environ.get("FAKE_GRAFANA_ROLELESS") else [{"uid": uid} for uid in served]))
+elif "/apis/dashboard.grafana.app/v1beta1/namespaces/default/dashboards/" in url:
+    uid = url.rsplit("/", 1)[1]
+    if uid not in served or os.environ.get("FAKE_GRAFANA_V1BETA1_404"):
+        sys.exit("curl: (22) The requested URL returned error: 404")
+    relative, _ = served[uid]
+    managed_by = os.environ.get("FAKE_GRAFANA_MANAGED_BY", "classic-file-provisioning")
+    source_path = os.environ.get("FAKE_GRAFANA_SOURCE_PATH", relative)
+    print(json.dumps({
+        "apiVersion": "dashboard.grafana.app/v1beta1",
+        "kind": "Dashboard",
+        "metadata": {
+            "name": uid,
+            "annotations": {
+                "grafana.app/managedBy": managed_by,
+                "grafana.app/sourcePath": source_path,
+            },
+        },
+    }))
 else:
     uid = url.rsplit("/", 1)[1]
     if uid not in served:
         sys.exit("curl: (22) The requested URL returned error: 404")
     relative, body = served[uid]
-    print(json.dumps({"dashboard": dict(body, id=7, version=3), "meta": {"provisionedExternalId": relative}}))
+    ext_id = "" if os.environ.get("FAKE_GRAFANA_MIGRATED") else os.environ.get("FAKE_GRAFANA_EXT_ID", relative)
+    print(json.dumps({"dashboard": dict(body, id=7, version=3), "meta": {"provisionedExternalId": ext_id}}))
 EOF
 chmod 755 "$FAKE_BIN"/*
 printf '%s\n' "$GRAFANA_TOKEN" >"$WORK/grafana-token"
@@ -633,7 +652,7 @@ for bad in broken-json zero-byte emptied-existing array empty-object no-title no
   restore
 done
 
-# The values below are what pinned Grafana 11.2.0 was seen to rewrite or keep.
+# The values below are what pinned Grafana 12.4.15 was seen to rewrite or keep.
 printf 'case: a dashboard Grafana would rewrite is refused before the checkout moves\n'
 for refresh in 1s 4s 0s 0m 500ms 1.5s 30 abc; do
   set_dashboard "$FLEET" refresh "\"$refresh\""
@@ -1011,6 +1030,24 @@ FAKE_GRAFANA_ROOT="$WORK/grafana-drift" expect_not_loaded 'no record, UI edit' \
   'if that is a UI edit, export hosts-node-exporter to Git'
 [[ ! -e "$applied_record" ]] || fail "no record: a record was written"
 expect_applied 'no record, every dashboard matches'
+restore
+
+# Review R1 C3: Grafana 12.4 unified-storage migration leaves legacy
+# meta.provisionedExternalId empty on untouched migrated dashboards while the
+# v1beta1 resource carries managedBy=classic-file-provisioning and sourcePath.
+printf 'case: a migrated dashboard with empty provisionedExternalId is verified via v1beta1 annotations\n'
+rm -f "$applied_record"
+FAKE_GRAFANA_MIGRATED=1 expect_applied 'no record, migrated v1beta1 matches'
+rm -f "$applied_record"
+FAKE_GRAFANA_MIGRATED=1 FAKE_GRAFANA_MANAGED_BY=ui \
+  expect_not_loaded 'migrated v1beta1 wrong managedBy' 'is not provisioned from'
+FAKE_GRAFANA_MIGRATED=1 FAKE_GRAFANA_SOURCE_PATH='Other/wrong.json' \
+  expect_not_loaded 'migrated v1beta1 wrong sourcePath' 'is not provisioned from'
+FAKE_GRAFANA_MIGRATED=1 FAKE_GRAFANA_V1BETA1_404=1 \
+  expect_not_loaded 'migrated v1beta1 missing (404)' 'is not provisioned from'
+FAKE_GRAFANA_EXT_ID='Other/wrong.json' \
+  expect_not_loaded 'non-empty wrong provisionedExternalId does not fall back to v1beta1' 'is not provisioned from'
+expect_applied 'restore applied record after migrated checks'
 restore
 
 printf 'case: a first deploy Grafana did not load stays unrecorded however often it is rerun\n'

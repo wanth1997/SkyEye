@@ -75,7 +75,7 @@ An "Overview" dashboard (anything in the `Overview/` folder) should have at mini
 
 1. **Build in the UI** — starting from a copy of an existing one or blank. Set: title, tags, UID (Settings → JSON Model → `uid`), datasources by UID.
 2. **Sanity check against conventions** in this doc.
-3. **Share → Export → Save to file** → commit JSON to `grafana/dashboards/{Folder}/{uid}.json`.
+3. **Export → Export as code → Download file** (leave **Export for sharing externally** off so pinned datasource UIDs are preserved; keep classic JSON, not a v2 resource — Grafana 12.4 exports `schemaVersion: 42` with `refresh` normalized to a string, `timepicker.time_options` dropped, and `hideFrom.tooltip: true` added where `hideFrom.viz: true`) → commit JSON to `grafana/dashboards/{Folder}/{uid}.json`.
 4. **`docker compose restart grafana`** (or wait up to 60 s — provider polls).
 5. Confirm the provisioned copy loads correctly and that your UI edits are gone (UI edits are ephemeral once the file exists).
 

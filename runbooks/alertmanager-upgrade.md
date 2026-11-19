@@ -111,7 +111,7 @@ sudo docker compose logs --since 10m alertmanager | grep -E 'level=(ERROR|WARN)'
       alert add alertname=SkyEyeAlertmanagerUpgradeCheck severity=Low --annotation=summary='Alertmanager upgrade check'
     ```
 
-- **Grafana：** 打開 `SkyEye — Stack health`（`skyeye-stack-health`），🚨 Alertmanager 那一排的 panel 都有資料。Datasource 的檢查要經過 Grafana 的 proxy，這也是 datasource 頁面 Test 按鈕實際做的事。`/api/datasources/uid/alertmanager/health` 在 Grafana 11.2 對這個 datasource 一律回 `Plugin unavailable`，與 Alertmanager 版本無關，不要拿它判斷：
+- **Grafana：** 打開 `SkyEye — Stack health`（`skyeye-stack-health`），🚨 Alertmanager 那一排的 panel 都有資料。Datasource 的檢查要經過 Grafana 的 proxy，這也是 datasource 頁面 Test 按鈕實際做的事。`/api/datasources/uid/alertmanager/health` 在 Grafana 11.2 與 12.4 對這個 datasource 一律回 `Plugin unavailable`，與 Alertmanager 版本無關，不要拿它判斷：
 
   ```bash
   { printf 'Authorization: Bearer '; cat /home/ubuntu/.config/skyeye/grafana-viewer-token; } | \
