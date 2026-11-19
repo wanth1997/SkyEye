@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-19 17:15 — Grafana 11.2.0 → 12.4.15：repo 端升級與 upgrade／rollback runbook
+
+**改動摘要：** `docker-compose.yml` 把 Grafana 釘到 `grafana/grafana:12.4.15@sha256:2894082f…`，關閉 plugin preinstall，並 opt in unified storage migration。新增離線 provisioning smoke test 與 `runbooks/grafana-upgrade.md`（包含彩排、升級與從 tar 備份還原的 rollback）。`scripts/central-deploy` 改用 v1beta1 annotations 驗證 migration 後的 dashboard。尚未部署到 monitoring-prod。
+
+**修改的檔案：**
+- `docker-compose.yml`：Grafana 12.4.15 digest pin、`GF_PLUGINS_PREINSTALL_DISABLED`、unified storage migration 設定。
+- `grafana/provisioning/alerting/.gitkeep`、`grafana/provisioning/plugins/.gitkeep`：補齊 12.x 預期的 provisioning 目錄。
+- `scripts/central-deploy`、`tests/trading/test-central-deploy.sh`：12.4 migration 後，dashboard 確認改看 v1beta1 annotations。
+- `tests/grafana/test-provisioning.sh`：以 production 相同的唯讀 mount 起 12.4.15，檢查 datasource UID、10 個 dashboard 與 provisioning log。
+- `runbooks/grafana-upgrade.md`、`runbooks/README.md`、`runbooks/alertmanager-upgrade.md`：升級／rollback 流程，共用的 shell 檢查函式在 `lib.sh`。
+- `docs/project-brief.md`、`docs/operations.md`、`docs/grafana-conventions.md`、`monitoring-plan-v2.md`、`docs/plans/grafana-upgrade.md`：版本與流程更新，plan S1 標記完成。
+
+**原因/備註：** Linear WAN-427（11-04 review L-01：11.2.0 已停止支援）。經 Codex review 三輪與 manager 檢查一輪後收下。部署是 plan S2（`SKYEYE-GRAFANA-UPGRADE-DEPLOY`），需使用者核准；12.x 會遷移 `grafana.db`，只換 image 無法降版，rollback 必須依 runbook 從升級前的 tar 備份還原。
+
+---
+
 ## 2026-11-19 16:18 — cloudflared README：補 WAF 規則與目前的 Access token
 
 **改動摘要：** `cloudflared/README.md` 補上 11-19 啟用的 WAF custom rule `skyeye-push-write-only`（push host 只放行寫入用的 POST），並把 push 的 Access policy 與 service token 表更新到現況。只改文件。
