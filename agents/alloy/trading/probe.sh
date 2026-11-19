@@ -461,6 +461,7 @@ scan_manifest_log() {
         for (i = 1; i <= today_count; i++) {
           print today_order[i]
         }
+        print "__SKYEYE_END__"
       }
     '
 }
@@ -964,22 +965,29 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
   RUN_EXPECTED=1
 
   MANIFEST_VALID=0
-  if jq -e '
-      .schema_version == 1 and
-      (.run_id | type) == "string" and (.run_id | contains("\n") | not) and
-      (.strategy | type) == "string" and (.strategy | contains("\n") | not) and
-      (.instance_id | type) == "string" and (.instance_id | contains("\n") | not) and
-      (.pid | type) == "number" and .pid > 0 and
-      (.config_sha256 | type) == "string" and (.config_sha256 | contains("\n") | not) and
-      (.process_started_at | type) == "string" and (.process_started_at | contains("\n") | not) and
-      (.executable | type) == "string" and (.executable | startswith("/")) and (.executable | contains("\n") | not) and
-      (.config_path | type) == "string" and (.config_path | startswith("/")) and (.config_path | contains("\n") | not) and
-      (.log_path | type) == "string" and (.log_path | startswith("/")) and (.log_path | contains("\n") | not) and
-      (.done_marker_path | type) == "string" and (.done_marker_path | startswith("/")) and (.done_marker_path | contains("\n") | not) and
-      .state == "running"
-    ' "$TQ_RUN_MANIFEST" >/dev/null 2>&1
+  if manifest_fields="$(jq -s -r '
+      if length == 1 and (.[0] | type) == "object" then
+        .[0] |
+        if .schema_version == 1 and
+           (.run_id | type) == "string" and (.run_id | contains("\n") | not) and
+           (.strategy | type) == "string" and (.strategy | contains("\n") | not) and
+           (.instance_id | type) == "string" and (.instance_id | contains("\n") | not) and
+           (.pid | type) == "number" and .pid > 0 and
+           (.config_sha256 | type) == "string" and (.config_sha256 | contains("\n") | not) and
+           (.process_started_at | type) == "string" and (.process_started_at | contains("\n") | not) and
+           (.executable | type) == "string" and (.executable | startswith("/")) and (.executable | contains("\n") | not) and
+           (.config_path | type) == "string" and (.config_path | startswith("/")) and (.config_path | contains("\n") | not) and
+           (.log_path | type) == "string" and (.log_path | startswith("/")) and (.log_path | contains("\n") | not) and
+           (.done_marker_path | type) == "string" and (.done_marker_path | startswith("/")) and (.done_marker_path | contains("\n") | not) and
+           .state == "running"
+        then
+          .run_id, .strategy, .instance_id, (.pid | tostring),
+          .config_sha256, .process_started_at, .executable,
+          .config_path, .log_path, .done_marker_path, "__END__"
+        else error end
+      else error end
+    ' "$TQ_RUN_MANIFEST" 2>/dev/null)"
   then
-    manifest_fields="$(jq -r '.run_id, .strategy, .instance_id, (.pid | tostring), .config_sha256, .process_started_at, .executable, .config_path, .log_path, .done_marker_path' "$TQ_RUN_MANIFEST")"
     {
       IFS= read -r MANIFEST_RUN_ID
       IFS= read -r MANIFEST_STRATEGY
@@ -991,6 +999,7 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       IFS= read -r MANIFEST_CONFIG_PATH
       IFS= read -r MANIFEST_LOG_PATH
       IFS= read -r MANIFEST_DONE_MARKER_PATH
+      IFS= read -r _manifest_fields_end
     } <<<"$manifest_fields"
 
     if [[ "$MANIFEST_RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] &&
@@ -1033,16 +1042,19 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       MANIFEST_TODAY_CYCLES=""
 
       MANIFEST_SCAN_OUTPUT="$(scan_manifest_log "$MANIFEST_LOG_PATH" "$MANIFEST_RUN_ID")"
-      scan_header="${MANIFEST_SCAN_OUTPUT%%$'\n__SKYEYE_VOLUMES__'*}"
-      scan_after_header="${MANIFEST_SCAN_OUTPUT#*$'\n__SKYEYE_VOLUMES__'}"
-      scan_after_header="${scan_after_header#$'\n'}"
-      CURRENT_EXCHANGE_VOLUMES="${scan_after_header%%__SKYEYE_CYCLES__*}"
-      CURRENT_EXCHANGE_VOLUMES="${CURRENT_EXCHANGE_VOLUMES%$'\n'}"
-      scan_after_volumes="${scan_after_header#*__SKYEYE_CYCLES__}"
-      scan_after_volumes="${scan_after_volumes#$'\n'}"
-      COMPLETED_CYCLE_PNL_SERIES="${scan_after_volumes%%__SKYEYE_TODAY__*}"
-      COMPLETED_CYCLE_PNL_SERIES="${COMPLETED_CYCLE_PNL_SERIES%$'\n'}"
-      MANIFEST_TODAY_CYCLES="${scan_after_volumes#*__SKYEYE_TODAY__}"
+      # Frame each section with leading/trailing newlines so markers match only as
+      # complete lines and never collide with marker substrings inside labels.
+      scan_framed=$'\n'"$MANIFEST_SCAN_OUTPUT"$'\n'
+      scan_header="${scan_framed%%$'\n__SKYEYE_VOLUMES__\n'*}"
+      scan_header="${scan_header#$'\n'}"
+      scan_after_header=$'\n'"${scan_framed#*$'\n__SKYEYE_VOLUMES__\n'}"
+      CURRENT_EXCHANGE_VOLUMES="${scan_after_header%%$'\n__SKYEYE_CYCLES__\n'*}"
+      CURRENT_EXCHANGE_VOLUMES="${CURRENT_EXCHANGE_VOLUMES#$'\n'}"
+      scan_after_volumes=$'\n'"${scan_after_header#*$'\n__SKYEYE_CYCLES__\n'}"
+      COMPLETED_CYCLE_PNL_SERIES="${scan_after_volumes%%$'\n__SKYEYE_TODAY__\n'*}"
+      COMPLETED_CYCLE_PNL_SERIES="${COMPLETED_CYCLE_PNL_SERIES#$'\n'}"
+      scan_after_cycles=$'\n'"${scan_after_volumes#*$'\n__SKYEYE_TODAY__\n'}"
+      MANIFEST_TODAY_CYCLES="${scan_after_cycles%%$'\n__SKYEYE_END__\n'*}"
       MANIFEST_TODAY_CYCLES="${MANIFEST_TODAY_CYCLES#$'\n'}"
 
       while IFS= read -r scan_line; do

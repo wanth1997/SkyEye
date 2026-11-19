@@ -446,20 +446,22 @@ fi
 exit "\$rc"
 SHIM_EOF
 chmod 755 "$C1_SHIM/grep"
-rm -f "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+rm -f "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"
+# Capture the frozen reference output just before the controlled append.
+FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_OLD" PATH="$SHIM:$PATH" "$OLD_PROBE"
 FAKE_NOW="$NOW_DEFAULT" TQ_TEXTFILE_DIR="$TEXT_NEW" PATH="$C1_SHIM:$SHIM:$PATH" "$NEW_PROBE"
 c1_reads="$(cat "$C1_COUNT_FILE")"
 if [[ "$c1_reads" != "1" ]]; then
   printf 'FAIL: scenario 10b (C1): active manifest log was grepped %s times (expected 1)\n' "$c1_reads" >&2
   exit 1
 fi
-if rg -q '^tnauqquant_current_net_position_btc\{.*\} 1\.5$' "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
-  printf 'FAIL: scenario 10b (C1): torn read published open Long 1.5 without its closing gross_flat\n' >&2
-  cat "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2
+if ! cmp -s "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 10b (C1/C8): output differed from pre-append baseline\n' >&2
+  diff -u "$TEXT_OLD/$TQ_TEXTFILE_NAME" "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2 || true
   exit 1
 fi
 PASS_COUNT=$((PASS_COUNT + 1))
-printf 'ok      scenario 10b (C1): single-pass read prevents torn book+gross_flat observation\n'
+printf 'ok      scenario 10b (C1/C8): single-pass read matches pre-append baseline byte-for-byte\n'
 
 printf '# Scenario 11 (C2): read/parser failures exit non-zero and preserve existing .prom\n'
 new_fixture err-lane err_lane_config 'popdex-main=popdex' Asia/Taipei
@@ -628,5 +630,89 @@ SHIM_EOF
   PASS_COUNT=$((PASS_COUNT + 1))
   printf 'ok      scenario %s (C3): fabricated line numbers +%s compare cleanly without %%g or precision loss\n' "$case_tag" "$line_base"
 done
+
+printf '# Scenario 13 (C6): multi-object and non-single-object manifests fail closed like reference\n'
+new_fixture c6-lane c6_lane_config 'popdex-main=popdex' Asia/Taipei
+RUN13="20250717_070000_c6_lane_config"
+LOG13="$REPO/logs/live-runs/$RUN13.raw.log"
+cat >"$LOG13" <<'EOF'
+time=2025-07-17T09:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=10 cycles_completed=1 volume_usd_by_executor=popdex-main:100
+EOF
+# Two-object JSON stream: stopped v2 object first (matching identity), valid running v1 object second.
+{
+  jq -n \
+    --arg run_id "$RUN13" \
+    --arg strategy "$TQ_STRATEGY" \
+    --arg instance_id "$TQ_INSTANCE_ID" \
+    --arg config_sha256 "$CONFIG_SHA" \
+    --arg executable "$QUANT" \
+    --arg config_path "$CONFIG_PATH" \
+    --arg log_path "$LOG13" \
+    --arg done_marker_path "$MARKER_PATH" \
+    '{
+      schema_version: 2,
+      run_id: $run_id,
+      strategy: $strategy,
+      instance_id: $instance_id,
+      pid: 999999,
+      config_sha256: $config_sha256,
+      process_started_at: "2025-07-17T00:00:00Z",
+      executable: $executable,
+      config_path: $config_path,
+      log_path: $log_path,
+      done_marker_path: $done_marker_path,
+      state: "stopped"
+    }'
+  jq -n \
+    --arg run_id "$RUN13" \
+    --arg strategy "$TQ_STRATEGY" \
+    --arg instance_id "$TQ_INSTANCE_ID" \
+    --arg config_sha256 "$CONFIG_SHA" \
+    --arg executable "$QUANT" \
+    --arg config_path "$CONFIG_PATH" \
+    --arg log_path "$LOG13" \
+    --arg done_marker_path "$MARKER_PATH" \
+    '{
+      schema_version: 1,
+      run_id: $run_id,
+      strategy: $strategy,
+      instance_id: $instance_id,
+      pid: 999999,
+      config_sha256: $config_sha256,
+      process_started_at: "2025-07-17T00:00:00Z",
+      executable: $executable,
+      config_path: $config_path,
+      log_path: $log_path,
+      done_marker_path: $done_marker_path,
+      state: "running"
+    }'
+} >"$MANIFEST_PATH"
+assert_identical "scenario 13a (C6): two-object manifest (stopped v2 then valid running v1) stays unbound" "$NOW_DEFAULT"
+if ! grep -q 'tnauqquant_log_binding_ok{.*strategy="c6-lane"} 0$' "$TEXT_NEW/$TQ_TEXTFILE_NAME" ||
+   grep -q '^tnauqquant_current_run_info{' "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 13a (C6): two-object manifest must produce log_binding_ok=0 and no current_run_info\n' >&2
+  cat "$TEXT_NEW/$TQ_TEXTFILE_NAME" >&2
+  exit 1
+fi
+
+: >"$MANIFEST_PATH"
+assert_identical "scenario 13b (C6): empty manifest file stays unbound" "$NOW_DEFAULT"
+
+printf '# Scenario 14 (C7): exchange labels containing section marker substrings pass through unchanged\n'
+new_fixture c7-lane c7_lane_config 'x=a__SKYEYE_CYCLES__b' Asia/Taipei
+RUN14="20250717_080000_c7_lane_config"
+LOG14="$REPO/logs/live-runs/$RUN14.raw.log"
+write_manifest "$RUN14" "$LOG14"
+cat >"$LOG14" <<'EOF'
+time=2025-07-17T09:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=12.5 cycles_completed=1 cycle_real_pnl_usdt=12.5 volume_usd_by_executor=x:456.75 note=__SKYEYE_VOLUMES__
+time=2025-07-17T09:01:00Z level=INFO msg=position_update net_side=Long net_qty_btc=0.5 portfolio_projection=coordinator_book
+EOF
+assert_identical "scenario 14a (C7): mapping x=a__SKYEYE_CYCLES__b matches baseline byte-for-byte" "$NOW_DEFAULT"
+
+export TQ_EXECUTOR_MAP='x=a__SKYEYE_CYCLES__b,y=c__SKYEYE_TODAY__d'
+cat >"$LOG14" <<'EOF'
+time=2025-07-17T09:00:00Z level=INFO msg=pnl_status stable=true cycle_completed=true cycle_id=c.1 session_cycle=1 real_pnl_usdt=12.5 cycles_completed=1 cycle_real_pnl_usdt=12.5 volume_usd_by_executor=x:100,y:200 note=__SKYEYE_END__
+EOF
+assert_identical "scenario 14b (C7): multiple exchange labels containing section markers match baseline byte-for-byte" "$NOW_DEFAULT"
 
 printf 'PASS: %s probe equivalence checks matched baseline byte-for-byte\n' "$PASS_COUNT"
