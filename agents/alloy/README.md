@@ -16,7 +16,7 @@ exporter and Event Log). See [`windows/README.md`](./windows/README.md) and
 |---|---|---|
 | **2A** (current) | Always | systemd journal (selected units), PII-scrubbed, → central Loki |
 | 2B | `PROM_PUSH_URL` set | node_exporter (CPU/RAM/disk/net) → central Prometheus |
-| 2C | `APP_METRICS_TARGET` set | App `/metrics` scrape → central Prometheus |
+| 2C | `APP_METRICS_TARGET` or `APP_METRICS_PRODUCT_MAP` set | App `/metrics` scrape → central Prometheus |
 
 Phase 2A is log-only — no code changes on the host, low risk.
 
@@ -130,7 +130,7 @@ The next successful run overwrites this file, and it holds the credentials of th
 
 **What the health check does not cover.** The check confirms that `alloy.service` stays active on one process for 5 seconds. It says nothing about the pipeline. A wrong CF Access Client ID or Secret leaves Alloy active while every push gets a 401, so it does not trigger a rollback and `setup.sh` reports success. Always do the end-to-end check in Grafana after a run.
 
-**Hand edits are not merged.** `setup.sh` re-renders the whole config from the templates, and `APP_METRICS_TARGET` takes one target. Extra scrape targets added by hand are dropped by a re-run, and because that run succeeds, nothing rolls back. Compare the running config with the render before re-running on a host that was edited by hand.
+**Hand edits are not merged.** `setup.sh` re-renders the whole config from the templates. For a shared host running multiple products or scrape targets, configure `PRODUCT=services`, `JOURNAL_PRODUCT_MAP`, and `APP_METRICS_PRODUCT_MAP` (see [Shared hosts](#shared-hosts-multiple-products-on-one-machine)) instead of hand-editing `/etc/alloy/config.alloy`. Any hand-edited block not represented in those env vars is dropped by a re-run, and because that run succeeds, nothing rolls back. Render into a fresh directory created with `mktemp -d` using `--render-only` to compare the render against the live config before re-running on a host that was edited by hand.
 
 ## Alloy versions
 
@@ -268,3 +268,67 @@ unset APP_METRICS_BEARER_TOKEN
 up{job="ppclub-backend"}                            # == 1 when scrape succeeds
 http_requests_total{product="ppclub"}               # non-empty
 ```
+
+## Shared hosts (multiple products on one machine)
+
+When one Linux host runs multiple products (for example Prod02 running `ppclub`, `enyoung`, `zenincome`, `chat2cal`), set the host-level `PRODUCT=services` so node metrics carry `external_labels = { product = "services", server_id = "$SERVER_ID" }`, and assign each service's own `product` label via `JOURNAL_PRODUCT_MAP` (logs) and `APP_METRICS_PRODUCT_MAP` (app `/metrics` scrapes).
+
+In Alloy/Prometheus `remote_write`, `external_labels` only fill labels a series does not already have. Setting `product` on each app scrape target keeps app metrics under their own product (`product="ppclub"`, `product="zenincome"`, etc.) while host-level `node-exporter` metrics remain `product="services"`.
+
+### Environment variables
+
+| Variable | Format / Example | Notes |
+|---|---|---|
+| `PRODUCT` | `services` | Host-level `external_labels.product` for `prometheus.remote_write.central` |
+| `SERVER_ID` | `PROD02` | Unique host ID |
+| `JOURNAL_PRODUCT_MAP` | `'ppclub-backend.service\|caddy.service=ppclub;enyoung-menu.service=enyoung;zenincome-api.service\|zenincome-web.service=zenincome'` | Semicolon-separated `units=product` pairs (`\|` separates units). Emits one `loki.source.journal` per product. Makes `JOURNAL_MATCHES` optional. |
+| `APP_METRICS_PRODUCT_MAP` | `'localhost:8090\|localhost:8091@linkcourt-scheduler\|localhost:8092=ppclub;127.0.0.1:2112=zenincome'` | Requires `PROM_PUSH_URL`; mutually exclusive with `APP_METRICS_TARGET`. Semicolon-separated `targets=product` pairs (`\|` separates targets). Each target defaults to `service="<product>-backend"`; append `@<service>` to override `service` for that target. Emits one `prometheus.scrape "app_<product>"` block per product with `job_name="<product>-backend"` and `product="<product>"` on every target. Use one consistent notation for the same endpoint; cross-product duplicate detection compares address strings case-insensitively. |
+| `APP_METRICS_BEARER_TOKEN_<PRODUCT>` | `APP_METRICS_BEARER_TOKEN_PPCLUB='<token>'` | Optional per-product Bearer token (`<PRODUCT>` uppercased, `-` → `_`). Applied only to that product's scrape block. Bare `APP_METRICS_BEARER_TOKEN` is rejected with `APP_METRICS_PRODUCT_MAP` so one product's token cannot leak to another. |
+
+### Preview (dry-run) and validate before applying
+
+Use `--render-only PATH` to render the config without root or touching the host, then validate and diff it against the live file. `--render-only` only writes a new file inside an already-existing directory: it refuses to overwrite any existing file/symlink, does not create missing parent directories, and refuses `/etc/alloy` (or any managed path).
+
+If you are switching from the single-product env vars in the same shell, clear `APP_METRICS_TARGET` and the global `APP_METRICS_BEARER_TOKEN` first. On Prod02, the three `ppclub` targets require Bearer authentication, so `APP_METRICS_BEARER_TOKEN_PPCLUB` must be exported (read it via hidden input so it does not enter shell history); ZenIncome does not use a bearer token:
+
+```bash
+# Clear legacy single-product vars when switching from single-product usage
+unset APP_METRICS_TARGET APP_METRICS_BEARER_TOKEN
+
+export PRODUCT=services
+export SERVER_ID=PROD02
+export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
+export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
+export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung;zenincome-api.service|zenincome-web.service=zenincome'
+export APP_METRICS_PRODUCT_MAP='localhost:8090|localhost:8091@linkcourt-scheduler|localhost:8092=ppclub;127.0.0.1:2112=zenincome'
+
+export CF_ACCESS_CLIENT_ID='xxx.access'
+read -rsp 'CF Access Client Secret: ' CF_ACCESS_CLIENT_SECRET; echo
+export CF_ACCESS_CLIENT_SECRET
+read -rsp 'ppclub metrics bearer token: ' APP_METRICS_BEARER_TOKEN_PPCLUB; echo
+export APP_METRICS_BEARER_TOKEN_PPCLUB
+
+# Render and validate in a fresh temp directory; apply only if both succeed
+# (re-running setup.sh with the same env vars is idempotent):
+PREVIEW_DIR="$(mktemp -d)"
+bash agents/alloy/setup.sh --render-only "$PREVIEW_DIR/prod02.alloy" \
+  && alloy validate "$PREVIEW_DIR/prod02.alloy" \
+  && sudo -E bash agents/alloy/setup.sh
+rm -rf "$PREVIEW_DIR"
+
+unset CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET APP_METRICS_BEARER_TOKEN_PPCLUB
+```
+
+### Verify (shared host)
+
+In Grafana Explore:
+
+```
+Prometheus (host):  node_memory_MemAvailable_bytes{product="services", server_id="PROD02"}
+Prometheus (app):   up{product="ppclub", job="ppclub-backend", server_id="PROD02"}      # 3 targets (localhost:8090, localhost:8091, localhost:8092), each == 1
+                    up{product="zenincome", job="zenincome-backend", server_id="PROD02"} # 1 target (127.0.0.1:2112), == 1
+Loki (all host):    {server_id="PROD02"}
+Loki (per product): {product="ppclub", server_id="PROD02"}
+```
+
+For shared-host Loki verification, query by `server_id="PROD02"` (or filter to a specific service product such as `product="ppclub"`, `product="enyoung"`, `product="zenincome"`). Do not query `{product="services"}` in Loki, because each journal source stamps its own service product label rather than `services`.

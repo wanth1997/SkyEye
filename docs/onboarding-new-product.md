@@ -70,6 +70,37 @@ sudo -E bash agents/alloy/setup.sh
 
 Setup script installs Alloy via apt, renders config, starts systemd unit, prints verification hints.
 
+#### Shared host (multiple products on one machine)
+
+If the host runs multiple products (such as Prod02), set `PRODUCT=services` for the host-level `external_labels` and assign each product's own `product` label using `JOURNAL_PRODUCT_MAP` and `APP_METRICS_PRODUCT_MAP`. When switching from the single-product env vars in the same shell, `unset APP_METRICS_TARGET APP_METRICS_BEARER_TOKEN` first. On Prod02, the three `ppclub` targets require Bearer auth via `APP_METRICS_BEARER_TOKEN_PPCLUB` (read with hidden input so the token does not enter shell history):
+
+```bash
+# Clear legacy single-product vars when switching from single-product usage
+unset APP_METRICS_TARGET APP_METRICS_BEARER_TOKEN
+
+export PRODUCT=services
+export SERVER_ID=PROD02
+export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
+export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
+export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung;zenincome-api.service|zenincome-web.service=zenincome'
+export APP_METRICS_PRODUCT_MAP='localhost:8090|localhost:8091@linkcourt-scheduler|localhost:8092=ppclub;127.0.0.1:2112=zenincome'
+
+# Required for Prod02 ppclub targets (hidden input, sent only to ppclub targets)
+read -rsp 'ppclub metrics bearer token: ' APP_METRICS_BEARER_TOKEN_PPCLUB; echo
+export APP_METRICS_BEARER_TOKEN_PPCLUB
+
+# Preview and validate in a fresh temp directory; apply only if both succeed:
+PREVIEW_DIR="$(mktemp -d)"
+bash agents/alloy/setup.sh --render-only "$PREVIEW_DIR/prod02.alloy" \
+  && alloy validate "$PREVIEW_DIR/prod02.alloy" \
+  && sudo -E bash agents/alloy/setup.sh
+rm -rf "$PREVIEW_DIR"
+
+unset APP_METRICS_BEARER_TOKEN_PPCLUB
+```
+
+See [Shared hosts in `agents/alloy/README.md`](../agents/alloy/README.md#shared-hosts-multiple-products-on-one-machine) for the full map syntax and verification queries.
+
 ### 3. (Optional) Instrument backend code — 10 min
 
 If the backend language is in [`docs/code-patterns/`](./code-patterns/), follow that template. Otherwise skip — logs + host metrics alone already give you a useful monitoring baseline.
@@ -79,7 +110,7 @@ Currently documented:
 
 ### 4. Central verification (5 min, SkyEye operator)
 
-In Grafana Explore:
+In Grafana Explore (single-product host):
 
 ```
 Prometheus:   up{product="$PRODUCT"}                        # should be 1
@@ -88,7 +119,18 @@ Prometheus:   up{product="$PRODUCT"}                        # should be 1
 Loki:         {product="$PRODUCT"}                          # should stream lines
 ```
 
-Open the Hosts dashboard, switch Product variable to the new product — host panels populate within 30 s.
+For a shared host (e.g. Prod02 with `PRODUCT=services`, `SERVER_ID=PROD02`), filter app metrics by `server_id` and query Loki by `server_id` (not `{product="services"}`, since each journal source sets its own product label):
+
+```
+Prometheus (host):  node_memory_MemAvailable_bytes{product="services", server_id="PROD02"}
+Prometheus (app):   up{product="ppclub", job="ppclub-backend", server_id="PROD02"}       # 3 targets, each == 1
+                    up{product="zenincome", job="zenincome-backend", server_id="PROD02"} # 1 target, == 1
+
+Loki:               {server_id="PROD02"}                                                 # all host logs
+                    {product="ppclub", server_id="PROD02"}                               # per-product logs
+```
+
+Open the Hosts dashboard, switch Product variable to the new product (or `services` for a shared host) — host panels populate within 30 s.
 
 ## Common pitfalls
 
@@ -98,7 +140,7 @@ Open the Hosts dashboard, switch Product variable to the new product — host pa
 | `403 Forbidden` | Service Token exists but the Access App didn't accept it | In CF Zero Trust → Access → Applications, ensure `prom-push` and `loki-push` apps have policy `Service Token = skyeye-agent-push` |
 | Logs push but metrics don't | `PROM_PUSH_URL` unset (script runs in log-only mode) | Export the var + re-run setup |
 | `up{product="X"}` returns nothing but node metrics there | Log-only mode, metrics weren't enabled | As above |
-| Alerts fire with wrong `product` label | Alloy `external_labels` not matching spec | Verify `config.alloy` has `product = "$PRODUCT"` in both `loki.write.central` and `prometheus.remote_write.central` |
+| Alerts fire with wrong `product` label | Alloy `external_labels` or per-target labels not matching spec | Single-product host: verify `prometheus.remote_write.central` has `product = "$PRODUCT"` and `loki.source.journal` has `product = "$PRODUCT"`. Shared host: verify `PRODUCT=services` with `JOURNAL_PRODUCT_MAP` and `APP_METRICS_PRODUCT_MAP` setting per-product labels. |
 
 ## What you DON'T need to do per product
 
