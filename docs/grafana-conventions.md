@@ -7,7 +7,7 @@ SkyEye hosts Grafana for all wanbrain products. This file is the source of truth
 | Folder | What goes here | Examples |
 |---|---|---|
 | **Overview** | Cross-product / top-level summaries — first dashboards a stakeholder sees | `Overview — All products`, `Overview — Revenue today` |
-| **Hosts** | Host-level metrics, reusable across products via `$product` variable | `Hosts — Node exporter`, `Hosts — Disk deep dive` |
+| **Hosts** | Host-level metrics, reusable across hosts via `$server_id` variable | `Hosts — Node exporter`, `Hosts — Disk deep dive` |
 | **{Product}** (one folder per product, e.g. `PPClub`, `enyoung`) | Everything specific to that product — backend, business metrics, customer flows | `PPClub — Backend overview`, `PPClub — Payment funnel` |
 | **Edge** | Caddy / Cloudflare / DNS / external API probes | `Edge — Caddy`, `Edge — External API health` |
 | **SkyEye** | Self-monitoring: Prometheus TSDB, Loki ingestion, Alertmanager pipeline, Grafana itself | `SkyEye — Stack health` |
@@ -53,7 +53,7 @@ $server_id  — query: label_values(<any metric>{product="$product"}, server_id)
 $instance   — query: label_values(<any metric>{product="$product",server_id="$server_id"}, instance)
 ```
 
-A dashboard hard-coded to a single product should omit `$product` and note the binding in the description.
+A dashboard hard-coded to a single product should omit `$product` and note the binding in the description. Host-level dashboards and host resource panels select hosts directly by `$server_id` (not `$product`) so shared hosts labeled `product="services"` remain selectable and independent of product labels.
 
 Trading dashboards use trading_target_info as the selector inventory.
 The reusable detail view exposes server_id then strategy, in that order.
@@ -67,7 +67,7 @@ accounting-period contract.
 An "Overview" dashboard (anything in the `Overview/` folder) should have at minimum:
 
 1. **Status row** — `up{}` count, active alerts count (from Alertmanager or `ALERTS{alertstate="firing"}`), log throughput
-2. **Resource gauges** — CPU %, RAM %, disk %, scoped by `$product`
+2. **Resource gauges** — CPU %, RAM %, disk %, scoped by `$server_id`
 3. **Trends** — at least one time-series showing direction over last hour
 4. **Alert list** — current firing / pending alerts (`alertlist` panel)
 
@@ -99,7 +99,7 @@ TODO (low priority): add a pre-commit hook that runs `jq` against every dashboar
 | Folder | Title | UID | Source |
 |---|---|---|---|
 | Overview | Overview — All products | `overview-all` | Built in-house |
-| Hosts | Hosts — Node exporter | `hosts-node-exporter` | grafana.com ID 1860, rewritten for pinned UID + `$product` variable |
+| Hosts | Hosts — Node exporter | `hosts-node-exporter` | grafana.com ID 1860, rewritten for pinned UID + `$server_id` variable |
 | Hosts | 主機 — Windows | `hosts-windows` | Built in-house — Windows exporter host metrics, Alloy push health, Event Log and runner log, by `$product` / `$server_id`. Queries are held to what the Windows agent sends by `tests/windows/test-windows-central.sh`. |
 | PPClub | PPClub — Backend overview | `ppclub-backend-overview` | Built in-house (replaces grafana.com 18739; queries adapted to our `product` / `status` label shape) |
 | PPClub | PPClub — Business | `ppclub-business` | Built in-house — payment / refund / external API / scheduler heartbeats |
