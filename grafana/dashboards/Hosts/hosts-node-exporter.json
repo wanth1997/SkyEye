@@ -15413,27 +15413,25 @@
   "templating": {
     "list": [
       {
-        "name": "product",
-        "label": "產品",
-        "type": "query",
+        "current": {},
         "datasource": {
           "type": "prometheus",
           "uid": "prometheus"
         },
+        "definition": "label_values(node_uname_info, server_id)",
+        "includeAll": false,
+        "label": "主機",
+        "multi": false,
+        "name": "server_id",
+        "options": [],
         "query": {
-          "query": "label_values(node_uname_info, product)",
+          "query": "label_values(node_uname_info, server_id)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 1,
+        "regex": "",
         "sort": 1,
-        "includeAll": false,
-        "multi": false,
-        "definition": "label_values(node_uname_info, product)",
-        "current": {
-          "selected": false,
-          "text": "ppclub",
-          "value": "ppclub"
-        }
+        "type": "query"
       },
       {
         "current": {},
@@ -15441,13 +15439,13 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(node_uname_info{product=\"$product\"}, job)",
+        "definition": "label_values(node_uname_info{server_id=\"$server_id\"}, job)",
         "includeAll": false,
         "label": "Job",
         "name": "job",
         "options": [],
         "query": {
-          "query": "label_values(node_uname_info{product=\"$product\"}, job)",
+          "query": "label_values(node_uname_info{server_id=\"$server_id\"}, job)",
           "refId": "Prometheus-job-Variable-Query"
         },
         "refresh": 1,
@@ -15461,13 +15459,13 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(node_uname_info{product=\"$product\",job=\"$job\"}, nodename)",
+        "definition": "label_values(node_uname_info{server_id=\"$server_id\",job=\"$job\"}, nodename)",
         "includeAll": false,
         "label": "節點名稱",
         "name": "nodename",
         "options": [],
         "query": {
-          "query": "label_values(node_uname_info{product=\"$product\",job=\"$job\"}, nodename)",
+          "query": "label_values(node_uname_info{server_id=\"$server_id\",job=\"$job\"}, nodename)",
           "refId": "Prometheus-nodename-Variable-Query"
         },
         "refresh": 1,
@@ -15481,13 +15479,13 @@
           "type": "prometheus",
           "uid": "prometheus"
         },
-        "definition": "label_values(node_uname_info{product=\"$product\",job=\"$job\",nodename=\"$nodename\"}, instance)",
+        "definition": "label_values(node_uname_info{server_id=\"$server_id\",job=\"$job\",nodename=\"$nodename\"}, instance)",
         "includeAll": false,
         "label": "實例",
         "name": "node",
         "options": [],
         "query": {
-          "query": "label_values(node_uname_info{product=\"$product\",job=\"$job\",nodename=\"$nodename\"}, instance)",
+          "query": "label_values(node_uname_info{server_id=\"$server_id\",job=\"$job\",nodename=\"$nodename\"}, instance)",
           "refId": "Prometheus-node-Variable-Query"
         },
         "refresh": 1,

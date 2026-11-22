@@ -91,7 +91,7 @@ tests:
   - name: every remote agent going silent fires once after 5 minutes
     interval: 30s
     input_series:
-      - series: 'up{job="integrations/unix",instance="PROD02",product="ppclub",server_id="PROD02"}'
+      - series: 'up{job="integrations/unix",instance="PROD02",product="services",server_id="PROD02"}'
         values: '1x10'
       - series: 'up{job="integrations/unix",instance="trading01",product="tnauqquant",server_id="trading01"}'
         values: '1x10 0x30'
@@ -120,7 +120,7 @@ tests:
   - name: one remote agent still delivering keeps AllRemoteAgentsSilent quiet
     interval: 30s
     input_series:
-      - series: 'up{job="integrations/unix",instance="PROD02",product="ppclub",server_id="PROD02"}'
+      - series: 'up{job="integrations/unix",instance="PROD02",product="services",server_id="PROD02"}'
         values: '1x40'
       - series: 'up{job="integrations/unix",instance="trading01",product="tnauqquant",server_id="trading01"}'
         values: '0x40'
@@ -134,7 +134,7 @@ tests:
   - name: a delivering Windows agent does not hide a shared-token outage
     interval: 30s
     input_series:
-      - series: 'up{job="integrations/unix",instance="PROD02",product="ppclub",server_id="PROD02"}'
+      - series: 'up{job="integrations/unix",instance="PROD02",product="services",server_id="PROD02"}'
         values: '1x10 _x30'
       - series: 'up{job="integrations/unix",instance="trading01",product="tnauqquant",server_id="trading01"}'
         values: '1x10 _x30'

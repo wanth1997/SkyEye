@@ -31,7 +31,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "count(group by (product) (up{product!=\"\"}))",
+          "expr": "count(group by (product) (up{product!=\"\",product!=\"services\"}))",
           "refId": "A",
           "instant": true
         }
@@ -51,7 +51,7 @@
         },
         "overrides": []
       },
-      "description": "Distinct products with at least one Prometheus `up` series (any value). Uses Prom (not Loki count_over_time) so quiet products with sparse journal output still count — Alloy agents' node-exporter heartbeat is 15s. Phase 2A log-only products would not appear here; we currently have none."
+      "description": "Distinct products with at least one Prometheus `up` series (any value), excluding `product=\"services\"` (shared host label, not a product). Uses Prom (not Loki count_over_time) so quiet products with sparse journal output still count — Alloy agents' node-exporter heartbeat is 15s. Phase 2A log-only products would not appear here; we currently have none."
     },
     {
       "id": 11,
@@ -62,7 +62,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "(count(count by (product) (up{product!=\"\"} == 0)) OR on() vector(0))",
+          "expr": "(count(count by (product) (up{product!=\"\",product!=\"services\"} == 0)) OR on() vector(0))",
           "refId": "A",
           "instant": true
         }
@@ -210,21 +210,21 @@
         {
           "refId": "E",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 - (avg by (product) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "expr": "avg by (product) ((100 - (avg by (server_id) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)) * on (server_id) group_right () group by (product, server_id) (up{product!=\"\",product!=\"services\",server_id!=\"\"}))",
           "format": "table",
           "instant": true
         },
         {
           "refId": "F",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "(1 - avg by (product) (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+          "expr": "avg by (product) (((1 - avg by (server_id) (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100) * on (server_id) group_right () group by (product, server_id) (up{product!=\"\",product!=\"services\",server_id!=\"\"}))",
           "format": "table",
           "instant": true
         },
         {
           "refId": "G",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "(1 - avg by (product) (node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"})) * 100",
+          "expr": "avg by (product) (((1 - avg by (server_id) (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!=\"rootfs\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!=\"rootfs\"})) * 100) * on (server_id) group_right () group by (product, server_id) (up{product!=\"\",product!=\"services\",server_id!=\"\"}))",
           "format": "table",
           "instant": true
         }
@@ -640,7 +640,7 @@
     {
       "id": 2,
       "type": "row",
-      "title": "🖥️ 資源 — $product (切換上方變數)",
+      "title": "🖥️ 資源 — $server_id (切換上方變數)",
       "gridPos": { "x": 0, "y": 19, "w": 24, "h": 1 },
       "collapsed": false
     },
@@ -653,7 +653,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 - (avg by (product) (irate(node_cpu_seconds_total{product=\"$product\",mode=\"idle\"}[5m])) * 100)",
+          "expr": "100 - (avg by (server_id) (irate(node_cpu_seconds_total{server_id=\"$server_id\",mode=\"idle\"}[5m])) * 100)",
           "refId": "A",
           "instant": true
         }
@@ -691,7 +691,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "(1 - (node_memory_MemAvailable_bytes{product=\"$product\"} / node_memory_MemTotal_bytes{product=\"$product\"})) * 100",
+          "expr": "(1 - avg by (server_id) (node_memory_MemAvailable_bytes{server_id=\"$server_id\"} / node_memory_MemTotal_bytes{server_id=\"$server_id\"})) * 100",
           "refId": "A",
           "instant": true
         }
@@ -728,7 +728,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "(1 - node_filesystem_avail_bytes{product=\"$product\",mountpoint=\"/\"} / node_filesystem_size_bytes{product=\"$product\",mountpoint=\"/\"}) * 100",
+          "expr": "(1 - avg by (server_id) (node_filesystem_avail_bytes{server_id=\"$server_id\",mountpoint=\"/\",fstype!=\"rootfs\"} / node_filesystem_size_bytes{server_id=\"$server_id\",mountpoint=\"/\",fstype!=\"rootfs\"})) * 100",
           "refId": "A",
           "instant": true
         }
@@ -766,15 +766,15 @@
     {
       "id": 30,
       "type": "timeseries",
-      "title": "各產品 CPU %",
+      "title": "各主機 CPU %",
       "gridPos": { "x": 0, "y": 27, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 - (avg by (product) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+          "expr": "100 - (avg by (server_id) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
           "refId": "A",
-          "legendFormat": "{{product}}"
+          "legendFormat": "{{server_id}}"
         }
       ],
       "options": {
@@ -962,24 +962,20 @@
   "templating": {
     "list": [
       {
-        "name": "product",
-        "label": "產品",
+        "name": "server_id",
+        "label": "主機",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "prometheus" },
         "query": {
-          "query": "label_values(up{product!=\"\"}, product)",
+          "query": "label_values(node_uname_info, server_id)",
           "refId": "StandardVariableQuery"
         },
-        "definition": "label_values(up{product!=\"\"}, product)",
+        "definition": "label_values(node_uname_info, server_id)",
         "refresh": 1,
         "sort": 1,
         "includeAll": false,
         "multi": false,
-        "current": {
-          "selected": false,
-          "text": "ppclub",
-          "value": "ppclub"
-        }
+        "current": {}
       }
     ]
   },
