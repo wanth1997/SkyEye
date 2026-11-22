@@ -6,20 +6,20 @@
 
 ## 架構 / 技術棧
 
-- 中央端：Docker Compose、Prometheus 2.54、Loki 3.1、Grafana 12.4、Alertmanager 0.34、Blackbox Exporter、Node Exporter 1.12（`monitoring-host` job）、Cloudflare Tunnel。
-- 遠端主機：Grafana Alloy；metrics 經 Prometheus remote write，logs 經 Loki push API。
+- 中央端：Docker Compose、Prometheus 2.54、Loki 3.1、Grafana 12.4.15（digest pin + unified storage opt-in）、Alertmanager 0.34.2、Blackbox Exporter、Node Exporter 1.12（`monitoring-host` job）、Cloudflare Tunnel。
+- 遠端主機：Grafana Alloy（Linux、macOS 與 Windows PowerShell 安裝器）；metrics 經 Prometheus remote write，logs 經 Loki push API。
 - 儲存：Prometheus TSDB 與 Grafana SQLite 位於 EBS，Loki chunks 位於 S3。
-- 存取：Grafana 經 Cloudflare Access；agent 使用 Cloudflare Access Service Token。
+- 存取：Grafana 經 Cloudflare Access，並直接驗證 `Cf-Access-Jwt-Assertion` JWT；agent 使用 Cloudflare Access Service Token。
 - 設定與 dashboard 全部以 Git 管理，Grafana dashboard 使用檔案 provisioning。
 
 ## 目前狀態
 
-- 部署（2026-11-06）：production 最後 applied 的是 `76199576c50b`（2026-11-05 23:31Z）。master `bd63d1a5`（PR #61）已 merge，`scripts/verify-all` 通過，但還沒部署：Stack health 修正、4 條備份 shadow 告警、`node-exporter`、新版備份與還原腳本、休眠 email 路由、`central-deploy` 載入驗證。部署順序見 `docs/operations.md`。主機端的 log scrub、probe 與 `setup.sh` 修正不在中央部署內，要各自 rollout。
-- 通知：High 目前只送 Telegram。休眠的 `email-high` 路由只收 `notification_mode="page"`，目前沒有這種告警，SMTP 也還沒設定，所以不會寄信。
+- 部署（2026-11-22）：production 最後記錄套用的仍是早期基準；`master` 已合併至 PR #81（`a4ebd9f`，WAN-598），`scripts/verify-all` 通過，但多項變更尚待於 `monitoring-prod` 與各主機 rollout：Grafana `11.2.0 → 12.4.15` 升級與 unified storage migration（`runbooks/grafana-upgrade.md`）、Grafana 直接驗證 Cloudflare Access JWT、Alertmanager `v0.34.2` 與 `secrets/` `2750`/`0640`（group `65534`）權限模型（WAN-491）、外部死人開關 `SkyEyeWatchdog`（`deadman-external` webhook）、`node-exporter`、Stack health 與備份 shadow 告警、新版備份與還原腳本、休眠 email 路由、`central-deploy` 載入驗證、`enyoung` dashboard、Windows 主機 Alloy 監控（`wans-windows`）、Trading01 `popdex-02` lane 與 Trading probe 單次掃描／批次 `stat`/`getfacl` + `CPUQuota=20%`（WAN-460），以及共用主機 per-target product 與主機 dashboard `server_id` 選取（WAN-598）。部署順序見 `docs/operations.md`；主機端的 Alloy、log scrub、probe 與 `setup.sh` 變更不在中央部署內，需各自 rollout。
+- 通知：High 目前只送 Telegram；外部死人開關 `SkyEyeWatchdog` 另走獨立 `deadman-external` webhook（`runbooks/skyeye-watchdog.md`）。休眠的 `email-high` 路由只收 `notification_mode="page"`，目前沒有這種告警，SMTP 也還沒設定，所以不會寄信。
 - 備份：到 2026-11-03 為止連續 59 天上傳成功，但沒有任何備份實際還原過。新版腳本只在本機 Colima 演練過，其中 `aws` 是 fake，真實 S3 未驗證。
 - Mac mini `server_id` 更名已於 2026-11-01 完成。時窗 13:31:29Z–15:31:29Z 排除於 Trading shadow/canary 證據之外，紀錄見 `docs/trading-serverid-cutover-macmini-m2.md`。
 - 中央監控棧、Cloudflare ingress、Telegram routing、host/app/business rules 與多個產品 dashboard 已投入使用。
-- Linux/Ubuntu Alloy installer 已支援 journald、node metrics 與 application `/metrics`。
+- Linux/Ubuntu Alloy installer（`agents/alloy/setup.sh`）已支援 journald、node metrics、application `/metrics`，以及共用主機 `APP_METRICS_PRODUCT_MAP`、`APP_METRICS_BEARER_TOKEN_<PRODUCT>` 與 `--render-only`；Windows 主機由 `agents/alloy/windows/` PowerShell 安裝器納管（`job="integrations/windows"`）。
 - Trading inventory 以 `prometheus/rules/trading-targets.yml` 為準。`trading01` 的 `lighter-mainnet-btc-canary` 已移出 repo inventory；`ourbit-spot`（runtime instance `ourbit-spot-btc`，2026-10-08）依 operator 指示退役並移出監控名單；既有歷史資料保留，`deployment-linux-*.env.example` 保留供日後重新納入。portable read-only probe 支援雙交易所與單交易所 executor mapping；Linux 以 per-strategy systemd probe、env、metrics output 與 Loki fragment 共用單一 textfile collector，並與既有 ZenIncome Alloy pipeline 共存。Grafana 只保留可選 server/strategy 的 detail dashboard 與每策略一列的 fleet dashboard；Prometheus/Loki rules 與 alerts 均以 shadow rollout 管理。
 - `macmini-m2`（production Mac mini）在 macOS Alloy 與 read-only probe 之外，另有隔離的每分鐘 P&L history builder，以變更偵測與 per-run cache 合併 authoritative completed-cycle delta；其 accumulated metrics 繼續保留，但不再提供專用的「Trading · 即時營運」dashboard。detail／fleet 採繁中版面：detail 第一列顯示損益、週期與目前餘額，下方單一監控摘要合併近 15 分鐘的四項事故與六項運行狀態；runtime contract、執行 identity binding 與 config snapshot drift 仍獨立判讀，關鍵事件與完整 scrubbed log 分層。餘額使用目前 run 最新穩定快照的 equity_now，已包含該策略所有交易所帳戶的總權益。fleet 繼續揭露 Prometheus shadow alerts 與獨立的 Loki execution incident count。
 - ZenIncome 的 Loki log alerts、dashboard 與唯讀 Bitfinex 診斷腳本已納入 Git；既有 production 規則狀態需由 operator 持續觀察。
@@ -47,10 +47,10 @@
 
 ## 待辦 / 下一步
 
-- 部署 master `bd63d1a5` 到 monitoring-prod（等核准），然後確認第一次 19:00 UTC 備份，並對線上世代跑 `fetch`、`verify`，量出實際讀取時間。
+- 部署最新 `master` 到 `monitoring-prod`（等核准；依 `docs/operations.md`、`runbooks/grafana-upgrade.md` 與 `alertmanager/secrets/README.md` 完成 Grafana 12.4.15 升級與 Alertmanager `2750`/`0640` secrets 權限遷移），然後確認第一次 19:00 UTC 備份，並對線上世代跑 `fetch`、`verify`，量出實際讀取時間。
 - 新版 probe rollout 到 Trading01 與 Mac mini，時段待指定。Mainnet strategy 不得由這個流程啟動。
 - 填 SMTP、跑真實 canary，再升級三條 Trading 告警，流程見 `runbooks/trading-alert-promotion.md`。
-- log scrub 主機 rollout 要另外核准。`agents/alloy/setup.sh` 目前會砍掉 PROD02 的 8091、8092 scrape，修好之前不得在 PROD02 重跑。
+- PROD02 共用主機切換：`agents/alloy/setup.sh` 已支援 `APP_METRICS_PRODUCT_MAP`、`APP_METRICS_BEARER_TOKEN_<PRODUCT>` 與 `--render-only`（PR #81 / WAN-598），待核准後將 PROD02 主機層切為 `product="services"` 並重繪各產品 scrape；log scrub 主機 rollout 另待核准。
 - 依 `prometheus/rules/trading-targets.yml` 中的 targets 觀察 shadow alerts。
 - 設定 Cloudflare service token 到期通知，並在到期前完成可獨立回復的 rotation。
 - 觀察 LinkCourt 付款 shadow 告警，完成 canary review 後另案決定是否啟用通知。
