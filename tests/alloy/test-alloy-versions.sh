@@ -157,7 +157,7 @@ done
 # Rendered the way the installers render them, with placeholder values.
 render_configs() {
   local substituted template
-  mkdir -p "$WORK/general" "$WORK/linux" "$WORK/macos"
+  mkdir -p "$WORK/general" "$WORK/shared" "$WORK/linux" "$WORK/macos"
   substituted="$(sed -n "s/^ENVSUBST_VARS='\(.*\)'\$/\1/p" "$AGENT_DIR/setup.sh")"
   [[ -n "$substituted" ]] || die "cannot read ENVSUBST_VARS from agents/alloy/setup.sh"
   (
@@ -174,6 +174,22 @@ render_configs() {
       envsubst "$substituted" <"$AGENT_DIR/$template.alloy.tmpl" >>"$WORK/general/config.alloy" || exit 1
     done
   ) || die "cannot render the general config"
+  (
+    # Pollute the subshell environment to prove the shared-host render runs
+    # isolated under env -i and neither trips mutual exclusion nor leaks tokens.
+    export APP_METRICS_TARGET=127.0.0.1:9999
+    export APP_METRICS_BEARER_TOKEN=polluted-global-token
+    export APP_METRICS_BEARER_TOKEN_ZENINCOME=polluted-zenincome-token
+    env -i PATH="$PATH" \
+      PRODUCT=services SERVER_ID=verify-shared \
+      LOKI_PUSH_URL=https://loki.invalid/loki/api/v1/push \
+      PROM_PUSH_URL=https://prometheus.invalid/api/v1/write \
+      CF_ACCESS_CLIENT_ID=verify-placeholder CF_ACCESS_CLIENT_SECRET=verify-placeholder \
+      JOURNAL_PRODUCT_MAP='app-a.service|caddy.service=ppclub;app-b.service=zenincome' \
+      APP_METRICS_PRODUCT_MAP='127.0.0.1:8090|127.0.0.1:8091@linkcourt-scheduler=ppclub;127.0.0.1:2112=zenincome' \
+      APP_METRICS_BEARER_TOKEN_PPCLUB=verify-placeholder \
+      bash "$AGENT_DIR/setup.sh" --render-only "$WORK/shared/config.alloy" >/dev/null
+  ) || die "cannot render the shared-host config"
   cp "$WORK/general/config.alloy" "$WORK/linux/host.alloy"
   for template in config-linux config-linux-metrics; do
     sed -e 's/@@COMPONENT_ID@@/verify_strategy/g' -e 's/@@[A-Z_]*@@/verify/g' \
@@ -182,6 +198,11 @@ render_configs() {
   cp "$AGENT_DIR/trading/config-macos.alloy.tmpl" "$WORK/macos/config.alloy"
 }
 render_configs
+not_in_shared() { ! grep -q "$1" "$WORK/shared/config.alloy"; }
+check 'shared-host render ignores caller APP_METRICS_BEARER_TOKEN_ZENINCOME' \
+  not_in_shared 'polluted-zenincome-token'
+check 'shared-host render ignores caller APP_METRICS_BEARER_TOKEN' \
+  not_in_shared 'polluted-global-token'
 
 CONTAINER_SEQ=0
 # validates_on IMAGE NAME TARGET: TARGET is a path below /cfg in the container.
@@ -207,6 +228,7 @@ rejected_on() { ! validates_on "$@"; }
 for version in $SKYEYE_ALLOY_LINUX_VERSIONS; do
   image="$(image_for "$version")"
   check "Alloy $version validates the general config" validates_on "$image" general config.alloy
+  check "Alloy $version validates the shared-host config" validates_on "$image" shared config.alloy
   check "Alloy $version validates the Linux Trading directory" validates_on "$image" linux .
 done
 for version in $SKYEYE_ALLOY_MACOS_VERSIONS; do

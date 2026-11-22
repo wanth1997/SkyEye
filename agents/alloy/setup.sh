@@ -2,23 +2,58 @@
 #
 # Install / update Grafana Alloy agent on a SkyEye-monitored machine.
 #
-# Usage:
-#   # Set required env vars, then run
+# Usage (single-product host):
 #   export PRODUCT=ppclub
 #   export SERVER_ID=ppclub-prod
 #   export JOURNAL_MATCHES='_SYSTEMD_UNIT=ppclub-backend.service _SYSTEMD_UNIT=caddy.service'
 #   export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
+#   # Optional metrics:
+#   export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
+#   export APP_METRICS_TARGET=localhost:8090
 #   # (script will prompt for CF Access Client ID / Secret if unset)
 #   sudo -E bash agents/alloy/setup.sh
 #
+# Usage (shared host running multiple products, e.g. Prod02):
+#   # If switching from single-product vars in the same shell, clear them first:
+#   unset APP_METRICS_TARGET APP_METRICS_BEARER_TOKEN
+#   export PRODUCT=services
+#   export SERVER_ID=PROD02
+#   export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
+#   export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
+#   export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung;zenincome-api.service|zenincome-web.service=zenincome'
+#   export APP_METRICS_PRODUCT_MAP='localhost:8090|localhost:8091@linkcourt-scheduler|localhost:8092=ppclub;127.0.0.1:2112=zenincome'
+#   read -rsp 'ppclub metrics bearer token: ' APP_METRICS_BEARER_TOKEN_PPCLUB; echo
+#   export APP_METRICS_BEARER_TOKEN_PPCLUB
+#   sudo -E bash agents/alloy/setup.sh
+#   unset APP_METRICS_BEARER_TOKEN_PPCLUB
+#
+# Dry-run render (no root, no host changes; writes mode-0600 new file in an
+# existing directory; refuses existing paths and /etc/alloy):
+#   bash agents/alloy/setup.sh --render-only /tmp/config.alloy
+#
 # Required:
-#   PRODUCT                     free-form string, e.g. ppclub / enyoung
-#   SERVER_ID                   unique per host, e.g. ppclub-prod
-#   JOURNAL_MATCHES             journalctl filter(s), space-separated OR
+#   PRODUCT                     host-level product label, e.g. ppclub or services (shared host)
+#   SERVER_ID                   unique per host, e.g. ppclub-prod / PROD02
+#   JOURNAL_MATCHES             journalctl filter(s), space-separated OR (required unless JOURNAL_PRODUCT_MAP is set)
 #   LOKI_PUSH_URL               e.g. https://loki-push.wanbrain.com/loki/api/v1/push
-#   CF_ACCESS_CLIENT_ID         (prompt if unset)
-#   CF_ACCESS_CLIENT_SECRET     (prompt if unset, hidden input)
-#   APP_METRICS_BEARER_TOKEN    optional; bearer token for protected app metrics
+#   CF_ACCESS_CLIENT_ID         (prompt if unset, except with --render-only)
+#   CF_ACCESS_CLIENT_SECRET     (prompt if unset, hidden input, except with --render-only)
+#
+# Optional:
+#   PROM_PUSH_URL               central Prometheus remote_write URL (enables node_exporter)
+#   JOURNAL_PRODUCT_MAP         shared-host journald map: 'unit1|unit2=product1;unit3=product2'
+#   APP_METRICS_TARGET          single-product app /metrics host:port (requires PROM_PUSH_URL)
+#   APP_METRICS_BEARER_TOKEN    bearer token for APP_METRICS_TARGET (single-product only)
+#   APP_METRICS_PRODUCT_MAP     shared-host app /metrics map (requires PROM_PUSH_URL;
+#                               mutually exclusive with APP_METRICS_TARGET):
+#                               'addr[@service]|addr2[@service2]=product1;addr3=product2'
+#                               Each target carries product="<product>" so host-level
+#                               external_labels only apply to host metrics; default service
+#                               is "<product>-backend", job_name is "<product>-backend".
+#   APP_METRICS_BEARER_TOKEN_<PRODUCT>
+#                               per-product bearer token for APP_METRICS_PRODUCT_MAP, where
+#                               <PRODUCT> is uppercased with '-' replaced by '_'
+#                               (e.g. APP_METRICS_BEARER_TOKEN_PPCLUB)
 #
 # Supports: Ubuntu / Debian (apt); other distros need manual install.
 #
@@ -33,10 +68,49 @@
 
 set -euo pipefail
 
+RENDER_ONLY_PATH=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --render-only)
+      if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+        echo "ERROR: --render-only requires an output file path" >&2
+        exit 2
+      fi
+      RENDER_ONLY_PATH=$2
+      shift 2
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1" >&2
+      echo "Usage: bash agents/alloy/setup.sh [--render-only PATH]" >&2
+      exit 2
+      ;;
+  esac
+done
+if [ -n "$RENDER_ONLY_PATH" ]; then
+  case "$RENDER_ONLY_PATH" in
+    */)
+      echo "ERROR: --render-only path must be a new file, not a directory: $RENDER_ONLY_PATH" >&2
+      exit 2
+      ;;
+  esac
+  case "$RENDER_ONLY_PATH" in
+    /*) ;;
+    *) RENDER_ONLY_PATH="$PWD/$RENDER_ONLY_PATH" ;;
+  esac
+  if [ -e "$RENDER_ONLY_PATH" ] || [ -L "$RENDER_ONLY_PATH" ]; then
+    echo "ERROR: --render-only only writes a new file; destination already exists: $RENDER_ONLY_PATH" >&2
+    exit 2
+  fi
+  render_parent="$(dirname "$RENDER_ONLY_PATH")"
+  if [ ! -d "$render_parent" ]; then
+    echo "ERROR: --render-only parent directory does not exist: $render_parent" >&2
+    exit 2
+  fi
+fi
+
 cd "$(dirname "$0")"
 
 ALLOY_CONFIG=/etc/alloy/config.alloy
-ENV_FILE=/etc/default/alloy
 # Shared with trading/setup-linux.sh, retire-linux.sh and uninstall.sh. /run is
 # writable only by root, so no other user can create or hold this file.
 LOCK_FILE=/run/skyeye-alloy.lock
@@ -56,13 +130,194 @@ require_env() {
     exit 2
   fi
 }
+
+trim_ws() {
+  local s=$1
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+to_env_suffix() {
+  local s=$1 i ch out=""
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    case "$ch" in
+      a) ch=A ;; b) ch=B ;; c) ch=C ;; d) ch=D ;; e) ch=E ;; f) ch=F ;;
+      g) ch=G ;; h) ch=H ;; i) ch=I ;; j) ch=J ;; k) ch=K ;; l) ch=L ;;
+      m) ch=M ;; n) ch=N ;; o) ch=O ;; p) ch=P ;; q) ch=Q ;; r) ch=R ;;
+      s) ch=S ;; t) ch=T ;; u) ch=U ;; v) ch=V ;; w) ch=W ;; x) ch=X ;;
+      y) ch=Y ;; z) ch=Z ;; -) ch=_ ;;
+    esac
+    out+="$ch"
+  done
+  printf '%s' "$out"
+}
+
+to_lower() {
+  local s=$1 i ch out=""
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    case "$ch" in
+      A) ch=a ;; B) ch=b ;; C) ch=c ;; D) ch=d ;; E) ch=e ;; F) ch=f ;;
+      G) ch=g ;; H) ch=h ;; I) ch=i ;; J) ch=j ;; K) ch=k ;; L) ch=l ;;
+      M) ch=m ;; N) ch=n ;; O) ch=o ;; P) ch=p ;; Q) ch=q ;; R) ch=r ;;
+      S) ch=s ;; T) ch=t ;; U) ch=u ;; V) ch=v ;; W) ch=w ;; X) ch=x ;;
+      Y) ch=y ;; Z) ch=z ;;
+    esac
+    out+="$ch"
+  done
+  printf '%s' "$out"
+}
+
+validate_bearer_token() {
+  local var_name=$1 val=$2
+  case "$val" in
+    *[[:cntrl:]]*|*\"*|*\\*)
+      echo "ERROR: $var_name must not contain double quotes, backslashes, or control characters" >&2
+      exit 2
+      ;;
+  esac
+}
+
+validate_host_port() {
+  local addr=$1 host="" port=""
+  local ipv6_re='^\[([0-9A-Fa-f:.]+)\]:([1-9][0-9]*)$'
+  local hostport_re='^([^:]+):([1-9][0-9]*)$'
+  local ipv4_chars_re='^[0-9.]+$'
+  local digits_re='^[0-9]+$'
+  local hostname_re='^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$'
+  case "$addr" in
+    *[[:space:]]*|*\"*|*\\*|*[[:cntrl:]]*|*/*|*\?*|*\#*)
+      return 1
+      ;;
+  esac
+  if [[ "$addr" == \[* ]]; then
+    [[ "$addr" =~ $ipv6_re ]] || return 1
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+    [[ "$host" == *:* ]] || return 1
+  else
+    [[ "$addr" =~ $hostport_re ]] || return 1
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+    if [[ "$host" =~ $ipv4_chars_re ]]; then
+      local IFS='.'
+      local octets=() o
+      read -ra octets <<< "$host"
+      [ "${#octets[@]}" -eq 4 ] || return 1
+      [[ "$host" != *. ]] || return 1
+      for o in "${octets[@]}"; do
+        [[ "$o" =~ $digits_re ]] || return 1
+        if [ "${#o}" -gt 1 ] && [[ "$o" == 0* ]]; then
+          return 1
+        fi
+        [ "$o" -le 255 ] || return 1
+      done
+    else
+      [[ "$host" =~ $hostname_re ]] || return 1
+    fi
+  fi
+  [ "${#port}" -le 5 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
+check_render_only_target_safe() {
+  local render_path=$1 cfg_path=$2 prev_path=$3 roll_path=$4 lock_path=$5
+  if ! command -v perl >/dev/null 2>&1; then
+    echo "ERROR: perl not found (Debian/Ubuntu package: perl-base)" >&2
+    exit 2
+  fi
+  perl -e '
+    use strict;
+    use warnings;
+
+    sub resolve_path {
+      my ($p) = @_;
+      my @parts = split(m{/+}, $p);
+      my $cur = "/";
+      my $depth = 0;
+      while (@parts) {
+        my $seg = shift @parts;
+        next if $seg eq "" || $seg eq ".";
+        if ($seg eq "..") {
+          $cur =~ s{/[^/]+$}{};
+          $cur = "/" if $cur eq "";
+          next;
+        }
+        my $next = ($cur eq "/") ? "/$seg" : "$cur/$seg";
+        if (-l $next) {
+          die "too many symlinks\n" if ++$depth > 40;
+          my $target = readlink($next);
+          die "readlink failed\n" unless defined $target;
+          $cur = "/" if $target =~ m{^/};
+          unshift @parts, split(m{/+}, $target);
+        } else {
+          $cur = $next;
+        }
+      }
+      return $cur;
+    }
+
+    sub parent_of {
+      my ($p) = @_;
+      $p =~ s{/+$}{} unless $p eq "/";
+      return "/" if $p eq "/" || $p !~ m{/};
+      $p =~ s{/[^/]+$}{};
+      return $p eq "" ? "/" : $p;
+    }
+
+    sub in_dir {
+      my ($path, $dir) = @_;
+      return 1 if $path eq $dir;
+      my $prefix = ($dir eq "/") ? "/" : "$dir/";
+      return index($path, $prefix) == 0;
+    }
+
+    my ($render, $cfg, $prev, $roll, $lock) = @ARGV;
+    my $r_target = resolve_path($render);
+    my $r_parent = resolve_path(parent_of($render));
+    my $cfg_dir  = resolve_path(parent_of($cfg));
+    my @managed  = map { resolve_path($_) } ($cfg, $prev, $roll, $lock);
+
+    exit 1 if in_dir($r_target, $cfg_dir) || in_dir($r_parent, $cfg_dir);
+    for my $mf (@managed) {
+      exit 1 if $r_target eq $mf;
+    }
+    exit 0;
+  ' "$render_path" "$cfg_path" "$prev_path" "$roll_path" "$lock_path"
+}
+
+if [ -n "$RENDER_ONLY_PATH" ]; then
+  if ! check_render_only_target_safe "$RENDER_ONLY_PATH" "$ALLOY_CONFIG" "$ALLOY_PREVIOUS" "$ALLOY_ROLLBACK" "$LOCK_FILE"; then
+    echo "ERROR: --render-only refuses to write inside managed Alloy config directory ($(dirname "$ALLOY_CONFIG")) or managed paths" >&2
+    exit 2
+  fi
+fi
+
 require_env PRODUCT
 require_env SERVER_ID
-require_env JOURNAL_MATCHES
+if [ -z "${JOURNAL_PRODUCT_MAP:-}" ]; then
+  require_env JOURNAL_MATCHES
+fi
 require_env LOKI_PUSH_URL
+
+if [ -n "${APP_METRICS_TARGET:-}" ] && [ -n "${APP_METRICS_PRODUCT_MAP:-}" ]; then
+  echo "ERROR: APP_METRICS_TARGET and APP_METRICS_PRODUCT_MAP cannot both be set" >&2
+  exit 2
+fi
 
 if [ -n "${APP_METRICS_TARGET:-}" ] && [ -z "${PROM_PUSH_URL:-}" ]; then
   echo "ERROR: APP_METRICS_TARGET requires PROM_PUSH_URL to be set too" >&2
+  exit 2
+fi
+
+if [ -n "${APP_METRICS_PRODUCT_MAP:-}" ] && [ -z "${PROM_PUSH_URL:-}" ]; then
+  echo "ERROR: APP_METRICS_PRODUCT_MAP requires PROM_PUSH_URL to be set too" >&2
+  exit 2
+fi
+
+if [ -n "${APP_METRICS_PRODUCT_MAP:-}" ] && [ -n "${APP_METRICS_BEARER_TOKEN:-}" ]; then
+  echo "ERROR: APP_METRICS_BEARER_TOKEN cannot be used with APP_METRICS_PRODUCT_MAP; set per-product APP_METRICS_BEARER_TOKEN_<PRODUCT> instead" >&2
   exit 2
 fi
 
@@ -85,39 +340,320 @@ for template in "${TEMPLATES[@]}"; do
   fi
 done
 
-if [ ! -r install-common.sh ]; then
-  echo "ERROR: install-common.sh is missing; copy the whole agents/alloy directory" >&2
-  exit 2
-fi
-# shellcheck source=agents/alloy/install-common.sh
-. ./install-common.sh
-if ! skyeye_load_alloy_versions; then
-  echo "ERROR: $SKYEYE_INSTALL_ERROR" >&2
-  exit 2
+if [ -z "$RENDER_ONLY_PATH" ]; then
+  if [ ! -r install-common.sh ]; then
+    echo "ERROR: install-common.sh is missing; copy the whole agents/alloy directory" >&2
+    exit 2
+  fi
+  # shellcheck source=agents/alloy/install-common.sh
+  . ./install-common.sh
+  if ! skyeye_load_alloy_versions; then
+    echo "ERROR: $SKYEYE_INSTALL_ERROR" >&2
+    exit 2
+  fi
 fi
 
-if [ -z "${CF_ACCESS_CLIENT_ID:-}" ]; then
-  read -rp "CF Access Client ID (xxx.access): " CF_ACCESS_CLIENT_ID
-fi
-if [ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
-  read -rsp "CF Access Client Secret (hidden): " CF_ACCESS_CLIENT_SECRET
-  echo
+if [ -z "$RENDER_ONLY_PATH" ]; then
+  if [ -z "${CF_ACCESS_CLIENT_ID:-}" ]; then
+    read -rp "CF Access Client ID (xxx.access): " CF_ACCESS_CLIENT_ID
+  fi
+  if [ -z "${CF_ACCESS_CLIENT_SECRET:-}" ]; then
+    read -rsp "CF Access Client Secret (hidden): " CF_ACCESS_CLIENT_SECRET
+    echo
+  fi
 fi
 require_env CF_ACCESS_CLIENT_ID
 require_env CF_ACCESS_CLIENT_SECRET
 
 APP_METRICS_AUTHORIZATION=""
 if [ -n "${APP_METRICS_BEARER_TOKEN:-}" ]; then
-  case "$APP_METRICS_BEARER_TOKEN" in
-    *$'\n'*|*\"*)
-      echo "ERROR: APP_METRICS_BEARER_TOKEN must not contain newlines or double quotes" >&2
-      exit 2
-      ;;
-  esac
+  validate_bearer_token APP_METRICS_BEARER_TOKEN "$APP_METRICS_BEARER_TOKEN"
+  # shellcheck disable=SC2089
   APP_METRICS_AUTHORIZATION="  authorization {
     type        = \"Bearer\"
     credentials = \"${APP_METRICS_BEARER_TOKEN}\"
   }"
+fi
+
+APP_MAP_PRODUCTS=()
+APP_MAP_COMP_IDS=()
+APP_MAP_ENV_SUFFIXES=()
+APP_MAP_TARGET_LINES=()
+APP_MAP_SEEN_ADDRS=()
+APP_MAP_SEEN_ADDR_PRODUCTS=()
+APP_METRICS_MAP_CONFIG=""
+if [ -n "${APP_METRICS_PRODUCT_MAP:-}" ]; then
+  case "$APP_METRICS_PRODUCT_MAP" in
+    *$'\n'*)
+      echo "ERROR: APP_METRICS_PRODUCT_MAP must be a single line" >&2
+      exit 2
+      ;;
+  esac
+  rest="$APP_METRICS_PRODUCT_MAP"
+  while :; do
+    if [[ "$rest" == *";"* ]]; then
+      entry="${rest%%;*}"
+      rest="${rest#*;}"
+      has_more=1
+    else
+      entry="$rest"
+      has_more=0
+    fi
+    entry="$(trim_ws "$entry")"
+    if [ -z "$entry" ]; then
+      echo "ERROR: APP_METRICS_PRODUCT_MAP contains an empty entry" >&2
+      exit 2
+    fi
+    if [[ "$entry" != *=* ]]; then
+      echo "ERROR: APP_METRICS_PRODUCT_MAP entry '$entry' must have the form 'targets=product'" >&2
+      exit 2
+    fi
+    targets_spec="$(trim_ws "${entry%%=*}")"
+    product_val="$(trim_ws "${entry#*=}")"
+    if [[ "$product_val" == *=* ]]; then
+      echo "ERROR: APP_METRICS_PRODUCT_MAP entry '$entry' must contain only one '='" >&2
+      exit 2
+    fi
+    if [ -z "$targets_spec" ]; then
+      echo "ERROR: APP_METRICS_PRODUCT_MAP entry '$entry' has no target before '='" >&2
+      exit 2
+    fi
+    if [[ ! "$product_val" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; then
+      echo "ERROR: APP_METRICS_PRODUCT_MAP has invalid product '$product_val'" >&2
+      exit 2
+    fi
+    comp_id="app_${product_val//-/_}"
+    env_suffix="$(to_env_suffix "$product_val")"
+    found_idx=-1
+    for ((idx = 0; idx < ${#APP_MAP_PRODUCTS[@]}; idx++)); do
+      if [ "${APP_MAP_PRODUCTS[$idx]}" = "$product_val" ]; then
+        found_idx=$idx
+        break
+      fi
+      if [ "${APP_MAP_COMP_IDS[$idx]}" = "$comp_id" ] || [ "${APP_MAP_ENV_SUFFIXES[$idx]}" = "$env_suffix" ]; then
+        echo "ERROR: APP_METRICS_PRODUCT_MAP products '${APP_MAP_PRODUCTS[$idx]}' and '$product_val' collide in Alloy identifier or bearer token variable name" >&2
+        exit 2
+      fi
+    done
+    if [ "$found_idx" -lt 0 ]; then
+      found_idx=${#APP_MAP_PRODUCTS[@]}
+      APP_MAP_PRODUCTS+=("$product_val")
+      APP_MAP_COMP_IDS+=("$comp_id")
+      APP_MAP_ENV_SUFFIXES+=("$env_suffix")
+      APP_MAP_TARGET_LINES+=("")
+    fi
+
+    t_rest="$targets_spec"
+    while :; do
+      if [[ "$t_rest" == *"|"* ]]; then
+        item="${t_rest%%|*}"
+        t_rest="${t_rest#*|}"
+        t_more=1
+      else
+        item="$t_rest"
+        t_more=0
+      fi
+      item="$(trim_ws "$item")"
+      if [ -z "$item" ]; then
+        echo "ERROR: APP_METRICS_PRODUCT_MAP has an empty target for product '$product_val'" >&2
+        exit 2
+      fi
+      if [[ "$item" == *@* ]]; then
+        addr="$(trim_ws "${item%%@*}")"
+        service_val="$(trim_ws "${item#*@}")"
+        if [[ "$service_val" == *@* ]]; then
+          echo "ERROR: APP_METRICS_PRODUCT_MAP target '$item' must contain at most one '@'" >&2
+          exit 2
+        fi
+        if [[ ! "$service_val" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+          echo "ERROR: APP_METRICS_PRODUCT_MAP target '$item' has invalid service '$service_val'" >&2
+          exit 2
+        fi
+      else
+        addr="$item"
+        service_val="${product_val}-backend"
+      fi
+      if [ -z "$addr" ]; then
+        echo "ERROR: APP_METRICS_PRODUCT_MAP target '$item' has an empty address" >&2
+        exit 2
+      fi
+      if ! validate_host_port "$addr"; then
+        echo "ERROR: APP_METRICS_PRODUCT_MAP has invalid host:port address '$addr' (use host:port without URL scheme, path, or query)" >&2
+        exit 2
+      fi
+      addr_key="$(to_lower "$addr")"
+      for ((seen_idx = 0; seen_idx < ${#APP_MAP_SEEN_ADDRS[@]}; seen_idx++)); do
+        if [ "${APP_MAP_SEEN_ADDRS[$seen_idx]}" = "$addr_key" ] && [ "${APP_MAP_SEEN_ADDR_PRODUCTS[$seen_idx]}" != "$product_val" ]; then
+          echo "ERROR: APP_METRICS_PRODUCT_MAP assigns address '$addr' to multiple products ('${APP_MAP_SEEN_ADDR_PRODUCTS[$seen_idx]}' and '$product_val')" >&2
+          exit 2
+        fi
+      done
+      APP_MAP_SEEN_ADDRS+=("$addr_key")
+      APP_MAP_SEEN_ADDR_PRODUCTS+=("$product_val")
+      APP_MAP_TARGET_LINES[found_idx]+="    { __address__ = \"${addr}\", service = \"${service_val}\", product = \"${product_val}\" },"$'\n'
+      [ "$t_more" -eq 1 ] || break
+    done
+    [ "$has_more" -eq 1 ] || break
+  done
+
+  APP_METRICS_MAP_CONFIG="// Generated by agents/alloy/setup.sh (Phase 2C multi-product app scrape section)
+// Appended when APP_METRICS_PRODUCT_MAP is set.
+//
+// Pipeline: backend /metrics → scrape (per product) → remote_write (shared with node)
+// Each target sets its own product label so remote_write external_labels only
+// apply to host-level series (e.g. product=\"services\").
+
+////////////////////////////////////////////////////////////////////////////////
+// 9. Scrape: application /metrics endpoints (one scrape block per product)
+////////////////////////////////////////////////////////////////////////////////"
+
+  for ((idx = 0; idx < ${#APP_MAP_PRODUCTS[@]}; idx++)); do
+    product_val="${APP_MAP_PRODUCTS[$idx]}"
+    comp_id="${APP_MAP_COMP_IDS[$idx]}"
+    env_suffix="${APP_MAP_ENV_SUFFIXES[$idx]}"
+    token_var="APP_METRICS_BEARER_TOKEN_${env_suffix}"
+    token_val="${!token_var:-}"
+    auth_block=""
+    if [ -n "$token_val" ]; then
+      validate_bearer_token "$token_var" "$token_val"
+      auth_block="  authorization {
+    type        = \"Bearer\"
+    credentials = \"${token_val}\"
+  }
+"
+    fi
+    APP_METRICS_MAP_CONFIG+="
+
+prometheus.scrape \"${comp_id}\" {
+  targets = [
+${APP_MAP_TARGET_LINES[$idx]}  ]
+  forward_to      = [prometheus.remote_write.central.receiver]
+  scrape_interval = \"15s\"
+  scrape_timeout  = \"10s\"
+  job_name        = \"${product_val}-backend\"
+  metrics_path    = \"/metrics\"
+${auth_block}  // If the app is slow on startup or reloads, avoid immediately flagging down
+  honor_labels    = false
+}"
+  done
+  APP_METRICS_MAP_CONFIG+=$'\n'
+fi
+
+# Only listed variables get substituted — unlisted $vars (including Alloy
+# regex capture refs like $1) stay intact.
+# shellcheck disable=SC2016
+ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET $APP_METRICS_AUTHORIZATION $JOURNAL_SOURCES'
+
+render_alloy_config() {
+  local target_file=$1
+
+  # Build JOURNAL_SOURCES — one loki.source.journal block per product.
+  #   JOURNAL_PRODUCT_MAP unset → single source covering all JOURNAL_MATCHES,
+  #                                tagged product=$PRODUCT.
+  #   JOURNAL_PRODUCT_MAP set   → parse 'units_spec=product;units_spec=product'
+  #                                and emit one source per product. Each source's
+  #                                matches filter is built from units_spec (the
+  #                                part before the `=`), which supports | as a
+  #                                unit separator (e.g. "a.service|b.service").
+  #                                Backslash-escapes in units_spec are stripped
+  #                                (so \.service is treated as .service).
+  #
+  # Example for a shared host:
+  #   export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung'
+  JOURNAL_SOURCES=""
+  if [ -n "${JOURNAL_PRODUCT_MAP:-}" ]; then
+    echo "==> JOURNAL_PRODUCT_MAP set — multi-tenant: one journal source per product"
+    IFS=';' read -ra PAIRS <<< "$JOURNAL_PRODUCT_MAP"
+    for pair in "${PAIRS[@]}"; do
+      pair="${pair# }"
+      units_spec="${pair%=*}"        # e.g. "a.service|b.service"
+      product_val="${pair##*=}"      # e.g. "ppclub"
+
+      # Strip any backslash escapes left over from regex-style syntax
+      units_spec_clean="${units_spec//\\/}"
+
+      # Split on | and build the journalctl matches string:
+      #   "_SYSTEMD_UNIT=a.service _SYSTEMD_UNIT=b.service"
+      IFS='|' read -ra UNITS <<< "$units_spec_clean"
+      matches_str=""
+      for u in "${UNITS[@]}"; do
+        matches_str+=" _SYSTEMD_UNIT=${u}"
+      done
+      matches_str="${matches_str# }"
+
+      JOURNAL_SOURCES+="
+loki.source.journal \"${product_val}\" {
+  matches    = \"${matches_str}\"
+  max_age    = \"5m\"
+  forward_to = [loki.process.scrub_pii.receiver]
+  labels     = {
+    product   = \"${product_val}\",
+    server_id = \"${SERVER_ID}\",
+    job       = \"journald\",
+  }
+}
+"
+    done
+  else
+    # Single-tenant: one source covering JOURNAL_MATCHES, tagged $PRODUCT
+    # shellcheck disable=SC2089
+    JOURNAL_SOURCES="
+loki.source.journal \"system\" {
+  matches    = \"${JOURNAL_MATCHES}\"
+  max_age    = \"5m\"
+  forward_to = [loki.process.scrub_pii.receiver]
+  labels     = {
+    product   = \"${PRODUCT}\",
+    server_id = \"${SERVER_ID}\",
+    job       = \"journald\",
+  }
+}
+"
+  fi
+
+  JOURNAL_MATCHES="${JOURNAL_MATCHES:-}"
+  # shellcheck disable=SC2090
+  export PRODUCT SERVER_ID JOURNAL_MATCHES LOKI_PUSH_URL \
+         CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET \
+         PROM_PUSH_URL APP_METRICS_TARGET APP_METRICS_AUTHORIZATION JOURNAL_SOURCES
+
+  # Always: logs section (Phase 2A)
+  envsubst "$ENVSUBST_VARS" < config-logs.alloy.tmpl > "$target_file"
+
+  # Phase 2B: append node metrics section when PROM_PUSH_URL is set
+  if [ -n "${PROM_PUSH_URL:-}" ]; then
+    echo "==> PROM_PUSH_URL set — appending node metrics section"
+    envsubst "$ENVSUBST_VARS" < config-metrics.alloy.tmpl >> "$target_file"
+  else
+    echo "==> PROM_PUSH_URL unset — log-only mode (Phase 2A)"
+  fi
+
+  # Phase 2C: append app /metrics scrape when APP_METRICS_TARGET or APP_METRICS_PRODUCT_MAP is set
+  if [ -n "${APP_METRICS_TARGET:-}" ]; then
+    echo "==> APP_METRICS_TARGET set ($APP_METRICS_TARGET) — appending app scrape section"
+    envsubst "$ENVSUBST_VARS" < config-app.alloy.tmpl >> "$target_file"
+  elif [ -n "${APP_METRICS_PRODUCT_MAP:-}" ]; then
+    echo "==> APP_METRICS_PRODUCT_MAP set (${#APP_MAP_PRODUCTS[@]} products) — appending multi-product app scrape section"
+    printf '%s' "$APP_METRICS_MAP_CONFIG" >> "$target_file"
+  fi
+}
+
+if [ -n "$RENDER_ONLY_PATH" ]; then
+  render_tmp="$(mktemp "$RENDER_ONLY_PATH.tmp.XXXXXX")"
+  trap 'rm -f "$render_tmp"' EXIT
+  render_alloy_config "$render_tmp"
+  if [ ! -s "$render_tmp" ]; then
+    echo "ERROR: rendered config is empty." >&2
+    exit 1
+  fi
+  if ! perl -e 'link($ARGV[0], $ARGV[1]) or exit 1' "$render_tmp" "$RENDER_ONLY_PATH"; then
+    echo "ERROR: --render-only could not create $RENDER_ONLY_PATH (destination already exists or link failed)" >&2
+    exit 1
+  fi
+  rm -f "$render_tmp"
+  trap - EXIT
+  echo "==> Rendered config written to $RENDER_ONLY_PATH"
+  exit 0
 fi
 
 # ───────────────────────────── 2. Root check ───────────────────────────────
@@ -246,92 +782,7 @@ mkdir -p "$(dirname "$ALLOY_CONFIG")"
 # from the first byte. The rename below needs it on the config's filesystem.
 STAGED_CONFIG="$(mktemp "$ALLOY_CONFIG.staged.XXXXXX")"
 
-# Build JOURNAL_SOURCES — one loki.source.journal block per product.
-#   JOURNAL_PRODUCT_MAP unset → single source covering all JOURNAL_MATCHES,
-#                                tagged product=$PRODUCT.
-#   JOURNAL_PRODUCT_MAP set   → parse 'units_spec=product;units_spec=product'
-#                                and emit one source per product. Each source's
-#                                matches filter is built from units_spec (the
-#                                part before the `=`), which supports | as a
-#                                unit separator (e.g. "a.service|b.service").
-#                                Backslash-escapes in units_spec are stripped
-#                                (so \.service is treated as .service).
-#
-# Example for a shared host:
-#   export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung'
-JOURNAL_SOURCES=""
-if [ -n "${JOURNAL_PRODUCT_MAP:-}" ]; then
-  echo "==> JOURNAL_PRODUCT_MAP set — multi-tenant: one journal source per product"
-  IFS=';' read -ra PAIRS <<< "$JOURNAL_PRODUCT_MAP"
-  for pair in "${PAIRS[@]}"; do
-    pair="${pair# }"
-    units_spec="${pair%=*}"        # e.g. "a.service|b.service"
-    product_val="${pair##*=}"      # e.g. "ppclub"
-
-    # Strip any backslash escapes left over from regex-style syntax
-    units_spec_clean="${units_spec//\\/}"
-
-    # Split on | and build the journalctl matches string:
-    #   "_SYSTEMD_UNIT=a.service _SYSTEMD_UNIT=b.service"
-    IFS='|' read -ra UNITS <<< "$units_spec_clean"
-    matches_str=""
-    for u in "${UNITS[@]}"; do
-      matches_str+=" _SYSTEMD_UNIT=${u}"
-    done
-    matches_str="${matches_str# }"
-
-    JOURNAL_SOURCES+="
-loki.source.journal \"${product_val}\" {
-  matches    = \"${matches_str}\"
-  max_age    = \"5m\"
-  forward_to = [loki.process.scrub_pii.receiver]
-  labels     = {
-    product   = \"${product_val}\",
-    server_id = \"${SERVER_ID}\",
-    job       = \"journald\",
-  }
-}
-"
-  done
-else
-  # Single-tenant: one source covering JOURNAL_MATCHES, tagged $PRODUCT
-  JOURNAL_SOURCES="
-loki.source.journal \"system\" {
-  matches    = \"${JOURNAL_MATCHES}\"
-  max_age    = \"5m\"
-  forward_to = [loki.process.scrub_pii.receiver]
-  labels     = {
-    product   = \"${PRODUCT}\",
-    server_id = \"${SERVER_ID}\",
-    job       = \"journald\",
-  }
-}
-"
-fi
-
-# Only listed variables get substituted — unlisted $vars (including Alloy
-# regex capture refs like $1) stay intact.
-ENVSUBST_VARS='$PRODUCT $SERVER_ID $JOURNAL_MATCHES $LOKI_PUSH_URL $CF_ACCESS_CLIENT_ID $CF_ACCESS_CLIENT_SECRET $PROM_PUSH_URL $APP_METRICS_TARGET $APP_METRICS_AUTHORIZATION $JOURNAL_SOURCES'
-export PRODUCT SERVER_ID JOURNAL_MATCHES LOKI_PUSH_URL \
-       CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET \
-       PROM_PUSH_URL APP_METRICS_TARGET APP_METRICS_AUTHORIZATION JOURNAL_SOURCES
-
-# Always: logs section (Phase 2A)
-envsubst "$ENVSUBST_VARS" < config-logs.alloy.tmpl > "$STAGED_CONFIG"
-
-# Phase 2B: append node metrics section when PROM_PUSH_URL is set
-if [ -n "${PROM_PUSH_URL:-}" ]; then
-  echo "==> PROM_PUSH_URL set — appending node metrics section"
-  envsubst "$ENVSUBST_VARS" < config-metrics.alloy.tmpl >> "$STAGED_CONFIG"
-else
-  echo "==> PROM_PUSH_URL unset — log-only mode (Phase 2A)"
-fi
-
-# Phase 2C: append app /metrics scrape when APP_METRICS_TARGET is set
-if [ -n "${APP_METRICS_TARGET:-}" ]; then
-  echo "==> APP_METRICS_TARGET set ($APP_METRICS_TARGET) — appending app scrape section"
-  envsubst "$ENVSUBST_VARS" < config-app.alloy.tmpl >> "$STAGED_CONFIG"
-fi
+render_alloy_config "$STAGED_CONFIG"
 
 # `alloy validate` accepts an empty file, which would run with no pipeline.
 if [ ! -s "$STAGED_CONFIG" ]; then
@@ -423,6 +874,12 @@ fi
 
 # ───────────────────────────── 9. Post-install hints ───────────────────────
 
+if [ -n "${JOURNAL_PRODUCT_MAP:-}" ]; then
+  LOKI_VERIFY_QUERY="{server_id=\"$SERVER_ID\"}"
+else
+  LOKI_VERIFY_QUERY="{product=\"$PRODUCT\"}"
+fi
+
 cat <<EOF
 
 ==> Alloy is running.
@@ -433,7 +890,7 @@ Verify locally:
 
 Verify end-to-end in central Grafana (https://grafana.wanbrain.com):
   1. Open Explore → Datasource: Loki
-  2. Query: {product="$PRODUCT"}
+  2. Query: $LOKI_VERIFY_QUERY
   3. Should see log lines within ~30 seconds.
 
 If logs are not arriving, on this host:

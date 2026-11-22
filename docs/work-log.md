@@ -15,6 +15,23 @@
 ---
 -->
 
+## 2026-11-22 16:00 — 主機 dashboard 改用 server_id；setup.sh 支援共用主機的 per-target product
+
+**改動摘要：** Prod02 的主機層 external_labels 將從 `product="ppclub"` 改成 `product="services"`（`server_id="PROD02"` 不變）。主機 dashboard 改以 `server_id` 選主機，新舊標籤都看得到 PROD02；總覽的產品數與離線產品數不把 services 算成產品。`agents/alloy/setup.sh` 新增 `APP_METRICS_PRODUCT_MAP` 與 `APP_METRICS_BEARER_TOKEN_<PRODUCT>`，讓共用主機的每個 app target 帶自己的 product 與 bearer；單一產品主機的輸出與之前逐位元組相同。新增 `--render-only PATH` 預覽，只寫已存在目錄裡的新檔、不覆蓋任何既有檔案。尚未在 Prod02 套用。
+
+**修改的檔案：**
+- `grafana/dashboards/Hosts/hosts-node-exporter.json`：`product` 變數換成 `server_id`，351 個 metric selector 都加上 `server_id="$server_id"`。
+- `grafana/dashboards/Overview/overview-all.json`：資源面板與「各主機 CPU %」改用 `server_id`；產品數、離線產品數排除 services；Traffic Light 以 `server_id` 接回各產品。
+- `prometheus/rules/tests/stack-health.test.yml`：PROD02 主機 series 改用 `product="services"`。
+- `tests/grafana/test-host-dashboard-isolation.sh`：新增同名 instance 主機隔離與 services 排除的測試。
+- `agents/alloy/setup.sh`：per-target product 對應、per-product bearer、地址與 token 驗證、跨產品重複地址拒絕、`--render-only`。
+- `agents/alloy/README.md`、`docs/onboarding-new-product.md`、`docs/grafana-conventions.md`：共用主機用法、Prod02 範例（隱藏輸入 bearer、mktemp 預覽）、以 server_id 驗證。
+- `tests/alloy/test-setup-atomic.sh`、`tests/alloy/test-alloy-versions.sh`：共用主機 render、冪等重跑、render-only 防護、乾淨環境。
+
+**原因/備註：** Linear WAN-598（ZenIncome D68/D69 轉來）。manager 決定 D42（以 server_id 選主機）、D43（services 不算產品）。review 未採納：Traffic Light 在共用主機沒有任何 app scrape 時會空掉；IPv6 不同寫法的重複地址、無效 IPv6 拼字、尾端句點 FQDN、symlink 競態，都屬罕見邊界。
+
+---
+
 ## 2026-11-19 15:02 — enyoung 錯誤率 panel 的 LogQL 400 修正；alertmanager secrets 權限改為 0640 group 65534
 
 **改動摘要：** enyoung 日誌總覽的「5xx／4xx 錯誤率 (30m)」用了 LogQL 不支援的 `clamp_min`，Loki 回 400。改成 `(NUM or vector(0)) / (DEN > 0)`，分母只算 access log 行；有流量沒錯誤顯示 0，沒流量顯示 No data。Alertmanager secrets 的權限說明從 0644／0755 改成目錄 2750（setgid）、檔案 0640、group 65534，container 的 nobody 仍讀得到，其他帳號讀不到。主機尚未套用。
