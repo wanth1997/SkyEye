@@ -27,7 +27,8 @@
 #   sudo -E bash agents/alloy/setup.sh
 #   unset APP_METRICS_BEARER_TOKEN_PPCLUB
 #
-# Dry-run render (no root, no host changes; writes mode-0600 config to PATH):
+# Dry-run render (no root, no host changes; writes mode-0600 new file in an
+# existing directory; refuses existing paths and /etc/alloy):
 #   bash agents/alloy/setup.sh --render-only /tmp/config.alloy
 #
 # Required:
@@ -87,11 +88,22 @@ while [ "$#" -gt 0 ]; do
 done
 if [ -n "$RENDER_ONLY_PATH" ]; then
   case "$RENDER_ONLY_PATH" in
+    */)
+      echo "ERROR: --render-only path must be a new file, not a directory: $RENDER_ONLY_PATH" >&2
+      exit 2
+      ;;
+  esac
+  case "$RENDER_ONLY_PATH" in
     /*) ;;
     *) RENDER_ONLY_PATH="$PWD/$RENDER_ONLY_PATH" ;;
   esac
-  if [ -d "$RENDER_ONLY_PATH" ]; then
-    echo "ERROR: --render-only path must be a file, not a directory: $RENDER_ONLY_PATH" >&2
+  if [ -e "$RENDER_ONLY_PATH" ] || [ -L "$RENDER_ONLY_PATH" ]; then
+    echo "ERROR: --render-only only writes a new file; destination already exists: $RENDER_ONLY_PATH" >&2
+    exit 2
+  fi
+  render_parent="$(dirname "$RENDER_ONLY_PATH")"
+  if [ ! -d "$render_parent" ]; then
+    echo "ERROR: --render-only parent directory does not exist: $render_parent" >&2
     exit 2
   fi
 fi
@@ -627,8 +639,6 @@ loki.source.journal \"system\" {
 }
 
 if [ -n "$RENDER_ONLY_PATH" ]; then
-  render_dir="$(dirname "$RENDER_ONLY_PATH")"
-  mkdir -p "$render_dir"
   render_tmp="$(mktemp "$RENDER_ONLY_PATH.tmp.XXXXXX")"
   trap 'rm -f "$render_tmp"' EXIT
   render_alloy_config "$render_tmp"
@@ -636,7 +646,11 @@ if [ -n "$RENDER_ONLY_PATH" ]; then
     echo "ERROR: rendered config is empty." >&2
     exit 1
   fi
-  mv -f "$render_tmp" "$RENDER_ONLY_PATH"
+  if ! ln "$render_tmp" "$RENDER_ONLY_PATH"; then
+    echo "ERROR: --render-only could not create $RENDER_ONLY_PATH (destination already exists or link failed)" >&2
+    exit 1
+  fi
+  rm -f "$render_tmp"
   trap - EXIT
   echo "==> Rendered config written to $RENDER_ONLY_PATH"
   exit 0

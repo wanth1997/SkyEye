@@ -1301,6 +1301,7 @@ check 'final mode 640' mode_is "$CONFIG" 640
 new_box render-only-shared-host-no-root
 seed_old_config
 echo 1000 >"$BOX/ctl/uid"
+mkdir -p "$BOX/out"
 expected_prod02_render >"$BOX/expected"
 # Relative path verifies --render-only resolves against caller PWD, not agents/alloy.
 run_setup_cli --render-only "out/preview.alloy" -- \
@@ -1317,6 +1318,92 @@ check 'rendered file mode is 600' mode_is "$BOX/out/preview.alloy" 600
 check 'rendered file matches expected Prod02 config' \
   cmp -s "$BOX/out/preview.alloy" "$BOX/expected"
 check 'real alloy validates rendered file' real_alloy_accepts "$BOX/out/preview.alloy"
+
+new_box render-only-refuses-existing-files
+seed_old_config
+mkdir -p "$BOX/etc/apt/keyrings" "$BOX/out"
+printf 'real gpg key\n' >"$BOX/etc/apt/keyrings/grafana.gpg"
+chmod 644 "$BOX/etc/apt/keyrings/grafana.gpg"
+cp "$BOX/etc/apt/keyrings/grafana.gpg" "$BOX/old-gpg"
+printf 'deb https://apt.grafana.com stable main\n' >"$BOX/etc/apt/sources.list.d/grafana.list"
+chmod 644 "$BOX/etc/apt/sources.list.d/grafana.list"
+cp "$BOX/etc/apt/sources.list.d/grafana.list" "$BOX/old-apt-list"
+printf 'existing file\n' >"$BOX/out/existing.alloy"
+chmod 644 "$BOX/out/existing.alloy"
+cp "$BOX/out/existing.alloy" "$BOX/old-existing"
+ln -s "$BOX/out/nowhere" "$BOX/out/dangling-link"
+for existing_path in \
+  "$BOX/etc/apt/keyrings/grafana.gpg" \
+  "$BOX/etc/apt/sources.list.d/grafana.list" \
+  "$CONFIG" \
+  "$BOX/out/existing.alloy" \
+  "$BOX/out/dangling-link" \
+  "$BOX/out"; do
+  run_setup_cli --render-only "$existing_path" -- \
+    PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
+    PROM_PUSH_URL="$PROM" \
+    JOURNAL_PRODUCT_MAP="$PROD02_JOURNAL_MAP" \
+    APP_METRICS_PRODUCT_MAP="$PROD02_APP_MAP" \
+    APP_METRICS_BEARER_TOKEN_PPCLUB="$BEARER"
+  check "refuses existing destination $existing_path with exit 2" rc_is 2
+done
+assert_old_config_intact
+check 'grafana.gpg bytes preserved' cmp -s "$BOX/etc/apt/keyrings/grafana.gpg" "$BOX/old-gpg"
+check 'grafana.gpg mode preserved' mode_is "$BOX/etc/apt/keyrings/grafana.gpg" 644
+check 'grafana.list bytes preserved' cmp -s "$BOX/etc/apt/sources.list.d/grafana.list" "$BOX/old-apt-list"
+check 'grafana.list mode preserved' mode_is "$BOX/etc/apt/sources.list.d/grafana.list" 644
+check 'existing file bytes preserved' cmp -s "$BOX/out/existing.alloy" "$BOX/old-existing"
+check 'existing file mode preserved' mode_is "$BOX/out/existing.alloy" 644
+check 'dangling symlink target was not created' absent "$BOX/out/nowhere"
+assert_no_restart
+
+new_box render-only-refuses-missing-parent-dir
+seed_old_config
+for missing_parent_out in \
+  "$BOX/no-such-dir/preview.alloy" \
+  "$LOCK/preview.alloy" \
+  "$BOX/etc/alloy/sub/preview.alloy"; do
+  run_setup_cli --render-only "$missing_parent_out" -- \
+    PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
+    PROM_PUSH_URL="$PROM" \
+    JOURNAL_PRODUCT_MAP="$PROD02_JOURNAL_MAP" \
+    APP_METRICS_PRODUCT_MAP="$PROD02_APP_MAP" \
+    APP_METRICS_BEARER_TOKEN_PPCLUB="$BEARER"
+  check "refuses missing parent for $missing_parent_out with exit 2" rc_is 2
+done
+check 'missing directory was not created' absent "$BOX/no-such-dir"
+check 'lock path was not created as a directory or file' absent "$LOCK"
+check 'managed subdir was not created' absent "$BOX/etc/alloy/sub"
+assert_old_config_intact
+assert_no_restart
+
+new_box render-only-publish-never-overwrites
+seed_old_config
+mkdir -p "$BOX/out"
+# Simulate destination appearing between validation and publish.
+cat >"$BOX/bin/envsubst" <<EOF
+#!/bin/bash
+if [ ! -e "$BOX/out/race.alloy" ]; then
+  printf 'pre-existing sentinel\n' >"$BOX/out/race.alloy"
+  chmod 644 "$BOX/out/race.alloy"
+  cp "$BOX/out/race.alloy" "$BOX/old-race"
+fi
+exec "$REAL_ENVSUBST" "\$@"
+EOF
+chmod 755 "$BOX/bin/envsubst"
+run_setup_cli --render-only "$BOX/out/race.alloy" -- \
+  PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
+  PROM_PUSH_URL="$PROM" \
+  JOURNAL_PRODUCT_MAP="$PROD02_JOURNAL_MAP" \
+  APP_METRICS_PRODUCT_MAP="$PROD02_APP_MAP" \
+  APP_METRICS_BEARER_TOKEN_PPCLUB="$BEARER"
+check 'publish fails when destination appears during render' rc_failed
+check 'concurrent destination bytes preserved' cmp -s "$BOX/out/race.alloy" "$BOX/old-race"
+check 'concurrent destination mode preserved' mode_is "$BOX/out/race.alloy" 644
+check 'no temp file left behind in output dir' \
+  test "$(ls -A "$BOX/out" | tr '\n' ' ')" = 'race.alloy '
+assert_old_config_intact
+assert_no_restart
 
 new_box render-only-refuses-managed-paths
 seed_old_config
