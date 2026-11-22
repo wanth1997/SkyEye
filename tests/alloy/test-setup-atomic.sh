@@ -1405,6 +1405,52 @@ check 'no temp file left behind in output dir' \
 assert_old_config_intact
 assert_no_restart
 
+new_box render-only-publish-refuses-concurrent-dir
+seed_old_config
+mkdir -p "$BOX/out"
+cat >"$BOX/bin/envsubst" <<EOF
+#!/bin/bash
+mkdir -p "$BOX/out/race-dir"
+exec "$REAL_ENVSUBST" "\$@"
+EOF
+chmod 755 "$BOX/bin/envsubst"
+run_setup_cli --render-only "$BOX/out/race-dir" -- \
+  PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
+  PROM_PUSH_URL="$PROM" \
+  JOURNAL_PRODUCT_MAP="$PROD02_JOURNAL_MAP" \
+  APP_METRICS_PRODUCT_MAP="$PROD02_APP_MAP" \
+  APP_METRICS_BEARER_TOKEN_PPCLUB="$BEARER"
+check 'publish fails when destination becomes a directory during render' rc_failed
+check 'directory at destination remains empty' test -z "$(ls -A "$BOX/out/race-dir")"
+check 'no temp file left behind in output dir' \
+  test "$(ls -A "$BOX/out" | tr '\n' ' ')" = 'race-dir '
+assert_old_config_intact
+assert_no_restart
+
+new_box render-only-publish-refuses-concurrent-dir-symlink
+seed_old_config
+mkdir -p "$BOX/out" "$BOX/target-dir"
+cat >"$BOX/bin/envsubst" <<EOF
+#!/bin/bash
+if [ ! -L "$BOX/out/race-link" ]; then
+  ln -s "$BOX/target-dir" "$BOX/out/race-link"
+fi
+exec "$REAL_ENVSUBST" "\$@"
+EOF
+chmod 755 "$BOX/bin/envsubst"
+run_setup_cli --render-only "$BOX/out/race-link" -- \
+  PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
+  PROM_PUSH_URL="$PROM" \
+  JOURNAL_PRODUCT_MAP="$PROD02_JOURNAL_MAP" \
+  APP_METRICS_PRODUCT_MAP="$PROD02_APP_MAP" \
+  APP_METRICS_BEARER_TOKEN_PPCLUB="$BEARER"
+check 'publish fails when destination becomes a symlink to directory during render' rc_failed
+check 'symlinked directory remains empty' test -z "$(ls -A "$BOX/target-dir")"
+check 'no temp file left behind in output dir' \
+  test "$(ls -A "$BOX/out" | tr '\n' ' ')" = 'race-link '
+assert_old_config_intact
+assert_no_restart
+
 new_box render-only-refuses-managed-paths
 seed_old_config
 printf 'previous backup\n' >"$CONFIG.previous"

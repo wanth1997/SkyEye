@@ -130,7 +130,7 @@ The next successful run overwrites this file, and it holds the credentials of th
 
 **What the health check does not cover.** The check confirms that `alloy.service` stays active on one process for 5 seconds. It says nothing about the pipeline. A wrong CF Access Client ID or Secret leaves Alloy active while every push gets a 401, so it does not trigger a rollback and `setup.sh` reports success. Always do the end-to-end check in Grafana after a run.
 
-**Hand edits are not merged.** `setup.sh` re-renders the whole config from the templates. For a shared host running multiple products or scrape targets, configure `PRODUCT=services`, `JOURNAL_PRODUCT_MAP`, and `APP_METRICS_PRODUCT_MAP` (see [Shared hosts](#shared-hosts-multiple-products-on-one-machine)) instead of hand-editing `/etc/alloy/config.alloy`. Any hand-edited block not represented in those env vars is dropped by a re-run, and because that run succeeds, nothing rolls back. Use `bash agents/alloy/setup.sh --render-only /tmp/preview.alloy` to compare the render against the live config before re-running on a host that was edited by hand.
+**Hand edits are not merged.** `setup.sh` re-renders the whole config from the templates. For a shared host running multiple products or scrape targets, configure `PRODUCT=services`, `JOURNAL_PRODUCT_MAP`, and `APP_METRICS_PRODUCT_MAP` (see [Shared hosts](#shared-hosts-multiple-products-on-one-machine)) instead of hand-editing `/etc/alloy/config.alloy`. Any hand-edited block not represented in those env vars is dropped by a re-run, and because that run succeeds, nothing rolls back. Render into a fresh directory created with `mktemp -d` using `--render-only` to compare the render against the live config before re-running on a host that was edited by hand.
 
 ## Alloy versions
 
@@ -308,12 +308,13 @@ export CF_ACCESS_CLIENT_SECRET
 read -rsp 'ppclub metrics bearer token: ' APP_METRICS_BEARER_TOKEN_PPCLUB; echo
 export APP_METRICS_BEARER_TOKEN_PPCLUB
 
-bash agents/alloy/setup.sh --render-only /tmp/prod02-preview.alloy
-alloy validate /tmp/prod02-preview.alloy
-rm -f /tmp/prod02-preview.alloy
-
-# When ready, apply (re-running with the same env vars is idempotent):
-sudo -E bash agents/alloy/setup.sh
+# Render and validate in a fresh temp directory; apply only if both succeed
+# (re-running setup.sh with the same env vars is idempotent):
+PREVIEW_DIR="$(mktemp -d)"
+bash agents/alloy/setup.sh --render-only "$PREVIEW_DIR/prod02.alloy" \
+  && alloy validate "$PREVIEW_DIR/prod02.alloy" \
+  && sudo -E bash agents/alloy/setup.sh
+rm -rf "$PREVIEW_DIR"
 
 unset CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET APP_METRICS_BEARER_TOKEN_PPCLUB
 ```

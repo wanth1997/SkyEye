@@ -89,9 +89,12 @@ export APP_METRICS_PRODUCT_MAP='localhost:8090|localhost:8091@linkcourt-schedule
 read -rsp 'ppclub metrics bearer token: ' APP_METRICS_BEARER_TOKEN_PPCLUB; echo
 export APP_METRICS_BEARER_TOKEN_PPCLUB
 
-# Optional dry-run preview + validation before applying (writes only a new file in an existing dir; refuses /etc/alloy):
-#   bash agents/alloy/setup.sh --render-only /tmp/preview.alloy && alloy validate /tmp/preview.alloy
-sudo -E bash agents/alloy/setup.sh
+# Preview and validate in a fresh temp directory; apply only if both succeed:
+PREVIEW_DIR="$(mktemp -d)"
+bash agents/alloy/setup.sh --render-only "$PREVIEW_DIR/prod02.alloy" \
+  && alloy validate "$PREVIEW_DIR/prod02.alloy" \
+  && sudo -E bash agents/alloy/setup.sh
+rm -rf "$PREVIEW_DIR"
 
 unset APP_METRICS_BEARER_TOKEN_PPCLUB
 ```

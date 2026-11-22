@@ -646,7 +646,7 @@ if [ -n "$RENDER_ONLY_PATH" ]; then
     echo "ERROR: rendered config is empty." >&2
     exit 1
   fi
-  if ! ln "$render_tmp" "$RENDER_ONLY_PATH"; then
+  if ! perl -e 'link($ARGV[0], $ARGV[1]) or exit 1' "$render_tmp" "$RENDER_ONLY_PATH"; then
     echo "ERROR: --render-only could not create $RENDER_ONLY_PATH (destination already exists or link failed)" >&2
     exit 1
   fi
