@@ -157,7 +157,7 @@ done
 # Rendered the way the installers render them, with placeholder values.
 render_configs() {
   local substituted template
-  mkdir -p "$WORK/general" "$WORK/linux" "$WORK/macos"
+  mkdir -p "$WORK/general" "$WORK/shared" "$WORK/linux" "$WORK/macos"
   substituted="$(sed -n "s/^ENVSUBST_VARS='\(.*\)'\$/\1/p" "$AGENT_DIR/setup.sh")"
   [[ -n "$substituted" ]] || die "cannot read ENVSUBST_VARS from agents/alloy/setup.sh"
   (
@@ -174,6 +174,16 @@ render_configs() {
       envsubst "$substituted" <"$AGENT_DIR/$template.alloy.tmpl" >>"$WORK/general/config.alloy" || exit 1
     done
   ) || die "cannot render the general config"
+  (
+    export PRODUCT=services SERVER_ID=verify-shared
+    export LOKI_PUSH_URL=https://loki.invalid/loki/api/v1/push
+    export PROM_PUSH_URL=https://prometheus.invalid/api/v1/write
+    export CF_ACCESS_CLIENT_ID=verify-placeholder CF_ACCESS_CLIENT_SECRET=verify-placeholder
+    export JOURNAL_PRODUCT_MAP='app-a.service|caddy.service=ppclub;app-b.service=zenincome'
+    export APP_METRICS_PRODUCT_MAP='127.0.0.1:8090|127.0.0.1:8091@linkcourt-scheduler=ppclub;127.0.0.1:2112=zenincome'
+    export APP_METRICS_BEARER_TOKEN_PPCLUB=verify-placeholder
+    bash "$AGENT_DIR/setup.sh" --render-only "$WORK/shared/config.alloy" >/dev/null
+  ) || die "cannot render the shared-host config"
   cp "$WORK/general/config.alloy" "$WORK/linux/host.alloy"
   for template in config-linux config-linux-metrics; do
     sed -e 's/@@COMPONENT_ID@@/verify_strategy/g' -e 's/@@[A-Z_]*@@/verify/g' \
@@ -207,6 +217,7 @@ rejected_on() { ! validates_on "$@"; }
 for version in $SKYEYE_ALLOY_LINUX_VERSIONS; do
   image="$(image_for "$version")"
   check "Alloy $version validates the general config" validates_on "$image" general config.alloy
+  check "Alloy $version validates the shared-host config" validates_on "$image" shared config.alloy
   check "Alloy $version validates the Linux Trading directory" validates_on "$image" linux .
 done
 for version in $SKYEYE_ALLOY_MACOS_VERSIONS; do

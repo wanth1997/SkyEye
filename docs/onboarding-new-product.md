@@ -70,6 +70,27 @@ sudo -E bash agents/alloy/setup.sh
 
 Setup script installs Alloy via apt, renders config, starts systemd unit, prints verification hints.
 
+#### Shared host (multiple products on one machine)
+
+If the host runs multiple products (such as Prod02), set `PRODUCT=services` for the host-level `external_labels` and assign each product's own `product` label using `JOURNAL_PRODUCT_MAP` and `APP_METRICS_PRODUCT_MAP` (with optional per-product `APP_METRICS_BEARER_TOKEN_<PRODUCT>`):
+
+```bash
+export PRODUCT=services
+export SERVER_ID=PROD02
+export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
+export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
+export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung;zenincome-api.service|zenincome-web.service=zenincome'
+export APP_METRICS_PRODUCT_MAP='localhost:8090|localhost:8091@linkcourt-scheduler|localhost:8092=ppclub;127.0.0.1:2112=zenincome'
+# Optional per-product bearer token (only sent to that product's targets):
+#   export APP_METRICS_BEARER_TOKEN_PPCLUB='<paste from 1Password>'
+
+# Optional dry-run preview + validation before applying:
+#   bash agents/alloy/setup.sh --render-only /tmp/preview.alloy && alloy validate /tmp/preview.alloy
+sudo -E bash agents/alloy/setup.sh
+```
+
+See [Shared hosts in `agents/alloy/README.md`](../agents/alloy/README.md#shared-hosts-multiple-products-on-one-machine) for the full map syntax and verification queries.
+
 ### 3. (Optional) Instrument backend code — 10 min
 
 If the backend language is in [`docs/code-patterns/`](./code-patterns/), follow that template. Otherwise skip — logs + host metrics alone already give you a useful monitoring baseline.
@@ -98,7 +119,7 @@ Open the Hosts dashboard, switch Product variable to the new product — host pa
 | `403 Forbidden` | Service Token exists but the Access App didn't accept it | In CF Zero Trust → Access → Applications, ensure `prom-push` and `loki-push` apps have policy `Service Token = skyeye-agent-push` |
 | Logs push but metrics don't | `PROM_PUSH_URL` unset (script runs in log-only mode) | Export the var + re-run setup |
 | `up{product="X"}` returns nothing but node metrics there | Log-only mode, metrics weren't enabled | As above |
-| Alerts fire with wrong `product` label | Alloy `external_labels` not matching spec | Verify `config.alloy` has `product = "$PRODUCT"` in both `loki.write.central` and `prometheus.remote_write.central` |
+| Alerts fire with wrong `product` label | Alloy `external_labels` or per-target labels not matching spec | Single-product host: verify `prometheus.remote_write.central` has `product = "$PRODUCT"` and `loki.source.journal` has `product = "$PRODUCT"`. Shared host: verify `PRODUCT=services` with `JOURNAL_PRODUCT_MAP` and `APP_METRICS_PRODUCT_MAP` setting per-product labels. |
 
 ## What you DON'T need to do per product
 
