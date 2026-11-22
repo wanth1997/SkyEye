@@ -15,6 +15,17 @@
 ---
 -->
 
+## 2026-11-22 18:50 — 同步與精簡專案 Agent 文件
+
+**改動摘要：** 移除 `AGENTS.md` 樣板 HTML 註解並補齊 `SkyEyeWatchdog` 與核心文件索引；將 `docs/project-brief.md` 與 `README.md` 同步至 PR #81（WAN-598）多產品監控現況。
+
+**修改的檔案：**
+- `AGENTS.md`：移除開頭樣板 HTML 註解、補註外部死人開關 `SkyEyeWatchdog`（`deadman-external`），並於索引補入 `docs/operations.md` 與 `runbooks/README.md`。
+- `docs/project-brief.md`：更新至 PR #81（`a4ebd9f`，WAN-598）現況（Grafana 12.4.15、Cloudflare Access JWT、Alertmanager `2750`/`0640` secrets、Windows Alloy、`SkyEyeWatchdog`、`agents/alloy/setup.sh` 共用主機 per-target product 支援）。
+- `README.md`：更新多產品架構圖、7 個 Compose services、9 個 Grafana dashboard 目錄、`loki/rules/fake/`、`agents/alloy/trading/`、`scripts/verify-all`、`runbooks/README.md`（19 份 runbooks）與 `docs/code-patterns/go.md`，並移除 Phase 1 的 `+ Gmail SMTP`。
+
+---
+
 ## 2026-11-22 16:00 — 主機 dashboard 改用 server_id；setup.sh 支援共用主機的 per-target product
 
 **改動摘要：** Prod02 的主機層 external_labels 將從 `product="ppclub"` 改成 `product="services"`（`server_id="PROD02"` 不變）。主機 dashboard 改以 `server_id` 選主機，新舊標籤都看得到 PROD02；總覽的產品數與離線產品數不把 services 算成產品。`agents/alloy/setup.sh` 新增 `APP_METRICS_PRODUCT_MAP` 與 `APP_METRICS_BEARER_TOKEN_<PRODUCT>`，讓共用主機的每個 app target 帶自己的 product 與 bearer；單一產品主機的輸出與之前逐位元組相同。新增 `--render-only PATH` 預覽，只寫已存在目錄裡的新檔、不覆蓋任何既有檔案。尚未在 Prod02 套用。

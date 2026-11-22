@@ -9,22 +9,22 @@ Self-hosted monitoring stack for wanbrain products. Collects metrics + logs from
 ## Deployed state
 
 ```
-PPClub EC2 (x86_64)                          monitoring-prod EC2 (arm64)
-  alloy → journald → Loki push URL              Loki (S3 chunks)
-        → node exporter → Prom push URL   ━━▶   Prometheus (TSDB + rules)
-        → /metrics (FastAPI) → same CF edge     Alertmanager → Telegram
-        → ppc_* business counters               Grafana (CF Access + Google SSO)
-                                                Blackbox (external probes)
-  caddy.service                                 cloudflared tunnel
-  ppclub-backend.service (uvicorn)
+Monitored hosts (Grafana Alloy, push-only)          monitoring-prod EC2 (arm64, 7 services)
+  PROD02 (Ubuntu, shared services host)               Prometheus (TSDB + 98 rules)
+    linkcourt (multi-process) / ZenIncome / enyoung   Loki (S3 chunks + fake/ rules)
+  Trading01 (Ubuntu) — tnauqquant probes + logs  ━━▶  Alertmanager → Telegram + SkyEyeWatchdog
+  macmini-m2 (macOS) — trading probe + P&L hist       Grafana 12.4 (CF Access JWT)
+  wans-windows (Windows) — Alloy + runner logs        Blackbox (external probes)
+  (All push via CF Access Service Token)              Node Exporter (monitoring-host)
+                                                      cloudflared tunnel
 ```
 
 ### What's observed right now
-- **Host layer**: CPU / RAM / disk / network / load (PPClub + monitoring-prod itself)
-- **App layer** (PPClub backend): HTTP req rate / 4xx / 5xx / p50-p99 latency per route
-- **Business layer** (PPClub): payment created / success / refund / event signup / user signup / phone verify / credit topup / external-API (NewebPay, Hengfu) p99 / scheduler heartbeats / unhandled exceptions
-- **Log layer**: PII-scrubbed journald (ppclub-backend + caddy) → central Loki
-- **External deps**: blackbox probes on NewebPay, Google OAuth, ppclub.tw, Hengfu (insecure TLS)
+- **Host layer**: CPU / RAM / disk / network / load across Linux hosts (`PROD02`, `Trading01`, `monitoring-prod`), macOS (`macmini-m2`), and Windows (`wans-windows`)
+- **App & business layers**: LinkCourt (PPClub) HTTP req rate / 4xx / 5xx / p99 latency / payment & scheduler counters; ZenIncome & enyoung service metrics/logs
+- **Trading layer**: `tnauqquant` multi-strategy runtime probes, P&L history, shadow execution incident rules (`Trading01` + `macmini-m2`, inventory in `prometheus/rules/trading-targets.yml`)
+- **Log layer**: PII-scrubbed journald / file logs → central Loki (`loki/rules/fake/` alerts for `tnauqquant` and `zenincome`)
+- **External deps & watchdog**: blackbox probes (NewebPay, Google OAuth, ppclub.tw, Hengfu) + external `SkyEyeWatchdog` deadman webhook
 
 ### Alert rules active
 98 Prometheus rules across 9 files:
@@ -49,27 +49,35 @@ Severity → routing:
 SkyEye/
 ├── README.md                            this file
 ├── monitoring-plan-v2.md                design doc (2026-04-22 rewrite)
-├── docker-compose.yml                   the stack (6 services)
+├── docker-compose.yml                   the stack (7 services)
 ├── .env.example                         GF_ADMIN_PW — the only env var
 │
 ├── alertmanager/
-│   ├── alertmanager.yml                 routes + receivers (High loud / Medium + Low silent / Shadow null)
-│   └── secrets/                         tg_token (gitignored, 0640, group 65534)
+│   ├── alertmanager.yml                 routes + receivers (High loud / Medium + Low silent / Shadow null / deadman-external)
+│   └── secrets/                         tg_token, deadman_url (gitignored, 2750 dir / 0640 file, group 65534)
 │
 ├── prometheus/
 │   ├── prometheus.yml                   remote-write receiver + scrape + blackbox
 │   └── rules/                           system / app / business / deadman / stack / backup / windows / trading (98 rules)
 │
-├── loki/loki-config.yml                 S3 backend, delete API enabled
+├── loki/
+│   ├── loki-config.yml                  S3 backend, delete API enabled
+│   └── rules/fake/                      Loki ruler alerts (tnauqquant.yml, zenincome.yml)
 │
 ├── blackbox/config.yml                  http_2xx + http_2xx_insecure modules
 │
 ├── grafana/
 │   ├── provisioning/                    datasources (pinned UIDs) + dashboard loader
-│   └── dashboards/
+│   └── dashboards/                      9 folders:
+│       ├── Edge/                        edge / ingress folder
+│       ├── Hosts/                       Hosts — Node exporter (server_id), 主機 — Windows
 │       ├── Overview/                    Overview — All products
-│       ├── Hosts/                       Hosts — Node exporter (from grafana.com 1860), 主機 — Windows
-│       └── PPClub/                      backend-overview, business
+│       ├── PPClub/                      backend-overview, business
+│       ├── SkyEye/                      skyeye-stack-health
+│       ├── Trading/                     trading-strategy-detail, trading-strategy-fleet
+│       ├── Utilities/                   utility dashboards folder
+│       ├── ZenIncome/                   zenincome-logs-overview
+│       └── enyoung/                     enyoung-logs-overview
 │
 ├── cloudflared/
 │   ├── config.yml                       tunnel ingress (grafana / prom-push / loki-push)
@@ -77,11 +85,13 @@ SkyEye/
 │   └── README.md                        tunnel creation SOP
 │
 ├── agents/alloy/                        run on every product host
-│   ├── setup.sh                         apt install + render config + restart
+│   ├── setup.sh                         apt install + render config (shared-host per-target product) + restart
+│   ├── upgrade-linux.sh                 pinned Alloy upgrade helper for Linux hosts
 │   ├── config-logs.alloy.tmpl           journald → PII scrub → central Loki (Phase 2A)
 │   ├── config-metrics.alloy.tmpl        node_exporter → central Prom (Phase 2B)
 │   ├── config-app.alloy.tmpl            app /metrics scrape (Phase 2C)
-│   ├── windows/                         Windows hosts: install.ps1, uninstall.ps1, config template
+│   ├── trading/                         Linux/macOS trading probes, P&L history builder, systemd/launchd templates
+│   ├── windows/                         Windows hosts: install.ps1, uninstall.ps1, config templates
 │   └── README.md                        env vars, verify, troubleshoot
 │
 ├── infra/iam/                           one-time AWS bootstrap
@@ -91,27 +101,26 @@ SkyEye/
 │   └── {loki,snapshots}-lifecycle.json
 │
 ├── scripts/
+│   ├── verify-all                       local merge gate (compose, promtool, amtool, jq, lokitool, alloy, plutil, tests/)
 │   ├── bootstrap-monitoring-ec2.sh      Docker + AWS CLI install
 │   ├── backup-prometheus.sh             TSDB snapshot → S3 (cron)
+│   ├── restore-prometheus.sh            TSDB restore & verification helper
 │   ├── install-prometheus-backup-cron.sh
 │   ├── trading-target                   add/remove/check Trading inventory rows
-│   └── central-deploy                   validate → fast-forward → reload on the central host
+│   ├── central-deploy                   validate → fast-forward → reload on the central host
+│   └── zenincome/                       read-only ZenIncome diagnostic scripts
 │
-├── runbooks/                            per-alert response guides
-│   ├── _template.md
-│   ├── backend-down.md
-│   ├── high-5xx.md
-│   ├── disk-full.md
-│   ├── payment-zero.md
-│   └── external-api-down.md
+├── runbooks/                            19 per-alert & upgrade/onboarding runbooks + _template.md
+│   └── README.md                        index of all runbooks
 │
 └── docs/
     ├── operations.md                    day-2 ops: cadence, rotation, recovery
-    ├── onboarding-new-product.md        30-min checklist for adding a new service
+    ├── onboarding-new-product.md        checklist for adding a new service / shared host
     ├── grafana-conventions.md           folder taxonomy, naming, UID, tags
     ├── phase-2c-ppclub-changes.md       FastAPI /metrics code patch spec
     ├── phase-2d-ppclub-business-counters.md   business Counter hook points
     └── code-patterns/
+        ├── go.md                        Go service metrics/logging conventions
         └── python-fastapi.md            Layer 1 (HTTP) + Layer 2 (business) patterns
 ```
 
@@ -121,7 +130,7 @@ See [`docs/operations.md`](./docs/operations.md) for the full playbook. Shortest
 
 - **Morning habit**: check the Telegram group for the silent `DailyHeartbeat`. If it arrived, the alert pipeline is alive. A dead monitoring-prod is reported by the external `SkyEyeWatchdog` heartbeat service, not by Telegram ([runbook](./runbooks/skyeye-watchdog.md)).
 - **When paged (Telegram 🚨)**: click the Runbook link in the message.
-- **Dashboards**: https://grafana.wanbrain.com → Overview folder (daily), PPClub folder (deep dive), Hosts folder (troubleshoot).
+- **Dashboards**: https://grafana.wanbrain.com → Overview folder (daily), Hosts folder (troubleshoot), and product folders (`PPClub`, `Trading`, `ZenIncome`, `enyoung`, `SkyEye`).
 
 ## Change workflow
 
@@ -177,13 +186,13 @@ The rule check runs the tag pinned in the target commit and never pulls it (`--p
 
 | Phase | What it added |
 |---|---|
-| 1 | Central stack up (Prom / Loki / Grafana / AM / cloudflared). Telegram A+C + Gmail SMTP. CF Access SSO. S3 backing store for logs. |
+| 1 | Central stack up (Prom / Loki / Grafana / AM / cloudflared). Telegram A+C routing (email route remains dormant placeholder). CF Access SSO. S3 backing store for logs. |
 | 2A | Alloy on PPClub — journald + PII scrub → central Loki |
 | 2B | Alloy node_exporter → central Prom |
 | 2C | FastAPI `/metrics` (instrumentator) → central Prom |
 | 2D | Business counters: payment / refund / signup / external API / scheduler / exceptions |
 | 2E | Grafana dashboards (Overview / Hosts / PPClub × 2) |
-| 3 | Runbooks (5) + blackbox probes + TSDB S3 snapshot cron |
+| 3 | Initial runbooks (5; expanded to 19 in `runbooks/README.md`) + blackbox probes + TSDB S3 snapshot cron |
 
 See `git log` for commit-level history. Incidents the system has already caught (and resolved) in its short life:
 - **2026-04-23**: Hengfu LE cert expired (their end); 32-min window of expired cert being served; their team fixed after their own monitoring alerted them.

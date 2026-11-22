@@ -1,15 +1,5 @@
 # SkyEye
 
-<!--
-本檔案是這個專案 agent 指令的「單一來源」（Claude 透過 CLAUDE.md 的 @AGENTS.md import 讀取，
-Codex 直接讀取本檔）。只放這個專案獨有的內容。
-
-通用工作流規則（git worktree、work-log、project-brief、套件安全、驗證紀律）住在全域層：
-- Claude: ~/.claude/CLAUDE.md
-- Codex: ~/.codex/config.toml 的 developer_instructions
-不要把全域規則複製進來，否則會產生多份副本各自漂移。
--->
-
 ## 專案是什麼
 
 SkyEye 是 wanbrain 各產品共用的自架監控平台。它集中接收遠端主機的 metrics 與已去識別化 logs，透過 Grafana 顯示，並由 Alertmanager 將告警送往 Telegram。Email 路由已 merge 但仍休眠，目前不會寄信。
@@ -21,7 +11,7 @@ SkyEye 是 wanbrain 各產品共用的自架監控平台。它集中接收遠端
 - Windows 主機用 `agents/alloy/windows/` 的 PowerShell 安裝器，每台有自己專屬的 Access token（檔案在 `C:\ProgramData\SkyEye\secrets\`），series 是 `job="integrations/windows"`。流程見 `runbooks/windows-host-onboarding.md`。
 - Prometheus rules 位於 `prometheus/rules/`；Loki ruler 目前使用單一 tenant directory `/loki/rules/fake/`。
 - Grafana dashboard 由 `grafana/dashboards/` 的 JSON provisioning，datasource UID 固定為 `prometheus`、`loki`、`alertmanager`。
-- High alerts 目前實際只送 Telegram。已決定補 email，`email-high` 休眠路由已 merge，但它只收 `notification_mode="page"`，目前沒有這種告警，`alertmanager.yml` 的 SMTP 也還是 `example.invalid` placeholder，所以不會寄信。啟用流程見 `runbooks/trading-alert-promotion.md`。
+- High alerts 目前實際只送 Telegram。已決定補 email，`email-high` 休眠路由已 merge，但它只收 `notification_mode="page"`，目前沒有這種告警，`alertmanager.yml` 的 SMTP 也還是 `example.invalid` placeholder，所以不會寄信。啟用流程見 `runbooks/trading-alert-promotion.md`。外部死人開關 `SkyEyeWatchdog` 另走獨立 `deadman-external` webhook（`runbooks/skyeye-watchdog.md`）。
 - 新告警必須先用 shadow routing 驗證，不能未經 canary 直接 paging。
 
 ## 驗證命令
@@ -72,6 +62,8 @@ find grafana/dashboards -name '*.json' -exec jq empty {} +
 ## 相關文件
 
 - `docs/project-brief.md` — 專案全貌與目前狀態
+- `docs/operations.md` — 日常維運、`central-deploy`、備份還原與憑證輪替
+- `runbooks/README.md` — 各告警處理與升級／上線 runbooks 索引
 - `docs/work-log.md` — 工作記錄（最新在最上方）
 - `monitoring-plan-v2.md` — 現有平台架構與歷史決策
 - `docs/onboarding-new-product.md` — 一般產品 onboarding 流程
