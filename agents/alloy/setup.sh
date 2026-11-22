@@ -14,14 +14,18 @@
 #   sudo -E bash agents/alloy/setup.sh
 #
 # Usage (shared host running multiple products, e.g. Prod02):
+#   # If switching from single-product vars in the same shell, clear them first:
+#   unset APP_METRICS_TARGET APP_METRICS_BEARER_TOKEN
 #   export PRODUCT=services
 #   export SERVER_ID=PROD02
 #   export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
 #   export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
 #   export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung;zenincome-api.service|zenincome-web.service=zenincome'
 #   export APP_METRICS_PRODUCT_MAP='localhost:8090|localhost:8091@linkcourt-scheduler|localhost:8092=ppclub;127.0.0.1:2112=zenincome'
-#   export APP_METRICS_BEARER_TOKEN_PPCLUB='<ppclub metrics bearer token>'
+#   read -rsp 'ppclub metrics bearer token: ' APP_METRICS_BEARER_TOKEN_PPCLUB; echo
+#   export APP_METRICS_BEARER_TOKEN_PPCLUB
 #   sudo -E bash agents/alloy/setup.sh
+#   unset APP_METRICS_BEARER_TOKEN_PPCLUB
 #
 # Dry-run render (no root, no host changes; writes mode-0600 config to PATH):
 #   bash agents/alloy/setup.sh --render-only /tmp/config.alloy
@@ -138,15 +142,145 @@ to_env_suffix() {
   printf '%s' "$out"
 }
 
+to_lower() {
+  local s=$1 i ch out=""
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:i:1}"
+    case "$ch" in
+      A) ch=a ;; B) ch=b ;; C) ch=c ;; D) ch=d ;; E) ch=e ;; F) ch=f ;;
+      G) ch=g ;; H) ch=h ;; I) ch=i ;; J) ch=j ;; K) ch=k ;; L) ch=l ;;
+      M) ch=m ;; N) ch=n ;; O) ch=o ;; P) ch=p ;; Q) ch=q ;; R) ch=r ;;
+      S) ch=s ;; T) ch=t ;; U) ch=u ;; V) ch=v ;; W) ch=w ;; X) ch=x ;;
+      Y) ch=y ;; Z) ch=z ;;
+    esac
+    out+="$ch"
+  done
+  printf '%s' "$out"
+}
+
 validate_bearer_token() {
   local var_name=$1 val=$2
   case "$val" in
-    *$'\n'*|*\"*)
-      echo "ERROR: $var_name must not contain newlines or double quotes" >&2
+    *[[:cntrl:]]*|*\"*|*\\*)
+      echo "ERROR: $var_name must not contain double quotes, backslashes, or control characters" >&2
       exit 2
       ;;
   esac
 }
+
+validate_host_port() {
+  local addr=$1 host="" port=""
+  local ipv6_re='^\[([0-9A-Fa-f:.]+)\]:([1-9][0-9]*)$'
+  local hostport_re='^([^:]+):([1-9][0-9]*)$'
+  local ipv4_chars_re='^[0-9.]+$'
+  local digits_re='^[0-9]+$'
+  local hostname_re='^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$'
+  case "$addr" in
+    *[[:space:]]*|*\"*|*\\*|*[[:cntrl:]]*|*/*|*\?*|*\#*)
+      return 1
+      ;;
+  esac
+  if [[ "$addr" == \[* ]]; then
+    [[ "$addr" =~ $ipv6_re ]] || return 1
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+    [[ "$host" == *:* ]] || return 1
+  else
+    [[ "$addr" =~ $hostport_re ]] || return 1
+    host="${BASH_REMATCH[1]}"
+    port="${BASH_REMATCH[2]}"
+    if [[ "$host" =~ $ipv4_chars_re ]]; then
+      local IFS='.'
+      local octets=() o
+      read -ra octets <<< "$host"
+      [ "${#octets[@]}" -eq 4 ] || return 1
+      [[ "$host" != *. ]] || return 1
+      for o in "${octets[@]}"; do
+        [[ "$o" =~ $digits_re ]] || return 1
+        if [ "${#o}" -gt 1 ] && [[ "$o" == 0* ]]; then
+          return 1
+        fi
+        [ "$o" -le 255 ] || return 1
+      done
+    else
+      [[ "$host" =~ $hostname_re ]] || return 1
+    fi
+  fi
+  [ "${#port}" -le 5 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
+check_render_only_target_safe() {
+  local render_path=$1 cfg_path=$2 prev_path=$3 roll_path=$4 lock_path=$5
+  if ! command -v perl >/dev/null 2>&1; then
+    echo "ERROR: perl not found (Debian/Ubuntu package: perl-base)" >&2
+    exit 2
+  fi
+  perl -e '
+    use strict;
+    use warnings;
+
+    sub resolve_path {
+      my ($p) = @_;
+      my @parts = split(m{/+}, $p);
+      my $cur = "/";
+      my $depth = 0;
+      while (@parts) {
+        my $seg = shift @parts;
+        next if $seg eq "" || $seg eq ".";
+        if ($seg eq "..") {
+          $cur =~ s{/[^/]+$}{};
+          $cur = "/" if $cur eq "";
+          next;
+        }
+        my $next = ($cur eq "/") ? "/$seg" : "$cur/$seg";
+        if (-l $next) {
+          die "too many symlinks\n" if ++$depth > 40;
+          my $target = readlink($next);
+          die "readlink failed\n" unless defined $target;
+          $cur = "/" if $target =~ m{^/};
+          unshift @parts, split(m{/+}, $target);
+        } else {
+          $cur = $next;
+        }
+      }
+      return $cur;
+    }
+
+    sub parent_of {
+      my ($p) = @_;
+      $p =~ s{/+$}{} unless $p eq "/";
+      return "/" if $p eq "/" || $p !~ m{/};
+      $p =~ s{/[^/]+$}{};
+      return $p eq "" ? "/" : $p;
+    }
+
+    sub in_dir {
+      my ($path, $dir) = @_;
+      return 1 if $path eq $dir;
+      my $prefix = ($dir eq "/") ? "/" : "$dir/";
+      return index($path, $prefix) == 0;
+    }
+
+    my ($render, $cfg, $prev, $roll, $lock) = @ARGV;
+    my $r_target = resolve_path($render);
+    my $r_parent = resolve_path(parent_of($render));
+    my $cfg_dir  = resolve_path(parent_of($cfg));
+    my @managed  = map { resolve_path($_) } ($cfg, $prev, $roll, $lock);
+
+    exit 1 if in_dir($r_target, $cfg_dir) || in_dir($r_parent, $cfg_dir);
+    for my $mf (@managed) {
+      exit 1 if $r_target eq $mf;
+    }
+    exit 0;
+  ' "$render_path" "$cfg_path" "$prev_path" "$roll_path" "$lock_path"
+}
+
+if [ -n "$RENDER_ONLY_PATH" ]; then
+  if ! check_render_only_target_safe "$RENDER_ONLY_PATH" "$ALLOY_CONFIG" "$ALLOY_PREVIOUS" "$ALLOY_ROLLBACK" "$LOCK_FILE"; then
+    echo "ERROR: --render-only refuses to write inside managed Alloy config directory ($(dirname "$ALLOY_CONFIG")) or managed paths" >&2
+    exit 2
+  fi
+fi
 
 require_env PRODUCT
 require_env SERVER_ID
@@ -233,6 +367,8 @@ APP_MAP_PRODUCTS=()
 APP_MAP_COMP_IDS=()
 APP_MAP_ENV_SUFFIXES=()
 APP_MAP_TARGET_LINES=()
+APP_MAP_SEEN_ADDRS=()
+APP_MAP_SEEN_ADDR_PRODUCTS=()
 APP_METRICS_MAP_CONFIG=""
 if [ -n "${APP_METRICS_PRODUCT_MAP:-}" ]; then
   case "$APP_METRICS_PRODUCT_MAP" in
@@ -329,12 +465,19 @@ if [ -n "${APP_METRICS_PRODUCT_MAP:-}" ]; then
         echo "ERROR: APP_METRICS_PRODUCT_MAP target '$item' has an empty address" >&2
         exit 2
       fi
-      case "$addr" in
-        *[[:space:]]*|*\"*|*\\*)
-          echo "ERROR: APP_METRICS_PRODUCT_MAP has invalid address '$addr'" >&2
+      if ! validate_host_port "$addr"; then
+        echo "ERROR: APP_METRICS_PRODUCT_MAP has invalid host:port address '$addr' (use host:port without URL scheme, path, or query)" >&2
+        exit 2
+      fi
+      addr_key="$(to_lower "$addr")"
+      for ((seen_idx = 0; seen_idx < ${#APP_MAP_SEEN_ADDRS[@]}; seen_idx++)); do
+        if [ "${APP_MAP_SEEN_ADDRS[$seen_idx]}" = "$addr_key" ] && [ "${APP_MAP_SEEN_ADDR_PRODUCTS[$seen_idx]}" != "$product_val" ]; then
+          echo "ERROR: APP_METRICS_PRODUCT_MAP assigns address '$addr' to multiple products ('${APP_MAP_SEEN_ADDR_PRODUCTS[$seen_idx]}' and '$product_val')" >&2
           exit 2
-          ;;
-      esac
+        fi
+      done
+      APP_MAP_SEEN_ADDRS+=("$addr_key")
+      APP_MAP_SEEN_ADDR_PRODUCTS+=("$product_val")
       APP_MAP_TARGET_LINES[found_idx]+="    { __address__ = \"${addr}\", service = \"${service_val}\", product = \"${product_val}\" },"$'\n'
       [ "$t_more" -eq 1 ] || break
     done

@@ -418,6 +418,26 @@ not_logged() { ! logged "$1" "$2"; }
 dir_listing_is() { [[ "$(ls -A "$BOX/etc/alloy" | tr '\n' ' ')" == "$1" ]]; }
 no_secret_on_disk() { ! grep -rq "$SECRET" "$BOX/etc/alloy"; }
 real_alloy_accepts() { "$REAL_ALLOY" validate "$1" >/dev/null 2>&1; }
+
+# Asserts that prometheus.remote_write "central"'s external_labels block sets
+# both product and server_id to the given values (independent of journal blocks).
+remote_write_external_labels_are() {
+  local file=$1 want_product=$2 want_server=$3
+  perl -0777 -e '
+    use strict;
+    use warnings;
+    my ($file, $want_p, $want_s) = @ARGV;
+    open my $fh, "<", $file or exit 1;
+    my $text = do { local $/; <$fh> };
+    $text =~ /prometheus\.remote_write\s+"central"\s*(\{(?:[^{}]++|(?1))*\})/s or exit 1;
+    my $rw_body = $1;
+    $rw_body =~ /external_labels\s*=\s*(\{(?:[^{}]++|(?1))*\})/s or exit 1;
+    my $el_body = $1;
+    exit 1 unless $el_body =~ /^\s*product\s*=\s*"\Q$want_p\E",?\s*$/m;
+    exit 1 unless $el_body =~ /^\s*server_id\s*=\s*"\Q$want_s\E",?\s*$/m;
+    exit 0;
+  ' "$file" "$want_product" "$want_server"
+}
 log_line_count_is() {
   local count
   count="$(grep -c -- "$2" "$BOX/log/$1" 2>/dev/null)"
@@ -555,6 +575,65 @@ run_setup PROM_PUSH_URL=https://prom.example/api/v1/write \
   APP_METRICS_PRODUCT_MAP='localhost:8090=ppclub' \
   APP_METRICS_BEARER_TOKEN_PPCLUB='has"quote'
 assert_clean_input_error 2
+
+new_box input-app-map-per-product-bearer-backslash
+seed_old_config
+touch "$BOX/ctl/real-validate"
+run_setup PROM_PUSH_URL=https://prom.example/api/v1/write \
+  APP_METRICS_PRODUCT_MAP='localhost:8090=ppclub' \
+  APP_METRICS_BEARER_TOKEN_PPCLUB='fake-secret-bs\x99-token'
+assert_clean_input_error 2
+check 'error names the bearer variable' logged out 'APP_METRICS_BEARER_TOKEN_PPCLUB'
+check 'fake token value is not printed to output' not_logged out 'fake-secret-bs'
+
+new_box input-app-map-per-product-bearer-control-char
+seed_old_config
+run_setup PROM_PUSH_URL=https://prom.example/api/v1/write \
+  APP_METRICS_PRODUCT_MAP='localhost:8090=ppclub' \
+  APP_METRICS_BEARER_TOKEN_PPCLUB=$'fake-secret-ctrl\r-token'
+assert_clean_input_error 2
+check 'error names the bearer variable' logged out 'APP_METRICS_BEARER_TOKEN_PPCLUB'
+check 'fake token value is not printed to output' not_logged out 'fake-secret-ctrl'
+
+new_box input-single-bearer-backslash-and-control
+seed_old_config
+run_setup PROM_PUSH_URL=https://prom.example/api/v1/write \
+  APP_METRICS_TARGET=localhost:8090 \
+  APP_METRICS_BEARER_TOKEN='single-secret\q-tok'
+assert_clean_input_error 2
+check 'error names APP_METRICS_BEARER_TOKEN' logged out 'APP_METRICS_BEARER_TOKEN'
+check 'single bearer token value is not printed to output' not_logged out 'single-secret'
+
+new_box input-app-map-duplicate-addr-across-products
+seed_old_config
+run_setup PROM_PUSH_URL=https://prom.example/api/v1/write \
+  APP_METRICS_PRODUCT_MAP='localhost:8090=ppclub;localhost:8090=zenincome'
+assert_clean_input_error 2
+check 'error reports cross-product address conflict' logged out 'multiple products'
+
+new_box input-app-map-duplicate-addr-case-insensitive
+seed_old_config
+run_setup PROM_PUSH_URL=https://prom.example/api/v1/write \
+  APP_METRICS_PRODUCT_MAP='LOCALHOST:8090@ppclub-backend=ppclub;localhost:8090@zenincome-backend=zenincome'
+assert_clean_input_error 2
+
+new_box input-app-map-rejects-url-scheme-path-query
+seed_old_config
+for bad_map in \
+  'http://localhost:8090/metrics=ppclub' \
+  'https://127.0.0.1:2112=zenincome' \
+  'localhost:8090/metrics=ppclub' \
+  'localhost:8090?debug=ppclub' \
+  'localhost=ppclub' \
+  'localhost:99999=ppclub' \
+  '::1:8090=ppclub'; do
+  run_setup PROM_PUSH_URL=https://prom.example/api/v1/write \
+    APP_METRICS_PRODUCT_MAP="$bad_map"
+  check "rejects $bad_map with exit 2" rc_is 2
+done
+assert_old_config_intact
+assert_no_restart
+check 'nothing added next to the config' dir_listing_is 'config.alloy '
 
 new_box input-app-map-missing-equals
 seed_old_config
@@ -1133,10 +1212,15 @@ run_setup PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
   APP_METRICS_PRODUCT_MAP="$PROD02_APP_MAP" \
   APP_METRICS_BEARER_TOKEN_PPCLUB="$BEARER"
 assert_success_shape
-check 'remote_write external_labels uses product=services' \
-  grep -q 'product   = "services",' "$CONFIG"
-check 'remote_write external_labels uses server_id=PROD02' \
-  grep -q 'server_id = "PROD02",' "$CONFIG"
+check 'remote_write external_labels sets product=services and server_id=PROD02' \
+  remote_write_external_labels_are "$CONFIG" services PROD02
+# Verify the helper itself catches missing server_id in remote_write even when
+# loki.source.journal blocks still carry server_id = "PROD02".
+perl -0777 -pe 's/(prometheus\.remote_write\s+"central".*?external_labels\s*=\s*\{[^}]*?)^\s*server_id\s*=\s*"PROD02",?\s*\n/$1/ms' \
+  "$CONFIG" >"$BOX/broken-rw.alloy"
+remote_write_external_labels_not() { ! remote_write_external_labels_are "$@"; }
+check 'external_labels helper fails when remote_write server_id is missing' \
+  remote_write_external_labels_not "$BOX/broken-rw.alloy" services PROD02
 check 'ppclub bearer token appears only once (not leaked to zenincome)' \
   test "$(grep -c "$BEARER" "$CONFIG")" -eq 1
 check 'post-install Loki hint queries server_id on shared host' \
@@ -1160,10 +1244,27 @@ run_setup PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
 check 'second run exit code 0' rc_is 0
 check 'rerun is byte-for-byte identical' cmp -s "$CONFIG" "$BOX/first-run"
 check 'previous holds first run' cmp -s "$CONFIG.previous" "$BOX/first-run"
+check 'remote_write external_labels keeps product=services and server_id=PROD02 after rerun' \
+  remote_write_external_labels_are "$CONFIG" services PROD02
 check 'ppclub target keeps product=ppclub after rerun' \
   grep -q '{ __address__ = "localhost:8091", service = "linkcourt-scheduler", product = "ppclub" }' "$CONFIG"
 check 'zenincome target keeps product=zenincome after rerun' \
   grep -q '{ __address__ = "127.0.0.1:2112", service = "zenincome-backend", product = "zenincome" }' "$CONFIG"
+
+new_box success-shared-host-ipv6-and-hostname-targets
+seed_old_config
+touch "$BOX/ctl/real-validate"
+run_setup PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
+  PROM_PUSH_URL="$PROM" \
+  JOURNAL_PRODUCT_MAP="$PROD02_JOURNAL_MAP" \
+  APP_METRICS_PRODUCT_MAP='app-1.internal:8090|127.0.0.1:8092=ppclub;[::1]:2112=zenincome'
+check 'exit code 0' rc_is 0
+check 'hostname target rendered' \
+  grep -q '{ __address__ = "app-1.internal:8090", service = "ppclub-backend", product = "ppclub" }' "$CONFIG"
+check 'IPv4 target rendered' \
+  grep -q '{ __address__ = "127.0.0.1:8092", service = "ppclub-backend", product = "ppclub" }' "$CONFIG"
+check 'bracketed IPv6 target rendered' \
+  grep -q '{ __address__ = "\[::1\]:2112", service = "zenincome-backend", product = "zenincome" }' "$CONFIG"
 
 new_box success-shared-host-grouped-and-kebab-product
 seed_old_config
@@ -1216,6 +1317,61 @@ check 'rendered file mode is 600' mode_is "$BOX/out/preview.alloy" 600
 check 'rendered file matches expected Prod02 config' \
   cmp -s "$BOX/out/preview.alloy" "$BOX/expected"
 check 'real alloy validates rendered file' real_alloy_accepts "$BOX/out/preview.alloy"
+
+new_box render-only-refuses-managed-paths
+seed_old_config
+printf 'previous backup\n' >"$CONFIG.previous"
+chmod 640 "$CONFIG.previous"
+cp "$CONFIG.previous" "$BOX/old-previous"
+printf 'rollback backup\n' >"$CONFIG.rollback"
+chmod 640 "$CONFIG.rollback"
+cp "$CONFIG.rollback" "$BOX/old-rollback"
+for bad_out in \
+  "$CONFIG" \
+  "$CONFIG.previous" \
+  "$CONFIG.rollback" \
+  "$LOCK" \
+  "$BOX/etc/alloy/preview.alloy" \
+  "$BOX/etc/alloy/sub/preview.alloy"; do
+  run_setup_cli --render-only "$bad_out" -- \
+    PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
+    PROM_PUSH_URL="$PROM" \
+    JOURNAL_PRODUCT_MAP="$PROD02_JOURNAL_MAP" \
+    APP_METRICS_PRODUCT_MAP="$PROD02_APP_MAP" \
+    APP_METRICS_BEARER_TOKEN_PPCLUB="$BEARER"
+  check "refuses $bad_out with exit 2" rc_is 2
+done
+assert_old_config_intact
+check 'previous backup bytes preserved' cmp -s "$CONFIG.previous" "$BOX/old-previous"
+check 'previous backup mode preserved' mode_is "$CONFIG.previous" 640
+check 'rollback backup bytes preserved' cmp -s "$CONFIG.rollback" "$BOX/old-rollback"
+check 'rollback backup mode preserved' mode_is "$CONFIG.rollback" 640
+check 'subdirectory not created inside managed dir' absent "$BOX/etc/alloy/sub"
+check 'only original managed files remain' \
+  dir_listing_is 'config.alloy config.alloy.previous config.alloy.rollback '
+assert_no_restart
+
+new_box render-only-refuses-symlink-into-managed-dir
+seed_old_config
+ln -s "$BOX/etc/alloy" "$BOX/link-to-alloy-dir"
+ln -s "$CONFIG" "$BOX/link-to-live-config"
+ln -s "$BOX/etc/alloy/new.alloy" "$BOX/link-to-new-managed"
+for bad_out in \
+  "$BOX/link-to-alloy-dir/preview.alloy" \
+  "$BOX/link-to-live-config" \
+  "$BOX/link-to-new-managed"; do
+  run_setup_cli --render-only "$bad_out" -- \
+    PRODUCT=services SERVER_ID=PROD02 JOURNAL_MATCHES= \
+    PROM_PUSH_URL="$PROM" \
+    JOURNAL_PRODUCT_MAP="$PROD02_JOURNAL_MAP" \
+    APP_METRICS_PRODUCT_MAP="$PROD02_APP_MAP" \
+    APP_METRICS_BEARER_TOKEN_PPCLUB="$BEARER"
+  check "refuses symlink path $bad_out with exit 2" rc_is 2
+done
+assert_old_config_intact
+check 'nothing added inside managed dir' dir_listing_is 'config.alloy '
+check 'symlink to live config untouched' test -L "$BOX/link-to-live-config"
+assert_no_restart
 
 new_box success-enable-failure-is-a-warning
 seed_old_config

@@ -287,18 +287,26 @@ In Alloy/Prometheus `remote_write`, `external_labels` only fill labels a series 
 
 ### Preview (dry-run) and validate before applying
 
-Use `--render-only PATH` to render the config without root or touching the host, then validate and diff it against the live file:
+Use `--render-only PATH` to render the config without root or touching the host (it refuses to write inside `/etc/alloy` or any managed rollback/previous path), then validate and diff it against the live file.
+
+If you are switching from the single-product env vars in the same shell, clear `APP_METRICS_TARGET` and the global `APP_METRICS_BEARER_TOKEN` first. On Prod02, the three `ppclub` targets require Bearer authentication, so `APP_METRICS_BEARER_TOKEN_PPCLUB` must be exported (read it via hidden input so it does not enter shell history); ZenIncome does not use a bearer token:
 
 ```bash
+# Clear legacy single-product vars when switching from single-product usage
+unset APP_METRICS_TARGET APP_METRICS_BEARER_TOKEN
+
 export PRODUCT=services
 export SERVER_ID=PROD02
 export LOKI_PUSH_URL=https://loki-push.wanbrain.com/loki/api/v1/push
 export PROM_PUSH_URL=https://prom-push.wanbrain.com/api/v1/write
 export JOURNAL_PRODUCT_MAP='ppclub-backend.service|caddy.service=ppclub;enyoung-menu.service=enyoung;zenincome-api.service|zenincome-web.service=zenincome'
 export APP_METRICS_PRODUCT_MAP='localhost:8090|localhost:8091@linkcourt-scheduler|localhost:8092=ppclub;127.0.0.1:2112=zenincome'
+
 export CF_ACCESS_CLIENT_ID='xxx.access'
-  export CF_ACCESS_CLIENT_SECRET='<paste from 1Password>'
-  export APP_METRICS_BEARER_TOKEN_PPCLUB='<paste ppclub metrics token>'
+read -rsp 'CF Access Client Secret: ' CF_ACCESS_CLIENT_SECRET; echo
+export CF_ACCESS_CLIENT_SECRET
+read -rsp 'ppclub metrics bearer token: ' APP_METRICS_BEARER_TOKEN_PPCLUB; echo
+export APP_METRICS_BEARER_TOKEN_PPCLUB
 
 bash agents/alloy/setup.sh --render-only /tmp/prod02-preview.alloy
 alloy validate /tmp/prod02-preview.alloy
@@ -316,8 +324,10 @@ In Grafana Explore:
 
 ```
 Prometheus (host):  node_memory_MemAvailable_bytes{product="services", server_id="PROD02"}
-Prometheus (app):   up{product="ppclub", job="ppclub-backend"}
-                    up{product="zenincome", job="zenincome-backend"}
+Prometheus (app):   up{product="ppclub", job="ppclub-backend", server_id="PROD02"}      # 3 targets (localhost:8090, localhost:8091, localhost:8092), each == 1
+                    up{product="zenincome", job="zenincome-backend", server_id="PROD02"} # 1 target (127.0.0.1:2112), == 1
 Loki (all host):    {server_id="PROD02"}
 Loki (per product): {product="ppclub", server_id="PROD02"}
 ```
+
+For shared-host Loki verification, query by `server_id="PROD02"` (or filter to a specific service product such as `product="ppclub"`, `product="enyoung"`, `product="zenincome"`). Do not query `{product="services"}` in Loki, because each journal source stamps its own service product label rather than `services`.
