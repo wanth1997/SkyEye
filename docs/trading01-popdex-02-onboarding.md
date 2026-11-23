@@ -417,18 +417,18 @@ diff /etc/skyeye-trading/instances/popdex-02.env "$WORK/popdex-02.enable.env"   
 | manifest 存在但 binding 不成立 | `TradingRunBindingInvalid`（不看 `run_expected`）。原因可能是 `TQ_EXECUTABLE`／`TQ_INSTANCE_ID` 填錯、config 在 run 開始後被改，或 done marker **存在**但欄位不合 schema、與 manifest 不符。依 Step 5 核對 |
 | 中央比 host 先部署，或 probe 停超過 180 秒 | `TradingTelemetryMissing` |
 
-disabled 期間**不會**出現 `TradingProcessDown`、`TradingRuntimeContractMissing`、`TradingPnlTelemetryStale`，它們都要求 `run_expected=1`。
+disabled 期間**不會**出現 `TradingProcessDown`、`TradingRuntimeContractMissing`，它們都要求 `run_expected=1`。（原 `TradingPnlTelemetryStale` 告警已於 2026-11-23 依 Wan 決定移除：P&L sample 只在策略完成一個 cycle 時更新，市場波動大、spread 寬時進不了場超過 5 分鐘屬正常現象。）
 
 改回 `TQ_STRATEGY_DISABLED=0` 之後、lane 啟動之前，看 run-state 留下什麼：
 
 | run-state 的狀態 | `popdex-02` 的告警 |
 |---|---|
-| 沒有 manifest | `TradingRuntimeContractMissing`（30 秒後）；P&L 持續無效滿 3 分鐘再加上 `TradingPnlTelemetryStale`。**不會**有 `TradingProcessDown`：沒有 manifest 時 binding 是 0，規則的 `unless` 把它抑制 |
-| 有效的 `running` manifest，沒有 done marker | `TradingProcessDown`（2 分鐘後）；最後一筆 `pnl_status` 超過 5 分鐘或無效時，滿 3 分鐘再加上 `TradingPnlTelemetryStale` |
+| 沒有 manifest | `TradingRuntimeContractMissing`（30 秒後）。**不會**有 `TradingProcessDown`：沒有 manifest 時 binding 是 0，規則的 `unless` 把它抑制 |
+| 有效的 `running` manifest，沒有 done marker | `TradingProcessDown`（2 分鐘後） |
 | 有效的 manifest，加上與它相符的 done marker | 沒有，marker 讓 `run_expected=0`。reason 屬於上表那三種時是 `TradingCriticalSafetyState` |
-| manifest 在，done marker 存在但不合 schema 或與 manifest 不符 | `TradingRunBindingInvalid`；`TradingProcessDown` 被抑制；P&L 過期時另有 `TradingPnlTelemetryStale` |
+| manifest 在，done marker 存在但不合 schema 或與 manifest 不符 | `TradingRunBindingInvalid`；`TradingProcessDown` 被抑制 |
 
-lane 啟動並寫出新的 manifest 與有效的 `pnl_status` 之後，這些告警消失。
+lane 啟動並寫出新的 manifest 之後，這些告警消失。
 
 Step 2 到 Step 4 的 UTC 時窗，以及 Wan 的手動測試 cycle，都寫進執行紀錄，並從 `trading01`／`popdex-02` 的 shadow 證據中排除。
 

@@ -123,7 +123,7 @@ systemctl is-active skyeye-trading-probe@lighter-robinhood-btc-canary.timer
 find /var/lib/skyeye-trading/textfile -maxdepth 1 -type f -name 'tnauqquant-*.prom' -print
 ```
 
-The installer must not start, stop, or restart the trading process. If `current.json` still says `running` after that process exited and no bound done marker exists, leave the files unchanged: SkyEye should surface ProcessDown and stale telemetry in shadow mode. When the operator stopped that strategy on purpose and it is to stay stopped, set `TQ_STRATEGY_DISABLED=1` in its SkyEye instance env and re-run `add` instead of editing any tnauqquant file; the probe then reports it as not expected, and a start raises `TradingUnexpectedProcess` until the setting goes back to `0`.
+The installer must not start, stop, or restart the trading process. If `current.json` still says `running` after that process exited and no bound done marker exists, leave the files unchanged: SkyEye should surface ProcessDown in shadow mode (the former `TradingPnlTelemetryStale` alert was removed on 2026-11-23 per Wan's decision because high volatility or wide spreads legitimately delay cycle completion beyond 5 minutes). When the operator stopped that strategy on purpose and it is to stay stopped, set `TQ_STRATEGY_DISABLED=1` in its SkyEye instance env and re-run `add` instead of editing any tnauqquant file; the probe then reports it as not expected, and a start raises `TradingUnexpectedProcess` until the setting goes back to `0`.
 
 ## Rotation, revocation and retirement
 

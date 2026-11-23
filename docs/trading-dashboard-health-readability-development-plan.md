@@ -148,6 +148,10 @@ history telemetry.
 Do not change the existing `TradingPnlTelemetryStale` threshold in this delivery.
 The current first-sample SLA is not documented per strategy; changing a High alert
 timer without that contract would trade one false interpretation for another.
+*(Historical note: `TradingPnlTelemetryStale` was removed on 2026-11-23 per Wan's
+decision because P&L samples only update on cycle completion, and during high
+volatility or wide spreads the entry strategy legitimately stays out of trades
+for more than 5 minutes.)*
 
 ## Accumulated PnL coverage semantics
 
