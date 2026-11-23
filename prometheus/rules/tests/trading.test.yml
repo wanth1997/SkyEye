@@ -361,9 +361,6 @@ tests:
         alertname: TradingSidecarUnavailable
         exp_alerts: []
       - eval_time: 5m
-        alertname: TradingPnlTelemetryStale
-        exp_alerts: []
-      - eval_time: 5m
         alertname: TradingTelemetryMissing
         exp_alerts: []
       - eval_time: 5m
@@ -451,9 +448,6 @@ tests:
         exp_alerts: []
       - eval_time: 5m
         alertname: TradingSidecarUnavailable
-        exp_alerts: []
-      - eval_time: 5m
-        alertname: TradingPnlTelemetryStale
         exp_alerts: []
       - eval_time: 5m
         alertname: TradingTelemetryMissing
@@ -551,9 +545,6 @@ tests:
         exp_alerts: []
       - eval_time: 3m
         alertname: TradingSidecarUnavailable
-        exp_alerts: []
-      - eval_time: 3m
-        alertname: TradingPnlTelemetryStale
         exp_alerts: []
       - eval_time: 3m
         alertname: TradingTelemetryMissing

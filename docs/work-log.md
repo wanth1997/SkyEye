@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-23 18:00 — 移除 TradingPnlTelemetryStale 告警；PROD02 套用一般 log scrub 與新版 setup.sh
+
+**改動摘要：** 依 Wan 決定移除 shadow 告警 `TradingPnlTelemetryStale`（WAN-716）；另記錄 11-23 PROD02 主機 rollout 與 4 筆舊任務的上線查核。
+
+**修改的檔案：**
+- `prometheus/rules/trading.yml` — 移除 `TradingPnlTelemetryStale`；P&L recording rules 與其他 Trading 告警不變。
+- `prometheus/rules/tests/trading.test.yml`、`prometheus/rules/tests/trading-clock-skew.test.yml` — 拿掉這條告警的斷言與專屬案例。
+- `docs/trading01-popdex-02-onboarding.md`、`docs/trading-new-server-handoff.md`、`docs/trading-dashboard-health-readability-development-plan.md` — 註明 11-23 移除與原因。
+
+**原因/備註：**
+- P&L sample 只在 cycle 完成時更新。市場波動大、spread 寬時策略本來就進不了場，cycle 常超過 5 分鐘，這條告警在 trading01 三個策略與 macmini-m2 上反覆 flapping；程序本身都在跑。Wan：「這是很正常的，可以把它關閉掉。」
+- 主機 rollout（無 repo 改動）：11-23 05:39Z 在 PROD02 以 master `b77a612` 的 `agents/alloy/setup.sh`（`PRODUCT=services` + `APP_METRICS_PRODUCT_MAP`）重跑 Alloy，套上 dcf1069／51e3ff2 的一般 log scrub 與 71bd462 的原子安裝。8090/8091/8092、2112 與主機 series 全數保留，C-4（重跑砍 8091/8092）已由 WAN-598 解決；原設定留在 `/etc/alloy/config.alloy.previous`。一般 pipeline 已知殘留 A30／A31／T19 與 msg 損失 A35，Wan 決定不追。
+- 唯讀查核：PR #59／#61 的 Trading probe（05a6754）、probe 時間修正（ab2b1ad、851e995、c85ea03）與 Trading scrub 早已在 Trading01 與 Mac mini 上線。
+
+---
+
 ## 2026-11-22 18:50 — 同步與精簡專案 Agent 文件
 
 **改動摘要：** 移除 `AGENTS.md` 樣板 HTML 註解並補齊 `SkyEyeWatchdog` 與核心文件索引；將 `docs/project-brief.md` 與 `README.md` 同步至 PR #81（WAN-598）多產品監控現況。

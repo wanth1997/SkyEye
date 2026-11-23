@@ -327,23 +327,6 @@ groups:
           summary: "{{ $labels.server_id }} {{ $labels.strategy }} required sidecar is unavailable or invalid"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-critical-safety-state.md"
 
-      - alert: TradingPnlTelemetryStale
-        expr: |
-          trading_strategy_run_expected == 1
-          and on (product, environment, server_id, strategy)
-          (
-            trading_strategy_current_pnl_valid == 0
-            or
-            abs(time() - trading_strategy_pnl_sample_timestamp_seconds) > 300
-          )
-        for: 3m
-        labels:
-          severity: High
-          notification_mode: shadow
-        annotations:
-          summary: "{{ $labels.server_id }} {{ $labels.strategy }} P&L telemetry is invalid or stale"
-          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/trading-telemetry-missing.md"
-
       - alert: TradingTelemetryMissing
         expr: |
           sum by (product, environment, server_id, strategy) (
