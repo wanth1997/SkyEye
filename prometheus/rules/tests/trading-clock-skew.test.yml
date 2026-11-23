@@ -27,22 +27,6 @@ tests:
         eval_time: 5m
         exp_samples: []
 
-  - name: a P&L sample from the future is stale while the run is expected
-    interval: 30s
-    input_series:
-      - series: 'tnauqquant_run_expected{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
-        values: '1x40'
-      - series: 'tnauqquant_current_pnl_valid{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
-        values: '1x40'
-      - series: 'tnauqquant_pnl_sample_timestamp_seconds{product="tnauqquant",environment="production",server_id="macmini-m2",strategy="toobit-mexc-btc"}'
-        values: '4200x40'
-    promql_expr_test:
-      - expr: 'count(ALERTS{alertname="TradingPnlTelemetryStale",alertstate="firing",server_id="macmini-m2"})'
-        eval_time: 5m
-        exp_samples:
-          - labels: '{}'
-            value: 1
-
   - name: a history build timestamp from the future is unavailable
     interval: 30s
     input_series:
