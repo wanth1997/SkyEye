@@ -598,7 +598,7 @@ grep -E '^tnauqquant_(current_run_info|process_count|run_expected|risk_stopped|d
 
 1. **Repo（manager）**：開一個**只撤回 WAN-928 變更**的 revert PR（保留 `popdex-btc` 與同批其他變更）：
    - 執行 `scripts/trading-target remove --server trading01 --strategy popdex-multi-accounts` 移除新 target；
-   - 若 rules 或 dashboard 有問題，針對性還原 `prometheus/rules/trading.yml`（4 條 `trading_strategy_*_executor_*` recording rules）、`prometheus/rules/tests/trading.test.yml` 與 `grafana/dashboards/Trading/trading-strategy-detail.json`；
+   - 若 rules 或 dashboard 有問題，針對性還原 `prometheus/rules/trading.yml`（4 條 `trading_strategy_*_executor_*` recording rules）、`prometheus/rules/tests/trading.test.yml` 與 `grafana/dashboards/Trading/trading-strategy-detail.json`；同一個 revert PR 要一併撤回 `tests/trading/test-central-config.sh` 與 `tests/trading/test-dashboard-semantics.sh` 裡依賴「各帳號明細 · 多帳號策略」面板或四條 executor rules 的 WAN-928 斷言（其他測試保留）；
    - 核對 PR diff 保留 `popdex-btc` 及同批其他變更、通過 `scripts/verify-all` 後 merge，提供完整 SHA `REVERT_SHA`。
 2. **Central（monitoring-prod，避開 UTC 18:15–19:30）**：以標準 `scripts/central-deploy` 驗證並部署 `REVERT_SHA`（`central-deploy` 本身會驗證 Prometheus/Loki 規則、derived inventory test 與 Grafana dashboard 讀回比對）：
 
@@ -621,8 +621,8 @@ grep -E '^tnauqquant_(current_run_info|process_count|run_expected|risk_stopped|d
    sleep 70
    # 1) popdex-multi-accounts 已移除且 popdex-btc 的 target 仍在
    targets | tee "$CUT/revert-targets.json"
-   jq -e 'map(select(.strategy == "popdex-multi-accounts")) | length == 0' "$CUT/revert-targets.json"   # true
-   jq -e 'map(select(.strategy == "popdex-btc")) | length == 1' "$CUT/revert-targets.json"              # true
+   jq -e 'map(select(.server_id == "trading01" and .strategy == "popdex-multi-accounts")) | length == 0' "$CUT/revert-targets.json"   # true
+   jq -e 'map(select(.server_id == "trading01" and .strategy == "popdex-btc")) | length == 1' "$CUT/revert-targets.json"              # true
    # 2) Prometheus trading-strategy-recording 群組 rule health 正常
    curl -fsS http://127.0.0.1:9090/api/v1/rules | jq -e '
      (.data.groups[] | select(.name == "trading-strategy-recording")) as $g |
@@ -635,13 +635,13 @@ grep -E '^tnauqquant_(current_run_info|process_count|run_expected|risk_stopped|d
      jq -e '.dashboard.uid == "trading-strategy-detail"' && echo DASHBOARD-UID-OK
    ```
 
-4. **Host（選做）**：中央退回全部通過後，若要一併移除 Trading01 上的新 lane probe，再於 Trading01（root）執行 `sudo "$SETUP" retire --strategy popdex-multi-accounts </dev/null`（保持 `popdex-btc` probe 不動）。
+4. **Host（選做，一律排在「退回 `popdex-btc`」帳號交還簽收之後）**：中央退回全部通過，且（若涉及退回 `popdex-btc`）已完成下方「退回 `popdex-btc`」帳號交還簽收後，才於 Trading01（root）執行 `sudo "$SETUP" retire --strategy popdex-multi-accounts </dev/null`（保持 `popdex-btc` probe 不動）。
 
 ### 退回 `popdex-btc`（Step 5c canary 失敗或 Step 6 Stage 1 觀察期間）
 
 **帳號交還前置條件（必做）：** 兩條 lane 共用 `popdex-main`，且具名排程 `tnauqquant-daily-restart@popdex-multi-accounts.timer` 會觸發 helper service 重新拉起已停止的主服務。**必須先確認新 lane 已平倉、已停止且所有重啟排程皆已停用，才可將帳號交還 `popdex-btc`。**
 
-1. **Wan／tnauqquant 側**：確認 `popdex-multi-accounts` 已平倉、已停止並 disable `tnauqquant@popdex-multi-accounts.service`，而且**所有重啟排程與啟動來源皆已停用**（包括具名的 `tnauqquant-daily-restart@popdex-multi-accounts.timer` 與任何其他會啟動新 lane 的 timer），完成後通知 SkyEye operator。
+1. **Wan／tnauqquant 側**：確認 `popdex-multi-accounts` 已平倉（若本次 run 從未產生 settled 部位，一併提供兩支帳號當下平倉證據，例如交易所 UI 或 tnauqquant 唯讀 rehearsal 輸出）、已停止並 disable `tnauqquant@popdex-multi-accounts.service`，而且**所有重啟排程與啟動來源皆已停用**（包括具名的 `tnauqquant-daily-restart@popdex-multi-accounts.timer` 與任何其他會啟動新 lane 的 timer），完成後通知 SkyEye operator。
 2. **SkyEye operator（Trading01，root，`. "$WORK/vars"`）唯讀核對新 lane 的 timer、程序與持倉**：
 
    ```bash
@@ -650,9 +650,9 @@ grep -E '^tnauqquant_(current_run_info|process_count|run_expected|risk_stopped|d
    systemctl is-active  tnauqquant-daily-restart@popdex-multi-accounts.timer 2>&1    # inactive
    systemctl is-enabled tnauqquant-daily-restart@popdex-multi-accounts.timer 2>&1    # disabled、masked、static 或 not-found
    pgrep -a -f 'popdex_multi_accounts_config'                                        # 沒有輸出
-   systemctl list-unit-files --type=timer --no-legend | awk '{ print $1 }' >"$WORK/multi-timer-files"
-   systemctl list-units --type=timer --all --no-legend --plain | awk '{ print $1 }' >"$WORK/multi-timer-units"
-   { sed 's/@[.]timer$/@popdex-multi-accounts.timer/' "$WORK/multi-timer-files"; cat "$WORK/multi-timer-units"; } |
+   systemctl list-unit-files --type=timer --no-legend >"$WORK/multi-timer-files" && [ -s "$WORK/multi-timer-files" ] && echo MULTI-TIMER-FILES-READ
+   systemctl list-units --type=timer --all --no-legend --plain >"$WORK/multi-timer-units" && [ -s "$WORK/multi-timer-units" ] && echo MULTI-TIMER-UNITS-READ
+   { awk '{ print $1 }' "$WORK/multi-timer-files" | sed 's/@[.]timer$/@popdex-multi-accounts.timer/'; awk '{ print $1 }' "$WORK/multi-timer-units"; } |
      sort -u | while read -r t; do
        printf '%s triggers=%s enabled=%s active=%s\n' "$t" \
          "$(systemctl show -p Triggers --value "$t")" \
@@ -662,7 +662,10 @@ grep -E '^tnauqquant_(current_run_info|process_count|run_expected|risk_stopped|d
      /var/lib/skyeye-trading/textfile/tnauqquant-popdex-multi-accounts.prom
    ```
 
-   必須確認：`tnauqquant@popdex-multi-accounts.service` 為 `inactive` 且非 `enabled`、`tnauqquant-daily-restart@popdex-multi-accounts.timer` 與任何其他可啟動新 lane 的 timer 皆為 `inactive` 且非 `enabled`（`disabled`/`masked`/`static`/`not-found`）、無殘留程序、`.prom` 的 `process_count 0` 且持倉已平倉。**任一項不符即 STOP，通知 Wan 處理，絕不把帳號交還 `popdex-btc`。**
+   必須同時滿足程序、排程、平倉三項前置條件（缺任何一項證據即 **STOP，通知 Wan 處理，絕不把帳號交還 `popdex-btc`**）：
+   - **程序**：`tnauqquant@popdex-multi-accounts.service` 為 `inactive` 且非 `enabled`、無殘留程序、`.prom` 的 `process_count` 為 `0`。
+   - **排程**：`MULTI-TIMER-FILES-READ` 與 `MULTI-TIMER-UNITS-READ` 皆印出（任一份清單讀不到就停止交接）；`tnauqquant-daily-restart@popdex-multi-accounts.timer` 與 `$WORK/popdex-multi-rollback-timers` 中任何其他可啟動新 lane 的 timer 皆為 `inactive` 且非 `enabled`（`disabled`/`masked`/`static`/`not-found`）。
+   - **平倉**：若 `.prom` 有 settled 部位樣本，須為平倉（`side="flat"`、`net_position_btc 0`）；若本次 run 從來沒產生 settled 部位，平倉證據改採 Wan 提供的兩支帳號當下持倉確認（例如交易所 UI 或 tnauqquant 的唯讀 rehearsal 輸出），SkyEye 不要求 `.prom` 有部位樣本。
 
 3. **SkyEye operator（Trading01）**：將 `popdex-multi-accounts.env` 改回 `TQ_STRATEGY_DISABLED=1` 並跑 `"$SETUP" add`，再將 `popdex-btc.env` 還原為 `TQ_STRATEGY_DISABLED=0`（或還原 `$WORK/popdex-btc.env`）並跑 `"$SETUP" add`。
 4. **Wan／tnauqquant 側**：確認步驟 2–3 完成後，重新啟用並啟動 `tnauqquant@popdex-btc`（及原 timer）；SkyEye operator 唯讀核對 `popdex-btc` 恢復 `process_count 1`、`run_expected 1` 且 `popdex-multi-accounts` 為 `process_count 0`、`run_expected 0`。
