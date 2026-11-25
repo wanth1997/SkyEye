@@ -223,15 +223,21 @@ scan_manifest_log() {
         }
       }
       {
-        # Fast path for coordinator_book-only lines (e.g. coordinated_signal_skipped):
-        # avoid colon/line substr and split() on the dominant flat waiting_entry shape
-        # whenever no later field can override the net position, deferring parsing of
-        # the winning line to END.
-        if (index($0, "pnl_status") == 0 &&
+        # On multi-account same-exchange lanes, only confirmed settled coordinator_book
+        # rows (msg=trade_status state=settled settlement=confirmed) carry version-ordered
+        # positions; skip diagnostic coordinator_book lines (e.g. coordinated_signal_skipped)
+        # without deferring them into deferred_net_raw.
+        # On all other lanes, keep the exact coordinator_book-only fast path unchanged.
+        if (has_shared_exchange) {
+          if (index($0, "pnl_status") == 0 &&
+              index($0, "trade_status") == 0 &&
+              index($0, "initial_equity_recorded") == 0) {
+            next
+          }
+        } else if (index($0, "pnl_status") == 0 &&
             index($0, "trade_status") == 0 &&
             index($0, "ui_warmup_async_ready") == 0 &&
-            index($0, "carrier_venue=") == 0 &&
-            (!has_shared_exchange || index($0, "initial_equity_recorded") == 0)) {
+            index($0, "carrier_venue=") == 0) {
           p_flat = index($0, " net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book ")
           if (p_flat > 0) {
             tail = substr($0, p_flat + 76)
@@ -280,6 +286,8 @@ scan_manifest_log() {
         time_last = ""
         msg_first = ""
         msg_last = ""
+        state_first = ""
+        settlement_first = ""
         executor_first = ""
         executor_last = ""
         reason_first = ""
@@ -322,6 +330,10 @@ scan_manifest_log() {
             # Position checks use the record-first key; P&L and volume checks use the last.
             if (msg_first == "") msg_first = value
             msg_last = value
+          } else if (key == "state") {
+            if (state_first == "") state_first = value
+          } else if (key == "settlement") {
+            if (settlement_first == "") settlement_first = value
           } else if (key == "stable") {
             stable = value
           } else if (key == "cycle_completed") {
@@ -449,13 +461,18 @@ scan_manifest_log() {
           }
         }
 
-        # On multi-account same-exchange lanes, per-executor async warmup from a
-        # prior cycle can complete after another account opens a new position; use
-        # version-ordered coordinator_book snapshots instead of gross_flat_verified.
+        # On multi-account same-exchange lanes, per-executor async warmup and
+        # diagnostic coordinator_book snapshots (e.g. coordinated_signal_skipped)
+        # are not ordered against newer settlements; only confirmed settled
+        # trade_status coordinator_book rows update positions.
         is_gross_flat = (!has_shared_exchange &&
             msg_first == "ui_warmup_async_ready" &&
             index(reason_first, "gross_flat_verified:") == 1 &&
             executor_first != "" && (executor_first in mapped_executor))
+        book_allowed = (!has_shared_exchange ||
+            (msg_first == "trade_status" &&
+             state_first == "settled" &&
+             settlement_first == "confirmed"))
 
         if (is_gross_flat) {
           # A gross-flat readiness line clears all venues on a multi-exchange lane;
@@ -463,7 +480,7 @@ scan_manifest_log() {
           if (exchange_count > 1 || latest_venue != "") {
             latest_venue = line_no "\t" (time_last == "" ? "-" : time_last) "\t-\tflat\t0\t-\tflat\t0\tgross_flat"
           }
-        } else if (projection == "coordinator_book" &&
+        } else if (book_allowed && projection == "coordinator_book" &&
             (initiator_venue in mapped_executor) && (carrier_venue in mapped_executor) &&
             (!has_shared_exchange || executor_exchange[initiator_venue] != executor_exchange[carrier_venue]) &&
             initiator_side != "" && carrier_side != "" &&
@@ -475,7 +492,7 @@ scan_manifest_log() {
             carrier_venue "\t" carrier_side "\t" carrier_qty "\tbook"
         }
 
-        if (projection == "coordinator_book" && net_side != "" &&
+        if (book_allowed && projection == "coordinator_book" && net_side != "" &&
             valid_number(net_qty) && net_qty + 0 >= 0) {
           latest_net = line_no "\t" (time_last == "" ? "-" : time_last) "\t" net_side "\t" net_qty
           deferred_net_raw = ""
