@@ -5,7 +5,7 @@
 > **本文件是 operator 程序，repo 變更 merge 後不會自動生效。**
 >
 > - 通用的 add／remove 與共用 probe 更新規則見 [agents/alloy/trading/README.md](../agents/alloy/trading/README.md)。
-> - 硬性限制、staging、central-deploy 判讀與 R5 沿用 [Trading01 PopDEX rollout](trading01-popdex-rollout.md)（以下稱「rollout 文件」）。
+> - 硬性限制、staging 與 central-deploy 判讀沿用 [Trading01 PopDEX rollout](trading01-popdex-rollout.md)（以下稱「rollout 文件」）；本次 Rollback 見文末專屬章節（**不得**套用舊 rollout 的 R5）。
 > - **本次變更修改了共用 `probe.sh`**，因此 Step 2 必須先暫停並停用 Trading01 上所有既有 `skyeye-trading-probe@*` timer／service，才能讓 `setup-linux.sh add` 更新共用 `probe.sh` 並安裝新 lane。本次**不**升級 Alloy、**不**動其他 lane 的設定檔內容。
 > - **狀態：** repo 已就緒，尚未在 Trading01 或 monitoring-prod 執行；等待 tnauqquant manager 通知切換時窗後再派 operator 執行。
 
@@ -24,7 +24,7 @@
 | raw log | `/home/ubuntu/tnauqquant/logs/live-runs/<YYYYMMDD_HHMMSS>_popdex_multi_accounts_config.raw.log`（嚴格 contract glob） |
 | textfile | `tnauqquant-popdex-multi-accounts.prom` |
 | 預填 `TQ_EXECUTABLE` | `/home/ubuntu/tnauqquant/bin/popdex-multi-accounts`（Step 1 **必須**依主機 `manager.env` 核對實際路徑） |
-| 安裝時狀態 | `TQ_STRATEGY_DISABLED=1`：lane 安裝後保持停用，等 Wan 完成手動 canary cycle 並決定切換時才改為 `0` |
+| 安裝時狀態 | `TQ_STRATEGY_DISABLED=1`：lane 安裝後保持停用，等 Step 5a 停用 `popdex-btc` 並完成 Step 5b–5c canary 驗收後，於 Step 6 Stage 1 切換前才改為 `0` |
 
 **operator 必須在 Trading01 唯讀核對的值：**
 
@@ -184,29 +184,58 @@ systemctl is-enabled --quiet 'skyeye-trading-probe@*.timer' && echo "STOP: a pro
 
 ```bash
 # 2b. 用新 checkout 重裝所有既有 lane（第一筆會更新共用 probe.sh 並 reload Alloy）
+rm -f "$WORK/timers-restored.ok"
+step2b_ok=1
 while read -r s e a <&3; do
   flag=; [ "$e $a" = "enabled active" ] && flag=--enable-probe
   "$SETUP" add --env-file "$WORK/$s.env" $flag </dev/null 2>&1 | tee "$WORK/add-$s.out"
-  [ "${PIPESTATUS[0]}" = 0 ] || { echo "STOP: add $s failed"; break; }
-  grep -q '^Alloy action: restart' "$WORK/add-$s.out" && { echo "STOP: unexpected restart"; break; }
+  if [ "${PIPESTATUS[0]}" != 0 ]; then
+    echo "STOP: add $s failed — abort Step 2 and run Host Rollback"
+    step2b_ok=0
+    break
+  fi
+  if grep -q '^Alloy action: restart' "$WORK/add-$s.out"; then
+    echo "STOP: unexpected Alloy restart on $s — abort Step 2 and run Host Rollback"
+    step2b_ok=0
+    break
+  fi
 done 3<"$WORK/timers.before"
 
-# 2c. 還原任何非 enabled active 的既有 timer 並比對
-while read -r s e a <&3; do
-  if [ "$e $a" = "enabled inactive" ]; then systemctl enable "skyeye-trading-probe@$s.timer"; fi
-  if [ "$e $a" = "disabled active" ]; then systemctl start "skyeye-trading-probe@$s.timer"; fi
-done 3<"$WORK/timers.before"
-while read -r s _ _ <&3; do
-  e=disabled; a=inactive
-  systemctl is-enabled --quiet "skyeye-trading-probe@$s.timer" && e=enabled
-  systemctl is-active --quiet "skyeye-trading-probe@$s.timer" && a=active
-  printf '%s %s %s\n' "$s" "$e" "$a"
-done 3<"$WORK/timers.before" | tee "$WORK/timers.after"
-diff "$WORK/timers.before" "$WORK/timers.after" && echo TIMERS-RESTORED
+# 2c. 僅在 2b 全部成功時還原非 enabled active 的既有 timer 並比對前後狀態
+if [ "$step2b_ok" = 1 ]; then
+  while read -r s e a <&3; do
+    if [ "$e $a" = "enabled inactive" ]; then systemctl enable "skyeye-trading-probe@$s.timer"; fi
+    if [ "$e $a" = "disabled active" ]; then systemctl start "skyeye-trading-probe@$s.timer"; fi
+  done 3<"$WORK/timers.before"
+  while read -r s _ _ <&3; do
+    e=disabled; a=inactive
+    systemctl is-enabled --quiet "skyeye-trading-probe@$s.timer" && e=enabled
+    systemctl is-active --quiet "skyeye-trading-probe@$s.timer" && a=active
+    printf '%s %s %s\n' "$s" "$e" "$a"
+  done 3<"$WORK/timers.before" | tee "$WORK/timers.after"
+  if diff "$WORK/timers.before" "$WORK/timers.after"; then
+    touch "$WORK/timers-restored.ok"
+    echo TIMERS-RESTORED
+  else
+    echo "STOP: timer state mismatch — abort Step 2 and run Host Rollback"
+  fi
+fi
+```
 
-# 2d. 安裝新 lane popdex-multi-accounts（TQ_STRATEGY_DISABLED=1，自動啟用並跑一次 probe）
-"$SETUP" add --env-file "$WORK/popdex-multi-accounts.env" </dev/null 2>&1 | tee "$WORK/add-popdex-multi-accounts.out"
-echo "rc=${PIPESTATUS[0]}"
+**閘門（必看）：** 必須明確看到 `TIMERS-RESTORED` 且完全沒有任何 `STOP:` 訊息，才可進入下方 2d。若 2b 任一 `add` 失敗、出現 `Alloy action: restart`，或 2c 的 timer 前後比對失敗，**立刻結束 Step 2 並進入文末「Rollback — Host 共用 `probe.sh` 更新失敗或既有 lane 異常」，絕不執行 2d**。
+
+```bash
+# 2d. 僅在明確確認 TIMERS-RESTORED 後安裝新 lane popdex-multi-accounts（TQ_STRATEGY_DISABLED=1）
+if [ -f "$WORK/timers-restored.ok" ]; then
+  "$SETUP" add --env-file "$WORK/popdex-multi-accounts.env" </dev/null 2>&1 | tee "$WORK/add-popdex-multi-accounts.out"
+  rc="${PIPESTATUS[0]}"
+  echo "rc=$rc"
+  if [ "$rc" != 0 ] || grep -q '^Alloy action: restart' "$WORK/add-popdex-multi-accounts.out"; then
+    echo "STOP: add popdex-multi-accounts failed or requested restart — run Host Rollback"
+  fi
+else
+  echo "STOP: TIMERS-RESTORED not confirmed; aborting 2d — run Host Rollback"
+fi
 ```
 
 檢查（等 30 秒讓所有 probe 至少跑完兩次）：
@@ -275,9 +304,71 @@ q 'trading_target_info{server_id="trading01"} unless on (product, environment, s
 t01_alerts | tee "$CUT/t01-alerts.post-deploy.json"
 ```
 
-## Step 5 — Wan 手動 Canary Cycle 後的唯讀核對 `[READ-ONLY]`
+## Step 5 — 帳號交接前置（`popdex-btc` 停用）與 Canary 驗收
 
-Wan 手動跑完 canary cycle（`max_cycles=1` 或 2 輪確認雙帳號輪替）後、正式切換前，在 Trading01（root，`. "$WORK/vars"`）核對：
+**為何必須在第一次 canary 之前完成 `popdex-btc` 交接：** `popdex-multi-accounts` 與 `popdex-btc` 共用 `popdex-main` 帳號；依 tnauqquant `routing-rotation.md`，新 process 啟動時會對**所有設定帳號**撤單並平倉（`FlattenOnStart`）。即使 canary 第一筆 signal 抽到 `popdex-rot2`，只要 `popdex-btc` 仍在運行或可被 timer 重啟，新 process 啟動就會撤掉或平掉 `popdex-btc` 的委託與持倉；且 `TradingUnexpectedProcess` 有 2 分鐘等待時間並走 shadow 路由，無法替代事前交接。
+
+**重要分工：** 停用 `tnauqquant@popdex-btc`、執行 canary 與啟動／啟用 `tnauqquant@popdex-multi-accounts` **一律由 Wan／tnauqquant 側操作**；本節只做唯讀核對與調整 SkyEye 的 probe env，**絕不操作任何 `tnauqquant@*` unit**。
+
+### 5a. 帳號交接前置（首次 canary 之前，必做）`[CHANGE Trading01]`
+
+不在 UTC 18:15–19:30，嚴格依序執行：
+
+1. **Wan／tnauqquant 側**：確認 `popdex-btc` 已平倉、已停止 `tnauqquant@popdex-btc.service`，且所有可能啟動或重啟它的 timer（含任何每日重啟 timer）皆已停用／不會再拉起 `popdex-btc`，確認完成後通知 SkyEye operator。
+2. **SkyEye operator（Trading01，root，`. "$WORK/vars"`）唯讀核對 `popdex-btc` 程序、持倉與 timer**：
+
+   ```bash
+   date -u +%H:%M                                           # 不在 18:15–19:30
+   systemctl is-active tnauqquant@popdex-btc.service  | tee "$WORK/popdex-btc.active"    # inactive
+   systemctl is-enabled tnauqquant@popdex-btc.service | tee "$WORK/popdex-btc.enabled"   # disabled、masked 或 static
+   pgrep -a -f 'popdex_btc' | tee "$WORK/popdex-btc.processes"                           # 沒有輸出
+   systemctl list-unit-files --type=timer --no-legend >"$WORK/btc-timer-files" && [ -s "$WORK/btc-timer-files" ] && echo BTC-TIMER-FILES-READ
+   systemctl list-units --type=timer --all --no-legend --plain >"$WORK/btc-timer-units" && [ -s "$WORK/btc-timer-units" ] && echo BTC-TIMER-UNITS-READ
+   { awk '{ print $1 }' "$WORK/btc-timer-files" | sed 's/@[.]timer$/@popdex-btc.timer/'; awk '{ print $1 }' "$WORK/btc-timer-units"; } |
+     sort -u | while read -r t; do
+       printf '%s triggers=%s enabled=%s active=%s\n' "$t" "$(systemctl show -p Triggers --value "$t")" \
+         "$(systemctl is-enabled "$t" 2>&1)" "$(systemctl is-active "$t")"
+     done | tee "$WORK/popdex-btc-timers"
+   grep -E '^tnauqquant_(process_count|current_position_btc|current_net_position_btc|done_marker)[{]' \
+     /var/lib/skyeye-trading/textfile/tnauqquant-popdex-btc.prom
+   ```
+
+   - 必須確認：`popdex-btc.active` 為 `inactive`、`popdex-btc.enabled` 為 `disabled`/`masked`/`static`、`popdex-btc.processes` 為空、`popdex-btc-timers` 中**沒有任何** active 或 enabled timer 會觸發 `tnauqquant@popdex-btc.service`（包含任何會重啟 `popdex-btc` 的每日排程 timer），且 `tnauqquant-popdex-btc.prom` 的 `process_count` 為 `0`、持倉已平倉。
+   - **任一項未通過即 STOP，通知 Wan 處理，絕不進入 5b canary。**
+
+3. **SkyEye operator（Trading01）為 `popdex-btc` 加上 `TQ_STRATEGY_DISABLED=1`（Stage 1 保護前置，暫不 retire）**：
+
+   ```bash
+   install -m 600 /etc/skyeye-trading/instances/popdex-btc.env "$WORK/popdex-btc.disable.env"
+   if grep -q '^TQ_STRATEGY_DISABLED=' "$WORK/popdex-btc.disable.env"; then
+     sed -i 's/^TQ_STRATEGY_DISABLED=.*/TQ_STRATEGY_DISABLED=1/' "$WORK/popdex-btc.disable.env"
+   else
+     printf 'TQ_STRATEGY_DISABLED=1\n' >>"$WORK/popdex-btc.disable.env"
+   fi
+   diff /etc/skyeye-trading/instances/popdex-btc.env "$WORK/popdex-btc.disable.env"
+   "$SETUP" add --env-file "$WORK/popdex-btc.disable.env" </dev/null 2>&1 | tee "$WORK/add-popdex-btc.disable.out"
+   rc="${PIPESTATUS[0]}"; echo "rc=$rc"
+   if [ "$rc" != 0 ] || grep -q '^Alloy action: restart' "$WORK/add-popdex-btc.disable.out"; then
+     echo "STOP: add popdex-btc disable failed or requested restart"
+   fi
+   sleep 20
+   grep -E '^tnauqquant_(process_count|run_expected)[{]' /var/lib/skyeye-trading/textfile/tnauqquant-popdex-btc.prom
+   ```
+
+   預期：`rc=0`、無 `Alloy action: restart`、`popdex-btc` 的 `process_count 0` 與 `run_expected 0`。
+
+   **過渡期保留 `popdex-btc` probe 的目的**：
+   - `popdex-btc` 停著時不觸發 `TradingProcessDown`；
+   - 若 `popdex-btc` 被意外重啟（忘關 timer 或誤操作），SkyEye 會觸發 `TradingUnexpectedProcess`（shadow）提醒；
+   - 過渡期間 `$strategy` 下拉選單仍可直接對照 `popdex-btc`，且若 canary 失敗或上線後需退回，只需把 `TQ_STRATEGY_DISABLED` 改回 `0`。
+
+### 5b. Wan 手動執行 Canary Cycle
+
+確認 5a 全部通過後，通知 **Wan／tnauqquant 側**執行手動 canary cycle（`max_cycles=1` 或 2 輪確認雙帳號輪替；此時 `popdex-multi-accounts.env` 維持 `TQ_STRATEGY_DISABLED=1`），等待 canary 結束後進入 5c。
+
+### 5c. Canary 終態與指標唯讀核對 `[READ-ONLY]`
+
+Canary 結束後、正式切換前，在 Trading01（root，`. "$WORK/vars"`）核對：
 
 ```bash
 ENVF=/etc/skyeye-trading/instances/popdex-multi-accounts.env
@@ -289,58 +380,66 @@ jq -r '.executable, .instance_id, .strategy, .log_path' "$MAN"
 grep -E '^TQ_(EXECUTABLE|INSTANCE_ID|STRATEGY|EXECUTOR_MAP|RAW_LOG_GLOB)=' "$ENVF"
 
 LOG="$(jq -r '.log_path' "$MAN")"; RUN_ID="$(jq -r '.run_id' "$MAN")"
+printf '%s\n' "$RUN_ID" >"$WORK/canary-run-id"
 [ "$(basename "$LOG")" = "$RUN_ID.raw.log" ] &&
   compgen -G "$(sed -n 's/^TQ_RAW_LOG_GLOB=//p' "$ENVF" | tail -n 1)" | grep -qxF "$LOG" &&
   echo "LOG-MATCHES-GLOB run_id=$RUN_ID"
+
+# 核對本次 canary 成功終態（marker 存在、run_id 相符、reason/phase 為 max_cycles_complete、已平倉、無 error）
+test -f "$DONE" && echo DONE-MARKER-PRESENT
+jq -e --arg rid "$RUN_ID" '
+  def magnitude: if . < 0 then -. else . end;
+  .run_id == $rid and
+  .strategy == "popdex-multi-accounts" and
+  .reason == "max_cycles_complete" and
+  .phase == "max_cycles_complete" and
+  ((.error // "") == "") and
+  .dust_tolerance_btc >= 0 and
+  (.long_btc | magnitude) <= .dust_tolerance_btc and
+  (.short_btc | magnitude) <= .dust_tolerance_btc and
+  (.net_btc | magnitude) <= .dust_tolerance_btc
+' "$DONE" && echo CANARY-TERMINAL-OK
 ```
 
-`LOG-MATCHES-GLOB` 通過後核對 raw log 與 `.prom` 合併／分項數值：
+`LOG-MATCHES-GLOB` 與 `CANARY-TERMINAL-OK` 皆通過後，核對 raw log 與 `.prom` 終態、合併與四個完整 per-executor 分項指標：
 
 ```bash
 grep -E 'msg=initial_equity_recorded' "$LOG" | tail -n 1 | grep -oE '(equity_usdt|equity_usdt_by_executor)=[^[:space:]]+'
 PNL="$(awk '{ m = s = ""; for (i = 1; i <= NF; i++) { e = index($i, "="); if (!e) continue
     k = substr($i, 1, e - 1); v = substr($i, e + 1); gsub(/^"|"$/, "", v); if (k == "msg") m = v; if (k == "stable") s = v }
   if (m == "pnl_status" && s == "true") last = $0 } END { if (last != "") print last }' "$LOG")"
-grep -oE '(^|[[:space:]])(time|equity_now|real_pnl_usdt|equity_usdt_by_executor|volume_usd_by_executor|cycle_executor|cycles_completed)=[^[:space:]]+' <<<"$PNL"
-grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok|current_equity_usdt|current_real_pnl_usdt|current_cycles_completed|current_run_exchange_volume_usd|current_position_btc|current_net_position_btc|current_executor_|current_run_executor_)[{]' "$PROM"
+grep -oE '(^|[[:space:]])(time|equity_now|real_pnl_usdt|equity_usdt_by_executor|volume_usd_by_executor|cycle_executor|cycles_completed|risk_stopped)=[^[:space:]]+' <<<"$PNL"
+grep -E '^tnauqquant_(process_count|run_expected|risk_stopped|done_marker|process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok|current_equity_usdt|current_real_pnl_usdt|current_cycles_completed|current_run_exchange_volume_usd|current_position_btc|current_net_position_btc|current_executor_equity_usdt|current_executor_real_pnl_usdt|current_executor_cycles_completed|current_run_executor_volume_usd)[{]' "$PROM"
 ```
 
-確認項目：
-1. 五個 binding 值（`process_identity_ok`、`strategy_identity_ok`、`config_snapshot_match`、`log_binding_ok`、`marker_binding_ok`）皆為 `1`。
-2. 合併指標：`tnauqquant_current_equity_usdt` 等於 `equity_now`、`tnauqquant_current_run_exchange_volume_usd{exchange="popdex"}` 等於兩支帳號成交額總和、`tnauqquant_current_position_btc` 與 `tnauqquant_current_net_position_btc` 帶 `base_asset="BTC"` 與 `exchange="popdex"`。
-3. 分項指標：`tnauqquant_current_executor_equity_usdt`、`tnauqquant_current_executor_real_pnl_usdt`、`tnauqquant_current_executor_cycles_completed`、`tnauqquant_current_run_executor_volume_usd` 僅帶 `executor="popdex-main"` 與 `executor="popdex-rot2"`（且 `sum(executor_volume) == exchange_volume`）。
-4. monitoring-prod 查 Loki 確認此 `run_id` 有 log 進入，並在 Grafana `Trading · 策略詳情`（`server_id=trading01`, `strategy=popdex-multi-accounts`）確認上方合併 KPI 與下方「各帳號明細 · 多帳號策略」表格皆正確顯示。
+驗收條件（**全部通過才可進入 Step 6；任一項失敗立刻 STOP 並把結果交回 Wan**）：
+1. **Canary 成功終態**：
+   - `DONE-MARKER-PRESENT` 與 `CANARY-TERMINAL-OK` 皆印出（確認 `reason="max_cycles_complete"` 且已平倉）；
+   - `.prom` 顯示 `tnauqquant_done_marker{...,reason="max_cycles_complete"} 1`、`tnauqquant_process_count 0`、`tnauqquant_risk_stopped 0`；
+   - 五個 binding 值（`process_identity_ok`、`strategy_identity_ok`、`config_snapshot_match`、`log_binding_ok`、`marker_binding_ok`）皆為 `1`；
+   - monitoring-prod 的 `t01_alerts` 與 Loki 均無 `popdex-multi-accounts` 未解決之風控或錯誤事件（`TradingCriticalSafetyState`、`TradingRiskStopped`、`TradingExecutionIncident`、`TradingCriticalLogEvent`、`TradingCriticalWarnEvent`）。
+2. **合併指標**：
+   - `tnauqquant_current_equity_usdt` 等於 raw log 的 `equity_now`；
+   - `tnauqquant_current_run_exchange_volume_usd{...,exchange="popdex"}` 等於兩支帳號成交額總和；
+   - **交易所持倉**：`tnauqquant_current_position_btc` 帶 `base_asset="BTC"`、`exchange="popdex"` 與 `side="flat"`（平倉值為 `0` 或 `0.00000000`）；
+   - **策略淨持倉**：`tnauqquant_current_net_position_btc` **僅帶 `base_asset="BTC"`**（不帶 `exchange` label），平倉值為 `0`。
+3. **四個 per-executor 分項指標**（分別核對 `executor="popdex-main"` 與 `executor="popdex-rot2"` 兩支帳號的數值，且不可出現 allowlist 以外的 `executor` label）：
+   - `tnauqquant_current_executor_equity_usdt`：`popdex-main` 與 `popdex-rot2` 各對應 `equity_usdt_by_executor`；
+   - `tnauqquant_current_executor_real_pnl_usdt`：`popdex-main` 與 `popdex-rot2` 各對應歸屬已完成週期實現損益；
+   - `tnauqquant_current_executor_cycles_completed`：`popdex-main` 與 `popdex-rot2` 各對應歸屬已完成週期數；
+   - `tnauqquant_current_run_executor_volume_usd`：`popdex-main` 與 `popdex-rot2` 各對應成交額，且兩者加總等於 `tnauqquant_current_run_exchange_volume_usd{exchange="popdex"}`。
+4. **Loki 與 Grafana**：monitoring-prod 查 Loki 確認此 `run_id` 有 log 進入，並在 Grafana `Trading · 策略詳情`（`server_id=trading01`, `strategy=popdex-multi-accounts`）確認上方合併 KPI 與下方「各帳號明細 · 多帳號策略」表格皆正確顯示。
 
-## Step 6 — `popdex-btc` 兩階段切換與歷史資料延續
+## Step 6 — 正式切換（Stage 1 啟用與簽收）與 Stage 2 `popdex-btc` 退場
 
-**重要分工：** 停用 `tnauqquant@popdex-btc` 與啟動／啟用 `tnauqquant@popdex-multi-accounts` **一律由 Wan／tnauqquant 側操作**；本節只調整 SkyEye 的 probe env 與中央 inventory，**絕不操作任何 `tnauqquant@*` unit**。
+**重要分工：** 啟動／啟用 `tnauqquant@popdex-multi-accounts` **一律由 Wan／tnauqquant 側操作**；SkyEye operator 只調整 SkyEye 的 probe env、唯讀簽收與執行中央 inventory 變更，**絕不操作任何 `tnauqquant@*` unit**。
 
-### Stage 1：切換當下（建議觀察 24–72 小時）`[CHANGE Trading01]`
+### Stage 1：正式啟用 `popdex-multi-accounts` 與簽收（觀察 24–72 小時）`[CHANGE Trading01]`
 
 順序嚴格遵守（不在 UTC 18:15–19:30）：
 
-1. **Wan／tnauqquant 側**：停止並 disable `tnauqquant@popdex-btc`（service 與 timer），確認平倉且無殘留程序。
-2. **SkyEye operator（Trading01）**：唯讀確認 `popdex-btc` 已無執行程序，再將 `popdex-btc` 的 SkyEye env 設為 `TQ_STRATEGY_DISABLED=1`（**暫不 retire**）：
-
-   ```bash
-   systemctl is-active tnauqquant@popdex-btc.service    # inactive（唯讀確認）
-   install -m 600 /etc/skyeye-trading/instances/popdex-btc.env "$WORK/popdex-btc.disable.env"
-   if grep -q '^TQ_STRATEGY_DISABLED=' "$WORK/popdex-btc.disable.env"; then
-     sed -i 's/^TQ_STRATEGY_DISABLED=.*/TQ_STRATEGY_DISABLED=1/' "$WORK/popdex-btc.disable.env"
-   else
-     printf 'TQ_STRATEGY_DISABLED=1\n' >>"$WORK/popdex-btc.disable.env"
-   fi
-   diff /etc/skyeye-trading/instances/popdex-btc.env "$WORK/popdex-btc.disable.env"
-   "$SETUP" add --env-file "$WORK/popdex-btc.disable.env" </dev/null 2>&1 | tee "$WORK/add-popdex-btc.disable.out"
-   echo "rc=${PIPESTATUS[0]}"
-   ```
-
-   **Stage 1 保留 `popdex-btc` probe 的目的**：
-   - `popdex-btc` 停著時不觸發 `TradingProcessDown`；
-   - 若 `popdex-btc` 被意外重啟（忘關 timer 或誤操作），SkyEye 會立即觸發 `TradingUnexpectedProcess`（shadow），主動保護共用的 `popdex-main` 帳號不被兩條 lane 同時下單；
-   - 過渡期間 `$strategy` 下拉選單仍可直接對照 `popdex-btc`，且若需退回只需把 `TQ_STRATEGY_DISABLED` 改回 `0`。
-
-3. **SkyEye operator（Trading01）**：把 `popdex-multi-accounts` 的 `TQ_STRATEGY_DISABLED` 改為 `0`（在 Wan 正式啟動新 lane **之前**執行）：
+1. **前置確認**：Step 5c canary 全部通過，且 `popdex-btc` 維持停用（Step 5a 已將 `popdex-btc.env` 設為 `TQ_STRATEGY_DISABLED=1`，`tnauqquant@popdex-btc.service` 為 `inactive`）。
+2. **SkyEye operator（Trading01）**：把 `popdex-multi-accounts` 的 `TQ_STRATEGY_DISABLED` 改為 `0`（在 Wan 正式啟動新 lane **之前**執行）：
 
    ```bash
    install -m 600 /etc/skyeye-trading/instances/popdex-multi-accounts.env "$WORK/popdex-multi-accounts.enable.env"
@@ -350,7 +449,41 @@ grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_m
    echo "rc=${PIPESTATUS[0]}"
    ```
 
-4. **Wan／tnauqquant 側**：啟用並啟動 `tnauqquant@popdex-multi-accounts`。
+3. **Wan／tnauqquant 側**：啟用並啟動 `tnauqquant@popdex-multi-accounts`（及對應排程 timer，若有），完成後通知 SkyEye operator。
+4. **SkyEye operator（Trading01 + monitoring-prod）Stage 1 簽收唯讀驗證 `[READ-ONLY]`**：
+
+   接到 Wan 已啟動通知後等 30 秒讓 probe 刷新，**必須完成以下全部確認才可簽收 Stage 1**（若正式程序啟動失敗而未寫出新 manifest，canary 留下的有效 `current.done.json` 會讓 probe 持續輸出 `run_expected 0`，`TradingProcessDown` 不會觸發且面板會停在 canary 數據）：
+
+   Trading01（root，`. "$WORK/vars"`）：
+
+   ```bash
+   sleep 30
+   CANARY_RUN_ID="$(cat "$WORK/canary-run-id")"
+   NEW_RUN_ID="$(jq -r '.run_id' /home/ubuntu/tnauqquant/run-state/popdex-multi-accounts/current.json)"
+   [ -n "$CANARY_RUN_ID" ] && [ -n "$NEW_RUN_ID" ] && [ "$NEW_RUN_ID" != "null" ] &&
+     [ "$NEW_RUN_ID" != "$CANARY_RUN_ID" ] && echo "NEW-PROD-RUN-ID=$NEW_RUN_ID (canary=$CANARY_RUN_ID)"
+   PROM=/var/lib/skyeye-trading/textfile/tnauqquant-popdex-multi-accounts.prom
+   OLD_PROM=/var/lib/skyeye-trading/textfile/tnauqquant-popdex-btc.prom
+   grep -E '^tnauqquant_(current_run_info|process_count|run_expected|runtime_contract_available|process_identity_ok|strategy_identity_ok|config_snapshot_match|log_binding_ok|marker_binding_ok|risk_stopped|done_marker)[{]' "$PROM"
+   grep -E '^tnauqquant_(process_count|run_expected)[{]' "$OLD_PROM"
+   systemctl is-active tnauqquant@popdex-btc.service   # 仍為 inactive（唯讀確認）
+   ```
+
+   monitoring-prod（ubuntu，`. "$CUT/vars"; . "$CUT/helpers.sh"`）：
+
+   ```bash
+   probe_ages | tee "$CUT/probe-ages.stage1.json"
+   q 'trading_strategy_process_count{server_id="trading01",strategy=~"popdex-multi-accounts|popdex-btc"}'
+   q 'trading_strategy_run_expected{server_id="trading01",strategy=~"popdex-multi-accounts|popdex-btc"}'
+   q 'trading_strategy_binding_ok{server_id="trading01",strategy="popdex-multi-accounts"}'
+   t01_alerts | tee "$CUT/t01-alerts.stage1.json"
+   ```
+
+   簽收條件（全部通過才可簽收 Stage 1；任一項不符立即回報 Wan 排查，不得簽收）：
+   - `NEW-PROD-RUN-ID=...` 印出，新 `run_id` **不同於** `$CANARY_RUN_ID`，且 `tnauqquant_current_run_info` 的 `run_id` 等於 `NEW_RUN_ID`；
+   - 新 lane `popdex-multi-accounts`：`process_count 1`、`run_expected 1`、五項 binding（`process_identity_ok`、`strategy_identity_ok`、`config_snapshot_match`、`log_binding_ok`、`marker_binding_ok`）皆為 `1`、`risk_stopped 0`、無 `tnauqquant_done_marker`；
+   - 舊 lane `popdex-btc`：`process_count 0`、`run_expected 0`、`tnauqquant@popdex-btc.service` 為 `inactive`；
+   - monitoring-prod：`probe_ages` 全部 `< 60`，Prometheus 的 `trading_strategy_process_count`（新 lane `1`、舊 lane `0`）、`trading_strategy_run_expected`（新 lane `1`、舊 lane `0`）、`trading_strategy_binding_ok`（新 lane `1`）全數相符。
 
 ### Stage 2：穩定觀察後正式退場 `popdex-btc`（另案 S3）
 
@@ -367,17 +500,100 @@ grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_m
 
 ## Rollback
 
-- **Host 共用 `probe.sh` 更新失敗或既有 lane 異常**：
-  1. 停止並停用全部 `skyeye-trading-probe@*.timer` 與 `.service`（不碰 `tnauqquant@*`）。
-  2. 用前版 `origin/master` checkout 的 `setup-linux.sh` 依 `$WORK/timers.before` 重跑既有 lane 的 `add`（或由第一筆 `add` 印出的 rollback record 還原 `/usr/local/libexec/skyeye-trading/probe.sh` 並 `systemctl daemon-reload`）。
-  3. 執行 `sudo "$SETUP" retire --strategy popdex-multi-accounts </dev/null`。
-  4. 依 `$WORK/timers.before` 還原所有既有 timer 狀態並確認 `probe_ages < 60`。
-- **Central 部署失敗**：若 `$CUT/old-head` 不含 `popdex-multi-accounts` row，依 rollout 文件 R5 還原 checkout 與 reload Prometheus；若已 merge 且需移除新目標，依 README Remove 走 `scripts/trading-target remove` PR 與 `central-deploy`。
-- **切換後需退回 `popdex-btc`（Stage 1 期間）**：
-  1. Wan／tnauqquant 側停止並 disable `tnauqquant@popdex-multi-accounts`。
-  2. SkyEye operator 將 `popdex-multi-accounts.env` 改回 `TQ_STRATEGY_DISABLED=1` 並跑 `setup-linux.sh add`。
-  3. SkyEye operator 將 `popdex-btc.env` 改回 `TQ_STRATEGY_DISABLED=0`（還原 `$WORK/popdex-btc.env`）並跑 `setup-linux.sh add`。
-  4. Wan／tnauqquant 側重新啟用並啟動 `tnauqquant@popdex-btc`。
+### Host：共用 `probe.sh` 更新失敗或既有 lane 異常（Trading01）
+
+1. 停止並停用全部 `skyeye-trading-probe@*.timer` 與 `.service`（不碰 `tnauqquant@*`）。
+2. 用前版 `origin/master` checkout 的 `setup-linux.sh` 依 `$WORK/timers.before` 重跑既有 lane 的 `add`（或由第一筆 `add` 印出的 rollback record 還原 `/usr/local/libexec/skyeye-trading/probe.sh` 並 `systemctl daemon-reload`）。
+3. 若 `popdex-multi-accounts` 已安裝，執行 `sudo "$SETUP" retire --strategy popdex-multi-accounts </dev/null`。
+4. 依 `$WORK/timers.before` 還原所有既有 timer 狀態並確認 `diff "$WORK/timers.before"` 為空與 monitoring-prod `probe_ages < 60`。
+
+### Central：`popdex-multi-accounts` 專屬中央退回（monitoring-prod）
+
+**不得沿用舊 rollout 文件的 R5（該程序以移除 `popdex-btc` 為目標且只退 inventory）。** 本次部署同時異動 `prometheus/rules/trading-targets.yml`、`prometheus/rules/trading.yml` 與 `grafana/dashboards/Trading/trading-strategy-detail.json`，目標為移除 `popdex-multi-accounts` 並確保 `popdex-btc` 保持監控。
+
+#### 1. 現場緊急還原（立即止血，還原至 `$CUT/old-head`）
+
+```bash
+cd /home/ubuntu/SkyEye
+. "$CUT/vars"; . "$CUT/helpers.sh"
+OLD_HEAD="$(cat "$CUT/old-head")"
+git restore --source="$OLD_HEAD" --worktree -- \
+  prometheus/rules/trading-targets.yml \
+  prometheus/rules/trading.yml \
+  grafana/dashboards/Trading/trading-strategy-detail.json
+git status --porcelain --untracked-files=no
+sudo docker run --rm --entrypoint promtool -v "$PWD/prometheus:/etc/prometheus:ro" \
+  prom/prometheus:v2.54.1 check config /etc/prometheus/prometheus.yml \
+  && curl -fsS -X POST http://127.0.0.1:9090/-/reload && echo PROM-RELOADED
+```
+
+等 70 秒讓 Prometheus 重新評估規則且 Grafana 完成 60 秒 provisioning 輪詢後，**三項全部讀回驗證**：
+
+```bash
+sleep 70
+# 1) Inventory 回到部署前，且明確核對 popdex-multi-accounts 已移除、popdex-btc 仍在
+targets | tee "$CUT/rollback-targets.json"
+diff "$CUT/pre-targets.json" "$CUT/rollback-targets.json" && echo INVENTORY-RESTORED
+jq -e 'map(select(.strategy == "popdex-multi-accounts")) | length == 0' "$CUT/rollback-targets.json"   # true
+jq -e 'map(select(.strategy == "popdex-btc")) | length == 1' "$CUT/rollback-targets.json"              # true
+
+# 2) Prometheus rules 讀回驗證：4 條新增 *_executor_* recording rules 已移除且群組健康
+curl -fsS http://127.0.0.1:9090/api/v1/rules | jq -e '
+  (.data.groups[] | select(.name == "trading-strategy-recording")) as $g |
+  ($g.rules | map(.health == "ok") | all) and
+  ($g.rules | map(.name) | any(test("^trading_strategy_.*executor_")) | not)
+' && echo RULES-RESTORED
+
+# 3) Grafana dashboard 讀回驗證：Panel 15「各帳號明細 · 多帳號策略」已移除（經 stdin 傳 token 避免出現在 argv）
+TOKEN_FILE="${SKYEYE_GRAFANA_TOKEN_FILE:-/home/ubuntu/.config/skyeye/grafana-viewer-token}"
+printf 'header = "Authorization: Bearer %s"\n' "$(tr -d '\r\n' <"$TOKEN_FILE")" |
+  curl -fsS -K - http://127.0.0.1:3000/api/dashboards/uid/trading-strategy-detail | jq -e '
+  (.dashboard.panels | map(.id) | index(15)) == null and
+  (.dashboard.panels | map(.title) | index("各帳號明細 · 多帳號策略")) == null
+' && echo DASHBOARD-RESTORED
+```
+
+必須全部印出 `PROM-RELOADED`、`INVENTORY-RESTORED`、兩筆 `true`、`RULES-RESTORED`、`DASHBOARD-RESTORED`；否則停手並把 `$CUT` 交給 manager。此時 checkout 有 tracked local changes，會預期性阻擋其他 `scripts/central-deploy`（防止未 revert 的 `origin/master` 再次帶回故障變更）。
+
+#### 2. 永久 Revert 與解除鎖定
+
+依故障範圍由 manager 開 PR 並 merge（不在 UTC 18:15–19:30）：
+- **僅移除目標（rules／dashboard 正常）**：`scripts/trading-target remove --server trading01 --strategy popdex-multi-accounts` → PR & merge，取得完整 SHA `REVERT_SHA`。
+- **rules 或 dashboard 故障**：對本次 merge commit 執行 `git revert "$MERGE"` → PR & merge（不影響 `popdex-btc`），取得完整 SHA `REVERT_SHA`。
+
+PR merge 後在 monitoring-prod 清理 worktree、部署並讀回驗證：
+
+```bash
+cd /home/ubuntu/SkyEye
+. "$CUT/vars"; . "$CUT/helpers.sh"
+REVERT_SHA=<manager 提供的完整 SHA>
+git restore --source=HEAD --staged --worktree -- \
+  prometheus/rules/trading-targets.yml \
+  prometheus/rules/trading.yml \
+  grafana/dashboards/Trading/trading-strategy-detail.json
+git status --porcelain --untracked-files=no | wc -l    # 0
+scripts/central-deploy --dry-run --expect "$REVERT_SHA" 2>&1 | tee "$CUT/revert-dry-run.log"
+```
+
+`Dry run: validation passed` 後正式部署並讀回驗證：
+
+```bash
+scripts/central-deploy --expect "$REVERT_SHA" 2>&1 | tee "$CUT/revert-deploy.log"; echo "rc=${PIPESTATUS[0]}"
+sleep 70
+targets | tee "$CUT/revert-targets.json"
+diff "$CUT/pre-targets.json" "$CUT/revert-targets.json" && echo INVENTORY-RESTORED
+jq -e 'map(select(.strategy == "popdex-multi-accounts")) | length == 0' "$CUT/revert-targets.json"   # true
+jq -e 'map(select(.strategy == "popdex-btc")) | length == 1' "$CUT/revert-targets.json"              # true
+```
+
+若本次是 `git revert "$MERGE"`（連同 rules 與 dashboard 撤回），亦重跑上述 `RULES-RESTORED` 與 `DASHBOARD-RESTORED` 讀回檢查。中央退回全部驗證通過後，若要一併移除 Trading01 上的新 lane probe，再於 Trading01（root）執行 `sudo "$SETUP" retire --strategy popdex-multi-accounts </dev/null`（保持 `popdex-btc` probe 不動）。
+
+### 退回 `popdex-btc`（Step 5c canary 失敗或 Step 6 Stage 1 觀察期間）
+
+1. **Wan／tnauqquant 側**：停止並 disable `tnauqquant@popdex-multi-accounts`（確認平倉且無殘留程序），通知 SkyEye operator。
+2. **SkyEye operator（Trading01）**：唯讀確認 `tnauqquant@popdex-multi-accounts.service` 為 `inactive`，將 `popdex-multi-accounts.env` 改回 `TQ_STRATEGY_DISABLED=1` 並跑 `"$SETUP" add`。
+3. **SkyEye operator（Trading01）**：將 `popdex-btc.env` 還原為 `TQ_STRATEGY_DISABLED=0`（或還原 `$WORK/popdex-btc.env`）並跑 `"$SETUP" add`。
+4. **Wan／tnauqquant 側**：重新啟用並啟動 `tnauqquant@popdex-btc`（及原 timer）；SkyEye operator 唯讀核對 `popdex-btc` 恢復 `process_count 1`、`run_expected 1` 且 `popdex-multi-accounts` 為 `process_count 0`、`run_expected 0`。
 
 ## 執行紀錄
 
@@ -385,9 +601,10 @@ grep -E '^tnauqquant_(process_identity_ok|strategy_identity_ok|config_snapshot_m
 |---|---|---|
 | Step 0 staging | | `MERGE`、`STAGE` |
 | Step 1 前置檢查與基準 | | `WORK`、`CUT`、Alloy 版本、核對後的 `TQ_EXECUTABLE`／`TQ_INSTANCE_ID`／`TQ_EXECUTOR_MAP` |
-| Step 2 host probe 更新 + add | | `timers.before` == `timers.after`、Rollback record、`rc` |
+| Step 2 host probe 更新 + add | | `TIMERS-RESTORED`、Rollback record、`rc` |
 | Step 3 中央檢查 | | `siblings_same`、`all_fresh`、`popdex_multi` |
 | Step 4 central-deploy | | applied SHA、`TARGETS-OK`、Grafana 載入結果 |
-| Step 5 canary 核對 | | 五項 binding、`run_id`、Loki、合併與分項 `.prom` 對帳 |
-| Step 6 Stage 1 切換 | | `popdex-btc` `TQ_STRATEGY_DISABLED=1`、`popdex-multi-accounts` `TQ_STRATEGY_DISABLED=0` |
+| Step 5a 帳號交接前置 | | Wan 停用 `popdex-btc`、唯讀核對程序與 timer、`popdex-btc` `TQ_STRATEGY_DISABLED=1` |
+| Step 5b–5c canary 核對 | | `CANARY-TERMINAL-OK`、`CANARY_RUN_ID`、五項 binding、合併與四項 per-executor `.prom` 對帳、Loki／Grafana |
+| Step 6 Stage 1 啟用與簽收 | | `popdex-multi-accounts` `TQ_STRATEGY_DISABLED=0`、新 `NEW_RUN_ID != CANARY_RUN_ID`、新 lane `process_count=1/run_expected=1`、舊 lane `process_count=0` |
 | Step 6 Stage 2 退場（S3） | | `trading-target remove` PR、`central-deploy`、`retire` record |

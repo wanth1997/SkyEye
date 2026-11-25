@@ -65,9 +65,9 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 | Raw log `msg` | 實際欄位與格式 | 語意與邊界 |
 |---|---|---|
 | `initial_equity_recorded` | `equity_usdt=10000.00`、`equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5000.00` | 啟動時查詢所有 executor 的 `GetEquity`；任一失敗即回錯不寫出，故必為全帳號完整快照。 |
-| `pnl_status`（`stable=true`） | `equity_now`（全精度合計）、`equity_usdt_by_executor=name:%.2f,...`、`volume_usd_by_executor=name:%.2f,...`、`real_pnl_usdt`、`cash_pnl_usdt`、`rebate_usdt`、`risk_pnl_usdt`、`cycles_completed`、`session_cycle`、`cycle_id`、`cycle_completed`、`cycle_real_pnl_usdt`、`cycle_executor=<name>`、`risk_stopped` | 單一 `RiskManager` 已合併全帳號（R12）；R4 規定每次結帳必須讀到全帳號完整 equity（最多重試 3 次，否則 `accounting_publication_failed` risk stop），絕不發布缺帳號的 `stable=true` 快照。R10 規定 `cycle_executor` 標示該輪結帳帳號（`random` 下即 confirmed carrier）。 |
-| `trade_status` | `executor=<name>`、`volume_usd=...`；`state=settled` 另帶 `portfolio_projection=coordinator_book`、`initiator_venue=<name>`、`initiator_side`、`initiator_qty_btc`、`net_side`、`net_qty_btc`（非對沖 `random` lane 不帶 `carrier_venue`） | `volume_usd` 作為 `volume_usd_by_executor` 缺省時的 fallback。 |
-| `ui_warmup_async_ready` | `executor=<name>`、`reason=gross_flat_verified:...` | 平倉確認 gross flat 時立即將持倉清為 `flat 0`。 |
+| `pnl_status`（`stable=true`） | `equity_now`（producer 先加總全帳號後依 text logger 規則取至多兩位小數寫出）、`equity_usdt_by_executor=name:%.2f,...`（各帳號各自四捨五入至兩位小數）、`volume_usd_by_executor=name:%.2f,...`、`real_pnl_usdt`、`cash_pnl_usdt`、`rebate_usdt`、`risk_pnl_usdt`、`cycles_completed`、`session_cycle`、`cycle_id`、`cycle_completed`、`cycle_real_pnl_usdt`、`cycle_executor=<name>`、`risk_stopped` | 單一 `RiskManager` 已合併全帳號（R12）；R4 規定每次結帳必須讀到全帳號完整 equity（最多重試 3 次，否則在發布 `pnl_status` 前返回、寫出 `ERROR msg=required_accounting_retry_exhausted` 並請求 `accounting_publication_failed` risk stop），絕不發布缺帳號的 `stable=true` 快照。R10 規定 `cycle_executor` 標示該輪結帳帳號（`random` 下即 confirmed carrier）。 |
+| `trade_status` | `executor=<name>`、`volume_usd=...`；`state=settled`（含 `phase=entry`、`phase=carrier_exit`、`phase=startup_neutralization`）另帶依 coordinator 版本排序的 `portfolio_projection=coordinator_book`、`net_side`、`net_qty_btc`（進場時帶 `initiator_venue`／`initiator_side`／`initiator_qty_btc`，非對沖 `random` lane 不帶 `carrier_venue`） | `volume_usd` 作為 `volume_usd_by_executor` 缺省時的 fallback；`state=settled` 的 `coordinator_book` 為同交易所多帳號 lane 開倉與平倉持倉的唯一權威快照。 |
+| `ui_warmup_async_ready` | `executor=<name>`、`reason=gross_flat_verified:...` | 單帳號與雙交易所既有 lane 維持原行為；同交易所多帳號 lane（`HAS_SHARED_EXCHANGE == 1`）**不**採用此非同步事件清零持倉，避免前一輪某支帳號延遲完成的 warmup 蓋掉另一支帳號的新開倉部位。 |
 | `coordinated_dispatch_result` | 帶 `executor=<name>`（註：`cycle_executor` 實作在 `pnl_status`／`equity_snapshot`／`pnl_settle_equity_sample`） | 含 `no_fill`、`no_submit`、`unresolved` 嘗試，不作為 PnL／成交量權威來源；probe 不掃描此事件以維持單次 pass 效能與精準語意。 |
 
 ### 3. Probe 合併與分項計算方式（Equity 加總、PnL 不重複計算、持倉修正）
@@ -75,7 +75,7 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 #### 3.1 既有合併 Metrics（維持原名、原 `# HELP`、無重複計算）
 
 1. **合併總權益 `tnauqquant_current_equity_usdt`**
-   - 優先採最新 trusted `pnl_status`（`stable=true`）的 `equity_now`（producer 已於同一完整快照內加總兩支帳號、保留完整精度）。**不**由 `%.2f` 四捨五入後的 `equity_usdt_by_executor` 反算加總，避免捨入誤差或漏計未映射帳號。
+   - 優先採最新 trusted `pnl_status`（`stable=true`）中由 producer 先加總全帳號後寫出的 `equity_now`（text raw log 依 `textLogFloatDecimals` 取至多兩位小數；`probe.sh` 原樣保留收到的精度，不做截斷或重算）。各帳號分項 `equity_usdt_by_executor` 為個別四捨五入至兩位小數，「先加總再取兩位」與「各帳號取兩位再相加」可能相差 ±0.01 USDT，故合併總權益一律直接採用 `equity_now`，**不**由分項反算加總，避免捨入誤差或漏計未映射帳號。
    - **啟動初期（尚無任何 `pnl_status stable=true` 時）**：僅在 `HAS_SHARED_EXCHANGE == 1` 且整個 bound log 尚未出現任何 `pnl_status stable=true` 行（`CURRENT_PNL_LINE == ""`）時，若存在時間可信的 `initial_equity_recorded` 且 `equity_usdt` 為合法數字，則輸出該初始總權益（以及初始各帳號權益），讓啟動後、首輪尚未完成前即可在面板看到兩支帳號合併與分項餘額。
    - **Fail-closed 不變量**：一旦 log 出現任何 `pnl_status stable=true`（即使其時間在未來，或缺少／無效 `equity_now`），立即停止採用 `initial_equity_recorded`，絕不回退舊餘額（完全維持 `test-probe.sh` 的「missing and invalid equity never reuse an earlier total」語意）。
 2. **合併績效（`real_pnl_usdt`、`cash_pnl_usdt`、`rebate_usdt`、`risk_pnl_usdt`、`last_cycle_real_pnl_usdt`、`cycle_cumulative_real_pnl_usdt`、`current_cycles_completed`、`completed_cycles_today`）**
@@ -83,11 +83,10 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 3. **合併成交額 `tnauqquant_current_run_exchange_volume_usd{exchange="popdex"}`**
    - 既有 `scan_manifest_log` 已將每個 mapped executor 的 `volume_usd_by_executor`（缺省時 fallback 為 `trade_status` 的 `volume_usd`）累加至 `executor_exchange[executor]`。因此 `popdex-main=popdex,popdex-rot2=popdex` 自動產出單一 `exchange="popdex"` series，值等於 `popdex-main + popdex-rot2`，零重複計算。
 4. **合併持倉 `tnauqquant_current_position_btc` & `tnauqquant_current_net_position_btc`（關鍵修正）**
-   - **現行缺陷**：既有 `probe.sh` 用 `mapping_count > 1`（`is_gross_flat`）與 `executor_map_size == 1`（由 `NET_POSITION_SNAPSHOT` 寫入 `CURRENT_POSITION_SERIES`）區分單／雙交易所。當 `TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex` 時，`EXECUTOR_MAP_SIZE == 2`，而 `routing.mode: random` 非對沖開倉時 `coordinator_book` 只有 `initiator_venue` 與 `net_side`/`net_qty_btc`、沒有 `carrier_venue`。若不修正：
-     - 持倉期間 `tnauqquant_current_position_btc` 會完全缺漏；
-     - 更嚴重的是，首次 `gross_flat_verified` 會寫入 `VENUE_SNAP = popdex flat 0`，之後再開新倉時 `NET_SNAP` 更新成非零淨倉，但 `CURRENT_POSITION_SERIES` 仍卡在舊的 `popdex flat 0`，造成面板自相矛盾。
+   - **現行缺陷**：既有 `probe.sh` 用 `mapping_count > 1`（`is_gross_flat`）與 `executor_map_size == 1`（由 `NET_POSITION_SNAPSHOT` 寫入 `CURRENT_POSITION_SERIES`）區分單／雙交易所。當 `TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex` 時，`EXECUTOR_MAP_SIZE == 2`，而 `routing.mode: random` 非對沖開倉時 `coordinator_book` 只有 `initiator_venue` 與 `net_side`/`net_qty_btc`、沒有 `carrier_venue`。此外，tnauqquant 的 `ui_warmup_async_ready`（`gross_flat_verified:`）是各 executor 非同步執行，若上一輪平倉帳號的 warmup 晚於另一支帳號的新開倉完成，沿用 `is_gross_flat` 會誤將已確認的持倉覆寫為 `flat 0`。
    - **修正方式**：
-     - `scan_manifest_log` 內 `is_gross_flat` 改判斷 `exchange_count > 1 || latest_venue != ""`（僅真正跨多交易所才於首筆兩腿前寫 `VENUE_SNAP`）；兩腿 `coordinator_book` 分支增加 `executor_exchange[initiator_venue] != executor_exchange[carrier_venue]` 保護（避免同交易所兩腿輸出重複 `exchange="popdex"` series）。
+     - `scan_manifest_log` 在 `has_shared_exchange == 1` 時停用 `is_gross_flat`（不讓非同步 `ui_warmup_async_ready` 清零持倉），改以嚴格依 coordinator 版本排序的 `portfolio_projection=coordinator_book` 快照（如 `trade_status state=settled phase=entry|carrier_exit|startup_neutralization`）作為開倉與平倉的唯一持倉來源。
+     - 兩腿 `coordinator_book` 分支的同交易所排除條件 `executor_exchange[initiator_venue] != executor_exchange[carrier_venue]` 僅限於 `has_shared_exchange == 1`（確保單帳號 `has_shared_exchange == 0` 維持與 baseline 逐位元組等價）；所有 `mapped_executor`／`executor_exchange` 查詢一律使用不建立鍵的 `in` membership 檢查，避免未映射 executor 污染 allowlist。
      - shell 層改用 `[[ "$SINGLE_EXCHANGE_VALID" -eq 1 ]]` 決定是否由 `NET_POSITION_SNAPSHOT` 產出單一 `exchange="popdex"` 的 `CURRENT_POSITION_SERIES`。
      - 既有單帳號（`popdex-main=popdex`）、雙交易所（`toobit-main=toobit,mexc-ui=mexc`）與 Scenario 20（`x=venue,`）結果完全不變；`# HELP` 文字維持 byte-identical（受 `assert_position_help_pinned` 保護）。
 
@@ -105,7 +104,7 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 | `tnauqquant_current_executor_cycles_completed` | 與 `tnauqquant_current_executor_real_pnl_usdt` 相同去重後之 cycle 表，依 mapped `cycle_executor` 計數；未輪到的 mapped executor 補 `0`。 | 便於直接核對 `routing.mode: random`（N=2 嚴格交替）在兩支帳號間的成交分配是否均衡。 |
 
 效能與等價測試影響：
-- `HAS_SHARED_EXCHANGE == 0` 時，`grep_fixed_lines` 參數與輸出區塊完全不變，既有 21 個 `test-probe-equivalence.sh` 情境 100% byte-for-byte 等價。
+- `HAS_SHARED_EXCHANGE == 0` 時，`grep_fixed_lines` 參數與輸出區塊完全不變，既有與新增的 `test-probe-equivalence.sh` 情境（共 69 項，含單帳號同 venue `coordinator_book` 等價案例）100% byte-for-byte 等價。
 - `HAS_SHARED_EXCHANGE == 1` 時僅在既有單次 `grep -a -n -F` 多一個 `-e initial_equity_recorded`（每個 run 只有 1 行），並在同一支 `awk` 內完成解析，零額外檔案掃描、零額外 subprocess fork，維持在 `CPUQuota=20%` 預算內。
 - 4 個新 metric 名稱皆全新，與舊版 `.prom` 檔案並存於同一 textfile collector 時不會產生 `# HELP` 衝突。
 
@@ -134,7 +133,11 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 - **既有告警影響**：
   - 所有 11 條 Prometheus alerts 與 3 條 Loki alerts（`loki/rules/fake/tnauqquant.yml`）均維持 `notification_mode: shadow`，不新增、不改寫、不升級任何告警。
   - `popdex-multi-accounts` 為單一 OS process 管兩支帳號，因此 `TradingDuplicateProcess`、`TradingProcessDown`、`TradingUnexpectedProcess`、`TradingRuntimeContractMissing`、`TradingRunBindingInvalid`、`TradingTelemetryMissing`、`TradingSourceClockAhead` 均直接適用。
-  - R4 閒置帳號 equity 讀取失敗重試（15/30/60s）期間只發 WARN，不誤觸告警；3 次重試用完觸發 `accounting_publication_failed` risk stop 時，既有 `TradingRiskStopped`、`TradingCriticalSafetyState`、`TradingCriticalLogEvent`（全 shadow）會完整捕捉。
+  - R4 閒置帳號 equity 讀取失敗重試（15/30/60s）期間只發 `WARN`，不誤觸告警；3 次重試用完時，tnauqquant 會在發布 `pnl_status` 之前直接返回、寫出 `level=ERROR msg=required_accounting_retry_exhausted` 並請求 `accounting_publication_failed` risk stop。既有 shadow 告警的捕捉條件分工如下：
+    - **`TradingCriticalLogEvent`（Loki shadow，`loki/rules/fake/tnauqquant.yml`，第一時間捕捉）**：匹配 `level=~"ERROR([+][0-9]+)?|FATAL([+][0-9]+)?"` 且排除 `TradingExecutionIncident` 的 5 個 msg；`required_accounting_retry_exhausted` 不在排除清單內，會在 1 分鐘視窗內立即由 `TradingCriticalLogEvent` 接住。
+    - **`TradingRiskStopped`（Prometheus shadow）**：需等 probe 讀到後續一筆帶 `risk_stopped=true` 的 `pnl_status`（`stable=true`）將 `tnauqquant_risk_stopped` 設為 `1` 才會觸發；若 equity snapshot 持續失敗導致在發布 `pnl_status` 前即返回，此告警不會觸發。
+    - **`TradingCriticalSafetyState`（Prometheus shadow）**：需等 tnauqquant 寫出與 manifest 綁定的 `current.done.json`（`reason="risk_halt"` 或 `unknown`）才會觸發；若因仍有未完成的必要 accounting job 而延後或無法寫出 terminal marker，此告警可能延後或不觸發（程序結束後若無 done marker，改由 `TradingProcessDown` 於 2 分鐘後觸發）。
+    - 因此確認 accounting 重試耗盡造成的 risk stop 時，應優先以 Loki `TradingCriticalLogEvent`（及 raw log `required_accounting_retry_exhausted`）為準，而非單獨等待兩條 Prometheus 告警。
 - **Inventory (`prometheus/rules/trading-targets.yml`)**：
   - 只用 `scripts/trading-target add --server trading01 --strategy popdex-multi-accounts --quote USDT` 操作（詳見待決問題 D1 決定是否於本 PR 執行或延後至 rollout PR），絕不手改，也不改 `prometheus/rules/tests/fixtures/trading-targets.yml`。
 - **Rule 測試 (`prometheus/rules/tests/trading.test.yml`)**：新增針對 4 條 `trading_strategy_*_executor_*` recording rules 的 promtool test（使用既有 fixture target，驗證 inventory scoping、排除未登錄/development series、保留 `exchange`/`executor` labels 且不觸發意外告警）。
@@ -168,8 +171,8 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 理由：
 1. **Runtime contract 硬性約束**：`probe.sh` 強制驗證 `manifest.strategy == TQ_STRATEGY`。新 lane 的 systemd instance 為 `tnauqquant@popdex-multi-accounts`，其 `current.json` 寫出 `strategy: "popdex-multi-accounts"`；若將 `popdex-btc` 的 probe 重指過去，會導致 `MANIFEST_VALID=0`、持續觸發 `TradingRunBindingInvalid` 且完全無法輸出損益與餘額。
 2. **資金規模與策略型態不連續**：`popdex-btc` 為單帳號 `sequential`，`popdex-multi-accounts` 為雙帳號 `random`（權益約 2 倍、共用風控上限）。強行併入同一個 `strategy="popdex-btc"` time series 會使歷史權益曲線出現 2 倍跳階、Loki 日誌混雜兩種路由架構，反而不利事後檢視績效與排錯。
-3. **共用 `popdex-main` 帳號的切換安全（最重要）**：`popdex-multi-accounts` 沿用 `popdex-btc` 的 `popdex-main` 帳號（`routing-rotation.md` 要求帳號為單一 process 專用）。兩階段切換可在過渡期主動防呆：
-   - **Stage 1（切換當下 → 觀察穩定 24–72 小時）**：Wan 停用並 disable `tnauqquant@popdex-btc` 後，SkyEye 先以 `setup-linux.sh add` 將 `/etc/skyeye-trading/instances/popdex-btc.env` 改為 `TQ_STRATEGY_DISABLED=1`（暫不 retire）。此時停著的 `popdex-btc` 不會誤報 `TradingProcessDown`，但若被意外重啟（如忘關 timer 或誤操作），SkyEye 會立即觸發 `TradingUnexpectedProcess` 告警；同時若新 lane 需緊急退回 `popdex-btc`，只需把 `TQ_STRATEGY_DISABLED` 改回 `0`。
+3. **共用 `popdex-main` 帳號的切換安全（最重要）**：`popdex-multi-accounts` 沿用 `popdex-btc` 的 `popdex-main` 帳號（`routing-rotation.md` 要求帳號為單一 process 專用，且新 process 啟動時會對所有設定帳號撤單平倉）。**帳號交接必須發生在第一次 canary 之前**，並以兩階段退場在過渡期主動防呆：
+   - **Stage 1（首次 canary 前停用 `popdex-btc` → canary 通過後正式啟用新 lane → 觀察穩定 24–72 小時）**：在首次 canary 啟動前，先由 Wan／tnauqquant 側確認 `popdex-btc` 已平倉、已停止且沒有任何 timer 會將它重啟，再由 SkyEye operator 唯讀核對程序與 timer 並以 `setup-linux.sh add` 將 `/etc/skyeye-trading/instances/popdex-btc.env` 改為 `TQ_STRATEGY_DISABLED=1`（暫不 retire）。此時停著的 `popdex-btc` 不會誤報 `TradingProcessDown`，但若被意外重啟（如忘關 timer 或誤操作），SkyEye 會立即觸發 `TradingUnexpectedProcess`（shadow）；同時若 canary 失敗或上線後需緊急退回 `popdex-btc`，只需把 `TQ_STRATEGY_DISABLED` 改回 `0` 並通知 Wan 重啟 `tnauqquant@popdex-btc`。
    - **Stage 2（新 lane 穩定運行、確認不再回退）**：依標準 Remove 順序（先中央、後 host）正式退場 `popdex-btc`：
      1. Repo：`scripts/trading-target remove --server trading01 --strategy popdex-btc` → PR & merge
      2. Central：`scripts/central-deploy`
@@ -196,23 +199,27 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
    - monitoring-prod：記錄 `old-head`、`pre-targets.json`、`probe-ages.pre.json`、`t01-alerts.pre.json`。
 3. **Step 2 Trading01 更新共用 `probe.sh` 並安裝 `popdex-multi-accounts`**：
    - 停用並停止所有既有 `skyeye-trading-probe@*.timer` 與 `.service`，確認無一殘留 active/enabled。
-   - 依序對既有 lane 重跑 `setup-linux.sh add --env-file "$WORK/$s.env"`（原 `enabled active` 者加 `--enable-probe`；首次 `add` 會替換共用 `probe.sh` 並 reload Alloy）。
-   - 執行 `setup-linux.sh add --env-file "$WORK/popdex-multi-accounts.env"` 安裝新 lane（自動啟用 `skyeye-trading-probe@popdex-multi-accounts.timer` 並跑一次 probe，Alloy 只 reload）。
-   - 還原並比對既有 timer 狀態（`diff timers.before timers.after` 為空）；等 30 秒確認所有 `.prom` 更新、`tnauqquant-popdex-multi-accounts.prom` 有 `run_expected 0`、`process_count 0`，且既有單帳號 lane 的 `.prom` 未出現任何 `*_executor_*` series。
+   - 依序對既有 lane 重跑 `setup-linux.sh add --env-file "$WORK/$s.env"`（原 `enabled active` 者加 `--enable-probe`；首次 `add` 會替換共用 `probe.sh` 並 reload Alloy）；任一筆 `add` 失敗或出現 `Alloy action: restart` 立即中止並進入 Host Rollback。
+   - 還原並比對既有 timer 狀態（`diff timers.before timers.after` 為空且明確印出 `TIMERS-RESTORED`）；失敗即中止並進入 Host Rollback。
+   - 只有在明確確認 `TIMERS-RESTORED` 之後，才執行 `setup-linux.sh add --env-file "$WORK/popdex-multi-accounts.env"` 安裝新 lane（自動啟用 `skyeye-trading-probe@popdex-multi-accounts.timer` 並跑一次 probe，Alloy 只 reload）；等 30 秒確認所有 `.prom` 更新、`tnauqquant-popdex-multi-accounts.prom` 有 `run_expected 0`、`process_count 0`，且既有單帳號 lane 的 `.prom` 未出現任何 `*_executor_*` series。
 4. **Step 3 monitoring-prod 唯讀驗證 remote-write**：確認既有 lane 與 `popdex-multi-accounts` 全部 `age < 60s`。
 5. **Step 4 monitoring-prod 中央部署**：`scripts/central-deploy --dry-run --expect "$MERGE"` 通過後執行 `scripts/central-deploy --expect "$MERGE"`，確認 `trading_target_info`、4 條新 recording rules 與 Grafana `trading-strategy-detail` 載入成功，且 `TradingTelemetryMissing` 為空。
-6. **Step 5 Wan 手動 canary cycle（`max_cycles=1`）後唯讀核對**：驗證 manifest 綁定五項全 `1`、log glob 符合且進 Loki、`initial_equity_recorded` / `pnl_status` 的 `equity_now`、`equity_usdt_by_executor`、`volume_usd_by_executor`、`cycle_executor` 與 `.prom` 合併／分項數值一致、持倉 `exchange="popdex"` 與 `base_asset="BTC"` 正確、Grafana 面板合併與分項表格正常呈現。
-7. **Step 6 正式切換視窗（Stage 1）**：
-   - Wan 停止並 disable `tnauqquant@popdex-btc`（service 與 timer），確認平倉且無殘留程序。
-   - SkyEye operator 將 `popdex-btc.env` 加上 `TQ_STRATEGY_DISABLED=1` 並執行 `setup-linux.sh add`（Stage 1 保護）。
+6. **Step 5 帳號交接前置（`popdex-btc` 停用）→ Wan 手動 Canary Cycle → 終態與指標唯讀核對**：
+   - **5a（首次 canary 之前必做）**：Wan／tnauqquant 側將 `popdex-btc` 平倉、停止並 disable `tnauqquant@popdex-btc` 與所有可能重啟它的 timer 後，SkyEye operator 唯讀核對程序與 timer 狀態，並將 `popdex-btc.env` 設為 `TQ_STRATEGY_DISABLED=1` 跑 `setup-linux.sh add`（Stage 1 保護前置）。
+   - **5b**：確認 5a 通過後，由 Wan／tnauqquant 側手動執行 canary cycle（`max_cycles=1` 或 2 輪確認雙帳號輪替）。
+   - **5c**：唯讀核對 canary 成功終態（`current.done.json` 存在、`reason == "max_cycles_complete"`、已平倉、`process_count=0`、`risk_stopped=0`、五項 binding 全 `1`、無未解決風控／錯誤告警）、記錄 `$CANARY_RUN_ID`、核對合併指標（含交易所持倉 `exchange`/`base_asset` 與策略淨持倉 `base_asset`）與四個完整 per-executor 分項 metric（`popdex-main`、`popdex-rot2`）、Loki 與 Grafana 面板。任一失敗即停止並交回 Wan。
+7. **Step 6 正式切換（Stage 1 啟用與簽收）**：
    - SkyEye operator 將 `popdex-multi-accounts.env` 改為 `TQ_STRATEGY_DISABLED=0` 並執行 `setup-linux.sh add`。
-   - Wan 啟用並啟動 `tnauqquant@popdex-multi-accounts`。
+   - Wan／tnauqquant 側啟用並啟動 `tnauqquant@popdex-multi-accounts` 後通知 SkyEye operator。
+   - **Stage 1 簽收唯讀核對**：確認新 `run_id` 不同於 `$CANARY_RUN_ID`、新 lane `process_count=1`、`run_expected=1`、五項 binding 全 `1`、`risk_stopped=0`、無殘留 done marker，且舊 lane `popdex-btc` 的 `process_count=0`、`run_expected=0`，全部符合才簽收 Stage 1。
 8. **Stage 2 退場 `popdex-btc`（S3，穩定觀察後另案執行）**：`scripts/trading-target remove --server trading01 --strategy popdex-btc` → PR/merge → `scripts/central-deploy` → Trading01 `sudo setup-linux.sh retire --strategy popdex-btc`。
 
 **Rollback**：
 - **Host 共用 probe 更新失敗／異常**：停用並停止所有 `skyeye-trading-probe@*` → 用前版 `origin/master` checkout 對既有 lane 重跑 `setup-linux.sh add`（或依 rollback record 還原 `probe.sh`）→ `setup-linux.sh retire --strategy popdex-multi-accounts` → 依 `timers.before` 還原所有 timer。
-- **Central 部署異常**：若 `old-head` 不含新變更則走 `trading01-popdex-rollout.md` R5 還原 checkout 與 reload Prometheus；若已 merge 則開 revert PR 並重新 `central-deploy`。
-- **切換後需回退至 `popdex-btc`（Stage 1 期間）**：Wan 停新 lane → `popdex-multi-accounts.env` 改回 `TQ_STRATEGY_DISABLED=1` 並 `add` → `popdex-btc.env` 改回 `TQ_STRATEGY_DISABLED=0` 並 `add` → Wan 重啟 `tnauqquant@popdex-btc`。全程不丟失歷史資料。
+- **Central 部署異常（本次專屬程序，不沿用舊 rollout R5）**：
+  - 現場緊急還原：在 monitoring-prod 以 `git restore --source="$(cat "$CUT/old-head")" --worktree -- prometheus/rules/trading-targets.yml prometheus/rules/trading.yml grafana/dashboards/Trading/trading-strategy-detail.json` 退回部署前版本 → `promtool check config` + `POST /-/reload` → 70 秒後讀回驗證 inventory 與 `$CUT/pre-targets.json` 一致（明確確認 `popdex-multi-accounts` 已消失且 `popdex-btc` 仍在）、Prometheus `/api/v1/rules` 不再含 4 條新增 `*_executor_*` rules、Grafana API 確認 `trading-strategy-detail` 不含 Panel 15。
+  - 永久撤回：依故障範圍走 `scripts/trading-target remove --server trading01 --strategy popdex-multi-accounts`（僅移除目標）或 `git revert <MERGE>` PR（連同 rules／dashboard 撤回），merge 後在 monitoring-prod 還原 worktree、`scripts/central-deploy --dry-run/--expect` 並再次讀回驗證，最後才於 Trading01 `retire --strategy popdex-multi-accounts`。
+- **Canary 失敗或切換後需回退至 `popdex-btc`（Stage 1 期間）**：Wan／tnauqquant 側停止並 disable `tnauqquant@popdex-multi-accounts` → SkyEye operator 將 `popdex-multi-accounts.env` 改回 `TQ_STRATEGY_DISABLED=1` 並 `add` → 將 `popdex-btc.env` 改回 `TQ_STRATEGY_DISABLED=0` 並 `add` → Wan／tnauqquant 側重新啟用並啟動 `tnauqquant@popdex-btc`。全程不丟失歷史資料。
 
 ## 步驟
 
@@ -270,6 +277,6 @@ scripts/trading-target check
 
 ## 接續
 
-- 現況：S1 已於 `feat/WAN-928-popdex-multi` 實作並 commit 完成（含 probe、setup-linux、env example、target inventory、recording rules、Grafana 分項面板、測試與 `docs/trading01-popdex-multi-accounts-onboarding.md`）。非 Docker 套件（`test-probe.sh`、`test-probe-safety.sh`、`test-probe-equivalence.sh` 68/68、`test-linux-setup.sh`、`test-linux-env-examples.sh`、`test-trading-target.sh` 非 promtool 段、`test-central-config.sh` 非 promtool 段、`bash -n`、`shellcheck -x`、`jq empty`、`scripts/trading-target check`）全數通過；Docker／promtool 檢查（`promtool test rules`、`test-central-config.sh` promtool 段、`test-dashboard-semantics.sh`、`test-trading-target.sh` derived promtool 子檢查）因本機無 Docker 標記為 PENDING。
+- 現況：S1 已於 `feat/WAN-928-popdex-multi` 實作並完成 Review R1 全部接受項（C1–C10、C12）修正與 commit（含 probe、setup-linux、env example、target inventory、recording rules、Grafana 分項面板、回歸測試與 `docs/trading01-popdex-multi-accounts-onboarding.md`）。非 Docker 套件（`test-probe.sh`、`test-probe-safety.sh`、`test-probe-equivalence.sh` 69/69、`test-linux-setup.sh`、`test-linux-env-examples.sh`、`test-trading-target.sh` 非 promtool 段、`test-central-config.sh` 非 promtool 段、`bash -n`、`shellcheck -x`、`jq empty`、`scripts/trading-target check`）全數通過；Docker／promtool 檢查（`promtool test rules`、`test-central-config.sh` promtool 段、`test-dashboard-semantics.sh`、`test-trading-target.sh` derived promtool 子檢查）因本機無 Docker 標記為 PENDING。
 - 下一步：本機 Docker 恢復後補跑 PENDING 的 promtool／dashboard-semantics 檢查；通過與 review／publish 後，等 tnauqquant manager 通知切換時窗再派 operator 執行 S2（`docs/trading01-popdex-multi-accounts-onboarding.md`），穩定觀察後執行 S3 退場 `popdex-btc`。
 - 即時狀態：有 manager 時看 `hm.py goals popdex-multi-accounts`；沒有 manager 時看各步驟的勾選與 `狀態:` 行，以及標頭的 Linear 卡 WAN-928。
