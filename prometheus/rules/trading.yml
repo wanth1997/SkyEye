@@ -206,6 +206,30 @@ groups:
           and on (product, environment, server_id, strategy)
           trading_target_info
 
+      - record: trading_strategy_current_executor_equity_usdt
+        expr: |
+          tnauqquant_current_executor_equity_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_executor_real_pnl_usdt
+        expr: |
+          tnauqquant_current_executor_real_pnl_usdt{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_executor_cycles_completed
+        expr: |
+          tnauqquant_current_executor_cycles_completed{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
+      - record: trading_strategy_current_run_executor_volume_usd
+        expr: |
+          tnauqquant_current_run_executor_volume_usd{product="tnauqquant",environment="production"}
+          and on (product, environment, server_id, strategy)
+          trading_target_info
+
       - record: trading_strategy_done_marker
         expr: |
           tnauqquant_done_marker{product="tnauqquant",environment="production"}

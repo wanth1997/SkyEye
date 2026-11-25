@@ -128,6 +128,42 @@ units += rows(lane(position, "D", SERVER, STRATEGY),
               [(f'trading_strategy_current_net_position_btc{{{LABELS},base_asset="BTC"}}', 0.25)])
 open(output.replace("dashboard.test", "units.test"), "w", encoding="utf-8").write("\n".join(units) + "\n")
 
+# Multi-account breakdown table queries stay scoped to the selected strategy,
+# show each allowlisted executor row, and keep merged top-level equity/volume intact.
+MULTI_SERVER, MULTI_STRATEGY = "trading01", "lighter-robinhood-btc-canary"
+MULTI_LABELS = f'product="tnauqquant",environment="production",server_id="{MULTI_SERVER}",strategy="{MULTI_STRATEGY}"'
+breakdown = targets("trading-strategy-detail.json", "各帳號明細 · 多帳號策略")
+equity_panel = targets("trading-strategy-detail.json", "目前餘額")
+volume_panel = targets("trading-strategy-detail.json", "本輪成交額 · 依交易所")
+multi = ["rule_files:", "  - inventory.yml", "  - trading.yml", "evaluation_interval: 30s", "tests:",
+         "  - name: multi-account detail panel reports merged totals and per-executor breakdown", "    interval: 30s",
+         "    input_series:",
+         f"      - series: 'tnauqquant_current_equity_usdt{{{MULTI_LABELS}}}'", "        values: '10005.4231x5'",
+         f"      - series: 'tnauqquant_current_run_exchange_volume_usd{{{MULTI_LABELS},exchange=\"popdex\"}}'", "        values: '79700.75x5'",
+         f"      - series: 'tnauqquant_current_executor_equity_usdt{{{MULTI_LABELS},exchange=\"popdex\",executor=\"popdex-main\"}}'", "        values: '5002.1x5'",
+         f"      - series: 'tnauqquant_current_executor_equity_usdt{{{MULTI_LABELS},exchange=\"popdex\",executor=\"popdex-rot2\"}}'", "        values: '5003.32x5'",
+         f"      - series: 'tnauqquant_current_executor_real_pnl_usdt{{{MULTI_LABELS},exchange=\"popdex\",executor=\"popdex-main\"}}'", "        values: '2.1x5'",
+         f"      - series: 'tnauqquant_current_executor_real_pnl_usdt{{{MULTI_LABELS},exchange=\"popdex\",executor=\"popdex-rot2\"}}'", "        values: '3.32x5'",
+         f"      - series: 'tnauqquant_current_executor_cycles_completed{{{MULTI_LABELS},exchange=\"popdex\",executor=\"popdex-main\"}}'", "        values: '4x5'",
+         f"      - series: 'tnauqquant_current_executor_cycles_completed{{{MULTI_LABELS},exchange=\"popdex\",executor=\"popdex-rot2\"}}'", "        values: '3x5'",
+         f"      - series: 'tnauqquant_current_run_executor_volume_usd{{{MULTI_LABELS},exchange=\"popdex\",executor=\"popdex-main\"}}'", "        values: '41200.5x5'",
+         f"      - series: 'tnauqquant_current_run_executor_volume_usd{{{MULTI_LABELS},exchange=\"popdex\",executor=\"popdex-rot2\"}}'", "        values: '38500.25x5'",
+         "    promql_expr_test:"]
+multi += rows(lane(equity_panel, "A", MULTI_SERVER, MULTI_STRATEGY),
+              [(f'trading_strategy_current_equity_usdt{{{MULTI_LABELS}}}', 10005.4231)])
+multi += rows(lane(volume_panel, "A", MULTI_SERVER, MULTI_STRATEGY),
+              [(f'trading_strategy_current_run_exchange_volume_usd{{{MULTI_LABELS},exchange="popdex"}}', 79700.75)])
+multi += rows(lane(breakdown, "A", MULTI_SERVER, MULTI_STRATEGY),
+              [('{exchange="popdex",executor="popdex-main"}', 5002.1),
+               ('{exchange="popdex",executor="popdex-rot2"}', 5003.32)])
+multi += rows(lane(breakdown, "B", MULTI_SERVER, MULTI_STRATEGY),
+              [('{executor="popdex-main"}', 2.1), ('{executor="popdex-rot2"}', 3.32)])
+multi += rows(lane(breakdown, "C", MULTI_SERVER, MULTI_STRATEGY),
+              [('{executor="popdex-main"}', 4), ('{executor="popdex-rot2"}', 3)])
+multi += rows(lane(breakdown, "D", MULTI_SERVER, MULTI_STRATEGY),
+              [('{executor="popdex-main"}', 41200.5), ('{executor="popdex-rot2"}', 38500.25)])
+open(output.replace("dashboard.test", "multi.test"), "w", encoding="utf-8").write("\n".join(multi) + "\n")
+
 # No position number on these panels may carry a fixed BTC unit, and every
 # detail value must name its asset.
 for name, title in [("trading-strategy-detail.json", "目前持倉 · 多空方向"),
@@ -143,6 +179,6 @@ for target in next(p for p in json.load(open(f"{dashboards}/trading-strategy-det
 PY
 
 tar -C "$WORK" -cf - . | docker run -i --rm --network none --entrypoint /bin/sh "$IMAGE" \
-  -c 'mkdir -p /tmp/w && tar -xf - -C /tmp/w && cd /tmp/w && promtool test rules dashboard.test.yml promoted.test.yml units.test.yml' || \
-  fail "dashboard queries hide stale financial data, future timestamps or promoted alerts, or merge position units"
-printf 'PASS: Trading dashboard freshness, promoted alert and position unit semantics\n'
+  -c 'mkdir -p /tmp/w && tar -xf - -C /tmp/w && cd /tmp/w && promtool test rules dashboard.test.yml promoted.test.yml units.test.yml multi.test.yml' || \
+  fail "dashboard queries hide stale financial data, future timestamps, promoted alerts, position units or multi-account breakdown"
+printf 'PASS: Trading dashboard freshness, promoted alert, position unit and multi-account breakdown semantics\n'

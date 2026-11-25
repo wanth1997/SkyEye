@@ -15,6 +15,29 @@
 ---
 -->
 
+## 2026-11-26 05:10 — popdex-multi-accounts 雙帳號 probe 與合併面板（WAN-928）
+
+**改動摘要：** 支援 Trading01 新 lane `popdex-multi-accounts`：在兩支 PopDEX 帳號（`popdex-main`、`popdex-rot2`）之間 random routing，將取代 `popdex-btc`。probe 支援同交易所多帳號的 `TQ_EXECUTOR_MAP`；總覽顯示合併 equity／績效，策略詳情新增各帳號明細；附 plan 與上線 runbook。
+
+**修改的檔案：**
+- `agents/alloy/trading/probe.sh` — 支援 `popdex-main=popdex,popdex-rot2=popdex` 這種寫法。只有 `HAS_SHARED_EXCHANGE=1` 時才輸出 4 個 per-executor metric（equity、real PnL、cycles、volume），label 只接受 map 內列出的帳號名。多帳號的部位只採用 settled 且 confirmed 的 coordinator_book。單帳號與雙交易所 lane 的輸出和原本逐字相同。
+- `agents/alloy/trading/setup-linux.sh`、`linux-common.sh` — 驗證 `TQ_EXECUTOR_MAP` 格式。
+- `agents/alloy/trading/deployment-linux-popdex-multi-accounts.env.example` — 新 lane 的 env 範例，預設 `TQ_STRATEGY_DISABLED=1`。
+- `prometheus/rules/trading-targets.yml` — 用 `scripts/trading-target add` 加入 `trading01/popdex-multi-accounts`。
+- `prometheus/rules/trading.yml`、`tests/trading.test.yml` — 新增 4 條 `trading_strategy_*_executor_*` recording rules。告警仍全部是 shadow（14 shadow、0 page）。
+- `grafana/dashboards/Trading/trading-strategy-detail.json` — 新增 Row 5「各帳號明細 · 多帳號策略」表格，datasource UID 不變。
+- `docs/plans/popdex-multi-accounts.md`、`docs/trading01-popdex-multi-accounts-onboarding.md`、`agents/alloy/trading/README.md` — plan、上線／切換／rollback 程序，以及雙帳號 map 的說明。
+- `tests/trading/` — probe、等價（69 項逐字比對）、Linux setup、central config、dashboard 語意測試。
+
+**原因/備註：**
+- Wan：「合併這兩隻的 equity 跟績效，並統計在同一個面板上……只是變成有兩隻帳號。」（經 tnauqquant manager 轉述）
+- 另開 strategy，不沿用 `popdex-btc` 的 series：manifest.strategy 必須等於 TQ_STRATEGY，而且混入舊 series 會讓 equity 失真。`popdex-btc` 分兩階段退場，歷史保留在 Prometheus/Loki。
+- 啟停 `tnauqquant@*` 一律由 Wan／tnauqquant 執行，runbook 不含這類指令。
+- merge 後、Trading01 probe 上線前，不跑 `central-deploy`。
+- 這台 Mac 的 Docker 依 D47 重建 colima（2 CPU / 4G），只在跑驗證時開著。
+
+---
+
 ## 2026-11-23 18:00 — 移除 TradingPnlTelemetryStale 告警；PROD02 套用一般 log scrub 與新版 setup.sh
 
 **改動摘要：** 依 Wan 決定移除 shadow 告警 `TradingPnlTelemetryStale`（WAN-716）；另記錄 11-23 PROD02 主機 rollout 與 4 筆舊任務的上線查核。

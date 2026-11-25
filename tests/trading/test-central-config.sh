@@ -49,6 +49,7 @@ jq -e '
     "目前持倉 · 多空方向",
     "損益組成",
     "本輪成交額 · 依交易所",
+    "各帳號明細 · 多帳號策略",
     "關鍵執行事件 · 近 6 小時",
     "最新策略日誌 · 已去識別"
   ])) and
@@ -151,7 +152,7 @@ jq -e '
   .timezone == "Asia/Taipei" and
   .refresh == "15s" and
   .editable == false and
-  (.panels | length == 11) and
+  (.panels | length == 12) and
   ([.templating.list[].name] == ["server_id", "strategy"]) and
   ([.templating.list[].label] == ["伺服器", "策略"]) and
   (.templating.list[0].definition | contains("trading_target_info")) and
@@ -216,6 +217,27 @@ jq -e '
     (.targets | length == 1) and
     .targets[0].legendFormat == "{{exchange}} · 成交額" and
     (.targets[0].expr | contains("trading_strategy_current_run_exchange_volume_usd"))
+  ] == [true]) and
+  ([.panels[] | select(.title == "各帳號明細 · 多帳號策略") |
+    .type == "table" and
+    .datasource.uid == "prometheus" and
+    .gridPos == {h: 6, w: 24, x: 0, y: 28} and
+    ([.transformations[].id] == ["joinByField", "organize"]) and
+    .transformations[0].options.byField == "executor" and
+    .transformations[0].options.mode == "outer" and
+    (.targets | length == 4) and
+    ([.targets[].instant] | all) and
+    ([.targets[].format] | all(. == "table")) and
+    ([.targets[] | select(.refId == "A") | .expr] |
+      (length == 1 and (.[0] | contains("trading_strategy_current_executor_equity_usdt")))) and
+    ([.targets[] | select(.refId == "B") | .expr] |
+      (length == 1 and (.[0] | contains("trading_strategy_current_executor_real_pnl_usdt")))) and
+    ([.targets[] | select(.refId == "C") | .expr] |
+      (length == 1 and (.[0] | contains("trading_strategy_current_executor_cycles_completed")))) and
+    ([.targets[] | select(.refId == "D") | .expr] |
+      (length == 1 and (.[0] | contains("trading_strategy_current_run_executor_volume_usd")))) and
+    ([.fieldConfig.overrides[].properties[]? | select(.id == "displayName") | .value] ==
+      ["帳號", "交易所", "目前餘額", "歸屬實現損益", "完成週期", "本輪成交額"])
   ] == [true]) and
   ([.panels[] | select(.title == "監控摘要") |
     ([.targets[] | select(.datasource.uid == "prometheus") | .legendFormat] == ["程序", "Runtime Contract", "執行綁定", "Config 快照", "風控回報", "探針更新", "財務資料年齡", "持倉資料年齡"]) and
@@ -380,6 +402,10 @@ for recording_rule in \
   trading_strategy_current_equity_usdt \
   trading_strategy_current_net_position_btc \
   trading_strategy_current_run_exchange_volume_usd \
+  trading_strategy_current_executor_equity_usdt \
+  trading_strategy_current_executor_real_pnl_usdt \
+  trading_strategy_current_executor_cycles_completed \
+  trading_strategy_current_run_executor_volume_usd \
   trading_strategy_risk_stopped
 do
   rg -q -- "record:[[:space:]]+$recording_rule" "$PROM_RULES" || {
