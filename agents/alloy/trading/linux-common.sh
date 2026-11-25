@@ -21,6 +21,30 @@ valid_base_asset() {
   [[ "$1" =~ ^[ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789]{1,16}$ ]]
 }
 
+# Comma-separated <executor>=<exchange> pairs. Multiple distinct executors may
+# map to the same exchange (e.g. popdex-main=popdex,popdex-rot2=popdex). Empty
+# segments, trailing commas, invalid labels and duplicate executors are refused.
+valid_executor_map() {
+  local mapping="$1"
+  [[ -n "$mapping" && "$mapping" != ,* && "$mapping" != *, && "$mapping" != *,,* ]] || return 1
+  local entries=()
+  local old_ifs="$IFS"
+  IFS=',' read -r -a entries <<<"$mapping"
+  IFS="$old_ifs"
+  [[ "${#entries[@]}" -gt 0 ]] || return 1
+  local entry executor exchange seen_executors=","
+  for entry in "${entries[@]}"; do
+    [[ "$entry" == *=* ]] || return 1
+    executor="${entry%%=*}"
+    exchange="${entry#*=}"
+    [[ "$exchange" != *=* ]] || return 1
+    valid_label_value "$executor" || return 1
+    valid_label_value "$exchange" || return 1
+    [[ "$seen_executors" != *",$executor,"* ]] || return 1
+    seen_executors+="$executor,"
+  done
+}
+
 path_exists() {
   [[ -e "$1" || -L "$1" ]]
 }

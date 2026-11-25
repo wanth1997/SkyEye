@@ -600,6 +600,14 @@ if rg -q '(_path|pid|order_id|client_id)=' "$METRICS_PATH"; then
   printf 'FAIL: PopDEX paths, PIDs or order references became metric labels\n' >&2
   exit 1
 fi
+for single_exec_metric in \
+  tnauqquant_current_executor_equity_usdt \
+  tnauqquant_current_executor_real_pnl_usdt \
+  tnauqquant_current_executor_cycles_completed \
+  tnauqquant_current_run_executor_volume_usd
+do
+  assert_metric_missing "$single_exec_metric"
+done
 
 printf 'case: TQ_BASE_ASSET=ETH labels the quantities ETH\n'
 # popdex-02 trades ETH and still logs *_qty_btc; the env names the real asset.
@@ -862,5 +870,164 @@ if find "$TEXTFILE_DIR" -maxdepth 1 -name '.tnauqquant*.prom.*' -print | grep -q
   printf 'FAIL: atomic writer left temporary files\n' >&2
   exit 1
 fi
+
+printf 'case: multi-account same-exchange PopDEX rotation contract (popdex-multi-accounts)\n'
+MULTI_CONFIG_PATH="$FAKE_REPO/config/popdex_multi_accounts_config.yaml"
+MULTI_RUN_ID=20261126_020000_popdex_multi_accounts_config
+MULTI_LOG_PATH="$FAKE_REPO/logs/live-runs/$MULTI_RUN_ID.raw.log"
+MULTI_MANIFEST_PATH="$FAKE_REPO/run-state/popdex-multi-accounts/current.json"
+MULTI_MARKER_PATH="$FAKE_REPO/run-state/popdex-multi-accounts/current.done.json"
+MULTI_METRICS_PATH="$TEXTFILE_DIR/tnauqquant-popdex-multi-accounts.prom"
+mkdir -p "$(dirname "$MULTI_MANIFEST_PATH")"
+cat >"$MULTI_CONFIG_PATH" <<'EOF'
+instance_id: "popdex-multi-accounts"
+routing:
+  mode: "random"
+  accounts:
+    - name: "popdex-main"
+    - name: "popdex-rot2"
+EOF
+multi_config_sha="$(shasum -a 256 "$MULTI_CONFIG_PATH" | awk '{print $1}')"
+jq -n \
+  --arg run_id "$MULTI_RUN_ID" \
+  --arg strategy "popdex-multi-accounts" \
+  --arg instance_id "popdex-multi-accounts" \
+  --arg config_sha256 "$multi_config_sha" \
+  --arg executable "$FAKE_REPO/quant" \
+  --arg config_path "$MULTI_CONFIG_PATH" \
+  --arg log_path "$MULTI_LOG_PATH" \
+  --arg done_marker_path "$MULTI_MARKER_PATH" \
+  '{
+    schema_version: 1,
+    run_id: $run_id,
+    strategy: $strategy,
+    instance_id: $instance_id,
+    pid: 999999,
+    config_sha256: $config_sha256,
+    process_started_at: "2026-11-26T02:00:00Z",
+    executable: $executable,
+    config_path: $config_path,
+    log_path: $log_path,
+    done_marker_path: $done_marker_path,
+    state: "running"
+  }' >"$MULTI_MANIFEST_PATH"
+
+export TQ_STRATEGY=popdex-multi-accounts
+export TQ_INSTANCE_ID=popdex-multi-accounts
+export TQ_CONFIG_PATH="$MULTI_CONFIG_PATH"
+export TQ_RAW_LOG_GLOB="$FAKE_REPO/logs/live-runs/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_popdex_multi_accounts_config.raw.log"
+export TQ_RUN_MANIFEST="$MULTI_MANIFEST_PATH"
+export TQ_DONE_MARKER="$MULTI_MARKER_PATH"
+export TQ_POC_RUN_EXPECTED=1
+export TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
+export TQ_TEXTFILE_NAME=tnauqquant-popdex-multi-accounts.prom
+export TQ_SIDECAR_REQUIRED=0
+export TQ_TEXTFILE_MODE=640
+METRICS_PATH="$MULTI_METRICS_PATH"
+
+# 1) Startup initial_equity_recorded before first pnl_status (+ non-allowlisted executor dropped).
+cat >"$MULTI_LOG_PATH" <<EOF
+time=${today_local}T09:00:00.100${FIXTURE_OFFSET} level=INFO msg=initial_equity_recorded equity_usdt=10000.00 equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5000.00,rogue-acct:9999.00
+time=${today_local}T09:01:00.200${FIXTURE_OFFSET} level=INFO msg=trade_status state=open executor=popdex-rot2 volume_usd=14.10
+time=${today_local}T09:01:00.300${FIXTURE_OFFSET} level=INFO msg=trade_status state=open executor=rogue-acct volume_usd=999.99
+time=${today_local}T09:01:01.000${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=entry executor=popdex-rot2 initiator_venue=popdex-rot2 initiator_side=Short initiator_qty_btc=0.00020000 net_side=Short net_qty_btc=0.00020000 portfolio_projection=coordinator_book
+EOF
+run_probe
+assert_metric tnauqquant_current_pnl_valid 0
+assert_metric tnauqquant_current_equity_usdt 10000.00
+assert_metric tnauqquant_current_executor_equity_usdt 5000.00 'exchange="popdex",executor="popdex-main"'
+assert_metric tnauqquant_current_executor_equity_usdt 5000.00 'exchange="popdex",executor="popdex-rot2"'
+assert_metric tnauqquant_current_run_exchange_volume_usd 14.1 'exchange="popdex"'
+assert_metric tnauqquant_current_run_executor_volume_usd 0 'exchange="popdex",executor="popdex-main"'
+assert_metric tnauqquant_current_run_executor_volume_usd 14.1 'exchange="popdex",executor="popdex-rot2"'
+assert_metric_missing tnauqquant_current_executor_real_pnl_usdt
+assert_metric_missing tnauqquant_current_executor_cycles_completed
+# Non-hedge open position on single-exchange multi-account lane publishes exchange="popdex" position.
+assert_metric tnauqquant_current_position_valid 1
+assert_metric tnauqquant_current_position_btc 0.00020000 'base_asset="BTC",exchange="popdex",side="short"'
+assert_metric tnauqquant_current_net_position_btc -0.0002 'base_asset="BTC"}'
+if rg -q 'rogue-acct' "$METRICS_PATH"; then
+  printf 'FAIL: non-allowlisted executor leaked into metrics at startup\n' >&2
+  exit 1
+fi
+
+# 2) Close + gross_flat_verified clears position; next open on popdex-main updates cleanly.
+cat >>"$MULTI_LOG_PATH" <<EOF
+time=${today_local}T09:02:00.000${FIXTURE_OFFSET} level=INFO msg=ui_warmup_async_ready executor=popdex-rot2 reason=gross_flat_verified:coordinated_carrier_exit
+EOF
+run_probe
+assert_metric tnauqquant_current_position_btc 0 'base_asset="BTC",exchange="popdex",side="flat"'
+assert_metric tnauqquant_current_net_position_btc 0 'base_asset="BTC"}'
+
+cat >>"$MULTI_LOG_PATH" <<EOF
+time=${today_local}T09:02:05.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10002.125 rebate_usdt=0.25 cash_pnl_usdt=1.875 real_pnl_usdt=2.125 risk_pnl_usdt=2.125 cycles_completed=1 risk_stopped=false samples=2 stable=true cycle_completed=true summary="PNL equity_start=10000.00 equity_now=10002.13 real_pnl=+2.1250 cycles=1 risk_stopped=false samples=2 stable=true cycle_completed=true" equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5002.13,rogue-acct:123.45 volume_usd_by_executor=popdex-rot2:28.20,rogue-acct:777.00 cycle_real_pnl_usdt=2.125 cycle_executor=popdex-rot2 cycle=1 session_cycle=1 cycle_id=m.1
+time=${today_local}T09:02:05.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10002.125 rebate_usdt=0.25 cash_pnl_usdt=1.875 real_pnl_usdt=2.125 risk_pnl_usdt=2.125 cycles_completed=1 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5002.13 volume_usd_by_executor=popdex-rot2:28.20 cycle_real_pnl_usdt=2.125 cycle_executor=popdex-rot2 cycle=1 session_cycle=1 cycle_id=m.1
+time=${today_local}T09:03:00.000${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=entry executor=popdex-main initiator_venue=popdex-main initiator_side=Long initiator_qty_btc=0.00040000 net_side=Long net_qty_btc=0.00040000 portfolio_projection=coordinator_book
+time=${today_local}T09:04:00.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10001.500 rebate_usdt=0.40 cash_pnl_usdt=1.100 real_pnl_usdt=1.500 risk_pnl_usdt=1.500 cycles_completed=2 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=popdex-main:4999.38,popdex-rot2:5002.13 volume_usd_by_executor=popdex-main:55.50,popdex-rot2:28.20,rogue-acct:888.00 cycle_real_pnl_usdt=-0.625 cycle_executor=popdex-main cycle=2 session_cycle=2 cycle_id=m.2
+time=${today_local}T09:04:30.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10001.500 rebate_usdt=0.40 cash_pnl_usdt=1.100 real_pnl_usdt=1.500 risk_pnl_usdt=1.500 cycles_completed=3 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=popdex-main:4999.38,popdex-rot2:5002.13 volume_usd_by_executor=popdex-main:55.50,popdex-rot2:28.20 cycle_real_pnl_usdt=99.0 cycle_executor=rogue-acct cycle=3 session_cycle=3 cycle_id=m.3
+EOF
+run_probe
+assert_metric tnauqquant_current_pnl_valid 1
+# Merged total equity preserves exact equity_now (10001.500), not rounded breakdown sum.
+assert_metric tnauqquant_current_equity_usdt 10001.500
+assert_metric tnauqquant_current_real_pnl_usdt 1.500
+assert_metric tnauqquant_current_cycles_completed 3
+assert_metric tnauqquant_completed_cycles_today 3
+# Merged exchange volume equals sum of mapped executors (55.50 + 28.20 = 83.7); rogue-acct excluded.
+assert_metric tnauqquant_current_run_exchange_volume_usd 83.7 'exchange="popdex"'
+assert_metric tnauqquant_current_run_executor_volume_usd 55.5 'exchange="popdex",executor="popdex-main"'
+assert_metric tnauqquant_current_run_executor_volume_usd 28.2 'exchange="popdex",executor="popdex-rot2"'
+# Per-executor equity, deduplicated cycle PnL and cycles (cycle 1 duplicate counted once; cycle 3 rogue-acct dropped).
+assert_metric tnauqquant_current_executor_equity_usdt 4999.38 'exchange="popdex",executor="popdex-main"'
+assert_metric tnauqquant_current_executor_equity_usdt 5002.13 'exchange="popdex",executor="popdex-rot2"'
+assert_metric tnauqquant_current_executor_real_pnl_usdt -0.625 'exchange="popdex",executor="popdex-main"'
+assert_metric tnauqquant_current_executor_real_pnl_usdt 2.125 'exchange="popdex",executor="popdex-rot2"'
+assert_metric tnauqquant_current_executor_cycles_completed 1 'exchange="popdex",executor="popdex-main"'
+assert_metric tnauqquant_current_executor_cycles_completed 1 'exchange="popdex",executor="popdex-rot2"'
+# New open position on popdex-main replaced prior gross-flat cleanly.
+assert_metric tnauqquant_current_position_btc 0.00040000 'base_asset="BTC",exchange="popdex",side="long"'
+assert_metric tnauqquant_current_net_position_btc 0.0004 'base_asset="BTC"}'
+assert_position_help_pinned
+multi_exec_labels="$(rg -o 'executor="[^"]*"' "$METRICS_PATH" | sort -u | tr '\n' ' ')"
+[[ "$multi_exec_labels" == 'executor="popdex-main" executor="popdex-rot2" ' ]] || {
+  printf 'FAIL: multi-account executor labels must strictly match TQ_EXECUTOR_MAP allowlist, got: %s\n' "$multi_exec_labels" >&2
+  exit 1
+}
+if rg -q 'rogue-acct' "$METRICS_PATH"; then
+  printf 'FAIL: non-allowlisted executor appeared in metrics output\n' >&2
+  exit 1
+fi
+
+# 3) Fail-closed: missing equity_usdt_by_executor or future pnl_status never falls back to earlier equity.
+cp "$MULTI_LOG_PATH" "$TEST_ROOT/multi.original.log"
+printf 'time=%sT09:05:00.000%s level=INFO msg=pnl_status stable=true equity_now=10001.500 real_pnl_usdt=1.500 cycles_completed=3 equity_usdt_by_executor=popdex-main:4999.38\n' \
+  "$today_local" "$FIXTURE_OFFSET" >>"$MULTI_LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_equity_usdt 10001.500
+assert_metric_missing tnauqquant_current_executor_equity_usdt
+
+cp "$TEST_ROOT/multi.original.log" "$MULTI_LOG_PATH"
+printf 'time=%sT09:05:00.000%s level=INFO msg=pnl_status stable=true equity_now=NaN real_pnl_usdt=1.500 cycles_completed=3 equity_usdt_by_executor=popdex-main:4999.38,popdex-rot2:5002.13\n' \
+  "$today_local" "$FIXTURE_OFFSET" >>"$MULTI_LOG_PATH"
+run_probe
+assert_metric_missing tnauqquant_current_equity_usdt
+assert_metric_missing tnauqquant_current_executor_equity_usdt
+
+cp "$TEST_ROOT/multi.original.log" "$MULTI_LOG_PATH"
+printf 'time=2099-01-01T00:00:00Z level=INFO msg=pnl_status stable=true equity_now=10001.500 real_pnl_usdt=1.500 cycles_completed=3 equity_usdt_by_executor=popdex-main:4999.38,popdex-rot2:5002.13\n' \
+  >>"$MULTI_LOG_PATH"
+run_probe
+assert_metric tnauqquant_current_pnl_valid 0
+assert_metric_missing tnauqquant_current_equity_usdt
+assert_metric_missing tnauqquant_current_executor_equity_usdt
+assert_metric_missing tnauqquant_current_executor_real_pnl_usdt
+assert_metric_missing tnauqquant_current_executor_cycles_completed
+
+# 4) Future initial_equity_recorded before any pnl_status is rejected fail-closed.
+printf 'time=2099-01-01T00:00:00Z level=INFO msg=initial_equity_recorded equity_usdt=10000.00 equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5000.00\n' \
+  >"$MULTI_LOG_PATH"
+run_probe
+assert_metric_missing tnauqquant_current_equity_usdt
+assert_metric_missing tnauqquant_current_executor_equity_usdt
 
 printf 'PASS: trading probe contract\n'

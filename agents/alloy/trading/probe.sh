@@ -169,15 +169,22 @@ AWK_EVENT_TIME='
 
 # Single-pass manifest log scanner. Pre-filters with fixed-string grep -a -n -F
 # for every event tag any metric reads (pnl_status, ui_warmup_async_ready,
-# coordinator_book, trade_status), then collects P&L, cycle curve, exchange
-# volume (snapshot or trade_status fallback), venue/net positions and
-# current-run today-cycle keys in one awk invocation. Line numbers are kept as
-# exact decimal strings from grep -n so large line counts never format in %g.
+# coordinator_book, trade_status, and initial_equity_recorded on multi-account
+# shared-exchange lanes), then collects P&L, cycle curve, exchange/executor
+# volume (snapshot or trade_status fallback), per-executor equity/PnL/cycles,
+# venue/net positions and current-run today-cycle keys in one awk invocation.
+# Line numbers are kept as exact decimal strings from grep -n so large line
+# counts never format in %g.
 scan_manifest_log() {
   local log_path="$1"
   local log_run_id="$2"
-  grep_fixed_lines -e pnl_status -e ui_warmup_async_ready -e coordinator_book -e trade_status "$log_path" | \
+  local grep_patterns=(-e pnl_status -e ui_warmup_async_ready -e coordinator_book -e trade_status)
+  if [[ "$HAS_SHARED_EXCHANGE" -eq 1 ]]; then
+    grep_patterns+=(-e initial_equity_recorded)
+  fi
+  grep_fixed_lines "${grep_patterns[@]}" "$log_path" | \
     LC_ALL=C awk -v mapping="$TQ_EXECUTOR_MAP" \
+        -v has_shared_exchange="$HAS_SHARED_EXCHANGE" \
         -v future_limit="$FUTURE_EVENT_LIMIT" \
         -v day_start="$TODAY_START_EPOCH" \
         -v day_end="$TOMORROW_START_EPOCH" \
@@ -189,7 +196,8 @@ scan_manifest_log() {
         formatted = sprintf("%.10f", value)
         sub(/0+$/, "", formatted)
         sub(/[.]$/, "", formatted)
-        return formatted == "" ? "0" : formatted
+        if (formatted == "" || formatted == "-0") return "0"
+        return formatted
       }
       function normalize_side(value) {
         if (value == "Long") return "long"
@@ -205,6 +213,9 @@ scan_manifest_log() {
           exchange = substr(mapping_entries[i], equals + 1)
           mapped_executor[executor] = 1
           executor_exchange[executor] = exchange
+          if (equals > 1) {
+            executor_order[++executor_count] = executor
+          }
           if (!(exchange in exchange_seen)) {
             exchange_seen[exchange] = 1
             exchange_order[++exchange_count] = exchange
@@ -219,7 +230,8 @@ scan_manifest_log() {
         if (index($0, "pnl_status") == 0 &&
             index($0, "trade_status") == 0 &&
             index($0, "ui_warmup_async_ready") == 0 &&
-            index($0, "carrier_venue=") == 0) {
+            index($0, "carrier_venue=") == 0 &&
+            (!has_shared_exchange || index($0, "initial_equity_recorded") == 0)) {
           p_flat = index($0, " net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book ")
           if (p_flat > 0) {
             tail = substr($0, p_flat + 76)
@@ -260,6 +272,10 @@ scan_manifest_log() {
         nf = split(line, fields)
         saw_time = 0
         saw_vol_snap = 0
+        saw_eq_snap = 0
+        saw_eq_usdt = 0
+        saw_cycle_real_pnl = 0
+        saw_cycle_executor = 0
         time_first = ""
         time_last = ""
         msg_first = ""
@@ -272,8 +288,12 @@ scan_manifest_log() {
         session_cycle = ""
         cycles_completed = ""
         real_pnl = ""
+        cycle_real_pnl = ""
+        cycle_executor = ""
         cycle_id = ""
         vol_snap = ""
+        eq_snap = ""
+        eq_usdt = ""
         volume_usd = ""
         projection = ""
         initiator_venue = ""
@@ -312,12 +332,32 @@ scan_manifest_log() {
             cycles_completed = value
           } else if (key == "real_pnl_usdt") {
             real_pnl = value
+          } else if (key == "cycle_real_pnl_usdt") {
+            if (!saw_cycle_real_pnl) {
+              cycle_real_pnl = value
+              saw_cycle_real_pnl = 1
+            }
+          } else if (key == "cycle_executor") {
+            if (!saw_cycle_executor) {
+              cycle_executor = value
+              saw_cycle_executor = 1
+            }
           } else if (key == "cycle_id") {
             cycle_id = value
           } else if (key == "volume_usd_by_executor") {
             if (!saw_vol_snap) {
               vol_snap = value
               saw_vol_snap = 1
+            }
+          } else if (key == "equity_usdt_by_executor") {
+            if (!saw_eq_snap) {
+              eq_snap = value
+              saw_eq_snap = 1
+            }
+          } else if (key == "equity_usdt") {
+            if (!saw_eq_usdt) {
+              eq_usdt = value
+              saw_eq_usdt = 1
             }
           } else if (key == "volume_usd") {
             volume_usd = value
@@ -347,12 +387,24 @@ scan_manifest_log() {
           }
         }
 
+        if (has_shared_exchange && msg_last == "initial_equity_recorded") {
+          latest_init_equity_total = ""
+          latest_init_equity_snap = ""
+          epoch = event_epoch(time_first)
+          if (epoch >= 0 && epoch <= future_limit) {
+            latest_init_equity_total = eq_usdt
+            latest_init_equity_snap = eq_snap
+          }
+        }
+
         if (msg_last == "pnl_status" && stable == "true") {
           # Unfiltered on purpose: a future newest line invalidates current P&L.
           latest_pnl_any = line
+          latest_pnl_eq_snap = ""
           epoch = event_epoch(time_first)
           if (epoch >= 0 && epoch <= future_limit) {
             latest_vol_snap = vol_snap
+            latest_pnl_eq_snap = eq_snap
             if (completed == "true") {
               latest_pnl_completed = line
               cycle = (session_cycle != "" ? session_cycle : cycles_completed)
@@ -362,6 +414,14 @@ scan_manifest_log() {
                   cycle_order[++cycle_count] = cycle
                 }
                 cycle_pnl[cycle] = real_pnl
+              }
+              if (has_shared_exchange && cycle ~ /^[0-9]+$/) {
+                if (!(cycle in exec_cycle_seen)) {
+                  exec_cycle_seen[cycle] = 1
+                  exec_cycle_order[++exec_cycle_count] = cycle
+                }
+                exec_cycle_executor[cycle] = cycle_executor
+                exec_cycle_delta[cycle] = cycle_real_pnl
               }
             }
           }
@@ -383,6 +443,9 @@ scan_manifest_log() {
             exchange = executor_exchange[executor_last]
             if (exchange != "") {
               trade_volume[exchange] += volume_usd
+              if (has_shared_exchange) {
+                trade_exec_volume[executor_last] += volume_usd
+              }
             }
           }
         }
@@ -392,13 +455,15 @@ scan_manifest_log() {
             executor_first != "" && mapped_executor[executor_first])
 
         if (is_gross_flat) {
-          # A gross-flat readiness line clears both venues on a two-exchange lane;
-          # a one-exchange lane adopts it as a venue source only after a two-leg line.
-          if (mapping_count > 1 || latest_venue != "") {
+          # A gross-flat readiness line clears all venues on a multi-exchange lane;
+          # a single-exchange lane (one or multiple accounts on one venue) adopts it
+          # as a venue source only after a two-leg line.
+          if (exchange_count > 1 || latest_venue != "") {
             latest_venue = line_no "\t" (time_last == "" ? "-" : time_last) "\t-\tflat\t0\t-\tflat\t0\tgross_flat"
           }
         } else if (projection == "coordinator_book" &&
             mapped_executor[initiator_venue] && mapped_executor[carrier_venue] &&
+            executor_exchange[initiator_venue] != executor_exchange[carrier_venue] &&
             initiator_side != "" && carrier_side != "" &&
             valid_number(initiator_qty) && valid_number(carrier_qty) &&
             initiator_qty + 0 >= 0 && carrier_qty + 0 >= 0) {
@@ -455,6 +520,9 @@ scan_manifest_log() {
             exchange = executor_exchange[executor]
             if (scolon > 1 && exchange != "" && valid_number(volume) && volume + 0 >= 0) {
               snap_volume[exchange] += volume
+              if (has_shared_exchange) {
+                snap_exec_volume[executor] += volume
+              }
             }
           }
           for (i = 1; i <= exchange_count; i++) {
@@ -475,6 +543,75 @@ scan_manifest_log() {
         print "__SKYEYE_TODAY__"
         for (i = 1; i <= today_count; i++) {
           print today_order[i]
+        }
+        if (has_shared_exchange) {
+          print "__SKYEYE_EXECUTORS__"
+          if (latest_pnl_any == "" && valid_number(latest_init_equity_total)) {
+            print "INIT_EQUITY\t" latest_init_equity_total
+          }
+          eq_source = (latest_pnl_any != "" ? latest_pnl_eq_snap : latest_init_equity_snap)
+          if (eq_source != "") {
+            eq_parse_bad = 0
+            eq_entry_count = split(eq_source, eq_entries, ",")
+            for (i = 1; i <= eq_entry_count; i++) {
+              ecolon = index(eq_entries[i], ":")
+              if (ecolon <= 1) continue
+              ex_name = substr(eq_entries[i], 1, ecolon - 1)
+              ex_val = substr(eq_entries[i], ecolon + 1)
+              # Strict TQ_EXECUTOR_MAP allowlist: ignore unmapped executors.
+              if (!(ex_name in mapped_executor)) continue
+              if ((ex_name in eq_seen) || !valid_number(ex_val)) {
+                eq_parse_bad = 1
+                break
+              }
+              eq_seen[ex_name] = 1
+              eq_by_exec[ex_name] = ex_val
+            }
+            if (!eq_parse_bad) {
+              eq_complete = 1
+              for (i = 1; i <= executor_count; i++) {
+                if (!(executor_order[i] in eq_seen)) {
+                  eq_complete = 0
+                  break
+                }
+              }
+              if (eq_complete) {
+                for (i = 1; i <= executor_count; i++) {
+                  ex_name = executor_order[i]
+                  print "EXEC_EQUITY\t" executor_exchange[ex_name] "\t" ex_name "\t" eq_by_exec[ex_name]
+                }
+              }
+            }
+          }
+          for (i = 1; i <= executor_count; i++) {
+            ex_name = executor_order[i]
+            ex_vol = (latest_vol_snap != "" ? snap_exec_volume[ex_name] : trade_exec_volume[ex_name])
+            print "EXEC_VOLUME\t" executor_exchange[ex_name] "\t" ex_name "\t" format_number(ex_vol + 0)
+          }
+          mapped_cycle_total = 0
+          for (i = 1; i <= exec_cycle_count; i++) {
+            cycle = exec_cycle_order[i]
+            ex_name = exec_cycle_executor[cycle]
+            delta = exec_cycle_delta[cycle]
+            # Strict TQ_EXECUTOR_MAP allowlist: drop unmapped or empty cycle_executor.
+            if (ex_name == "" || !(ex_name in mapped_executor)) continue
+            exec_cycles[ex_name]++
+            mapped_cycle_total++
+            if (valid_number(delta)) {
+              exec_pnl[ex_name] += delta
+            } else {
+              exec_pnl_invalid[ex_name] = 1
+            }
+          }
+          if (mapped_cycle_total > 0) {
+            for (i = 1; i <= executor_count; i++) {
+              ex_name = executor_order[i]
+              print "EXEC_CYCLES\t" executor_exchange[ex_name] "\t" ex_name "\t" (exec_cycles[ex_name] + 0)
+              if (!exec_pnl_invalid[ex_name]) {
+                print "EXEC_PNL\t" executor_exchange[ex_name] "\t" ex_name "\t" format_number(exec_pnl[ex_name] + 0)
+              }
+            }
+          }
         }
         print "__SKYEYE_END__"
       }
@@ -837,6 +974,9 @@ IFS="$old_ifs"
 _executor_map_commas="${TQ_EXECUTOR_MAP//[^,]/}"
 EXECUTOR_MAP_SIZE=$(( ${#_executor_map_commas} + 1 ))
 seen_executors=","
+seen_exchanges=","
+UNIQUE_EXCHANGE_COUNT=0
+HAS_SHARED_EXCHANGE=0
 for executor_entry in "${executor_entries[@]}"; do
   [[ "$executor_entry" == *=* ]] || die "invalid TQ_EXECUTOR_MAP entry: $executor_entry"
   executor_name="${executor_entry%%=*}"
@@ -845,7 +985,17 @@ for executor_entry in "${executor_entries[@]}"; do
   valid_label_value "$exchange_name" || die "invalid exchange label: $exchange_name"
   [[ "$seen_executors" != *",$executor_name,"* ]] || die "duplicate executor mapping: $executor_name"
   seen_executors+="$executor_name,"
+  if [[ "$seen_exchanges" == *",$exchange_name,"* ]]; then
+    HAS_SHARED_EXCHANGE=1
+  else
+    seen_exchanges+="$exchange_name,"
+    UNIQUE_EXCHANGE_COUNT=$((UNIQUE_EXCHANGE_COUNT + 1))
+  fi
 done
+SINGLE_EXCHANGE_VALID=0
+if [[ "$UNIQUE_EXCHANGE_COUNT" -eq 1 && "$EXECUTOR_MAP_SIZE" -eq "${#executor_entries[@]}" ]]; then
+  SINGLE_EXCHANGE_VALID=1
+fi
 
 [[ "$TQ_TIMEZONE" =~ ^[A-Za-z0-9_+./-]+$ ]] || die "invalid TQ_TIMEZONE"
 
@@ -1024,6 +1174,10 @@ VENUE_POSITION_LINE=0
 VENUE_POSITION_TIMESTAMP=""
 NET_POSITION_TIMESTAMP=""
 CURRENT_EXCHANGE_VOLUMES=""
+CURRENT_EXECUTOR_EQUITIES=""
+CURRENT_EXECUTOR_REAL_PNLS=""
+CURRENT_EXECUTOR_CYCLES=""
+CURRENT_EXECUTOR_VOLUMES=""
 RISK_STOPPED=0
 
 if [[ "$ACTUAL_INSTANCE_ID" == "$TQ_INSTANCE_ID" ]]; then
@@ -1144,8 +1298,45 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
       COMPLETED_CYCLE_PNL_SERIES="${scan_after_volumes%%$'\n__SKYEYE_TODAY__\n'*}"
       COMPLETED_CYCLE_PNL_SERIES="${COMPLETED_CYCLE_PNL_SERIES#$'\n'}"
       scan_after_cycles=$'\n'"${scan_after_volumes#*$'\n__SKYEYE_TODAY__\n'}"
-      MANIFEST_TODAY_CYCLES="${scan_after_cycles%%$'\n__SKYEYE_END__\n'*}"
-      MANIFEST_TODAY_CYCLES="${MANIFEST_TODAY_CYCLES#$'\n'}"
+      if [[ "$HAS_SHARED_EXCHANGE" -eq 1 ]]; then
+        MANIFEST_TODAY_CYCLES="${scan_after_cycles%%$'\n__SKYEYE_EXECUTORS__\n'*}"
+        MANIFEST_TODAY_CYCLES="${MANIFEST_TODAY_CYCLES#$'\n'}"
+        scan_after_today=$'\n'"${scan_after_cycles#*$'\n__SKYEYE_EXECUTORS__\n'}"
+        scan_executors="${scan_after_today%%$'\n__SKYEYE_END__\n'*}"
+        scan_executors="${scan_executors#$'\n'}"
+      else
+        MANIFEST_TODAY_CYCLES="${scan_after_cycles%%$'\n__SKYEYE_END__\n'*}"
+        MANIFEST_TODAY_CYCLES="${MANIFEST_TODAY_CYCLES#$'\n'}"
+        scan_executors=""
+      fi
+
+      RAW_INIT_EQUITY_TOTAL=""
+      RAW_EXECUTOR_EQUITIES=""
+      RAW_EXECUTOR_VOLUMES=""
+      RAW_EXECUTOR_REAL_PNLS=""
+      RAW_EXECUTOR_CYCLES=""
+      if [[ -n "$scan_executors" ]]; then
+        while IFS= read -r exec_line; do
+          [[ -n "$exec_line" ]] || continue
+          exec_tag="${exec_line%%$'\t'*}"
+          exec_payload="${exec_line#*$'\t'}"
+          case "$exec_tag" in
+            INIT_EQUITY) RAW_INIT_EQUITY_TOTAL="$exec_payload" ;;
+            EXEC_EQUITY)
+              RAW_EXECUTOR_EQUITIES+="${RAW_EXECUTOR_EQUITIES:+$'\n'}$exec_payload"
+              ;;
+            EXEC_VOLUME)
+              RAW_EXECUTOR_VOLUMES+="${RAW_EXECUTOR_VOLUMES:+$'\n'}$exec_payload"
+              ;;
+            EXEC_PNL)
+              RAW_EXECUTOR_REAL_PNLS+="${RAW_EXECUTOR_REAL_PNLS:+$'\n'}$exec_payload"
+              ;;
+            EXEC_CYCLES)
+              RAW_EXECUTOR_CYCLES+="${RAW_EXECUTOR_CYCLES:+$'\n'}$exec_payload"
+              ;;
+          esac
+        done <<<"$scan_executors"
+      fi
 
       while IFS= read -r scan_line; do
         [[ -n "$scan_line" && "$scan_line" != "__SKYEYE_HEADER__" ]] || continue
@@ -1213,6 +1404,20 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
           is_number "$current_rebate" && CURRENT_REBATE="$current_rebate"
           is_number "$current_risk_pnl" && CURRENT_RISK_PNL="$current_risk_pnl"
           is_number "$current_cycles_completed" && CURRENT_CYCLES_COMPLETED="$current_cycles_completed"
+        fi
+      fi
+
+      if [[ "$HAS_SHARED_EXCHANGE" -eq 1 ]]; then
+        CURRENT_EXECUTOR_VOLUMES="$RAW_EXECUTOR_VOLUMES"
+        if [[ -n "$CURRENT_PNL_LINE" ]]; then
+          if [[ "$CURRENT_PNL_VALID" -eq 1 ]]; then
+            [[ -n "$CURRENT_EQUITY" ]] && CURRENT_EXECUTOR_EQUITIES="$RAW_EXECUTOR_EQUITIES"
+            CURRENT_EXECUTOR_REAL_PNLS="$RAW_EXECUTOR_REAL_PNLS"
+            CURRENT_EXECUTOR_CYCLES="$RAW_EXECUTOR_CYCLES"
+          fi
+        elif [[ -n "$RAW_INIT_EQUITY_TOTAL" ]] && is_number "$RAW_INIT_EQUITY_TOTAL"; then
+          CURRENT_EQUITY="$RAW_INIT_EQUITY_TOTAL"
+          CURRENT_EXECUTOR_EQUITIES="$RAW_EXECUTOR_EQUITIES"
         fi
       fi
 
@@ -1296,7 +1501,7 @@ if [[ -f "$TQ_RUN_MANIFEST" ]]; then
           then
             CURRENT_POSITION_VALID=1
             CURRENT_NET_POSITION_BTC="$current_signed_net"
-            if [[ "$(executor_map_size)" -eq 1 ]]; then
+            if [[ "$SINGLE_EXCHANGE_VALID" -eq 1 ]]; then
               CURRENT_POSITION_SERIES="$(printf '%s\t%s\t%s\n' \
                 "$(first_mapped_exchange)" "$current_net_side" "$current_net_qty")"
             fi
@@ -1533,6 +1738,38 @@ trap cleanup_temp EXIT HUP INT TERM
       printf 'tnauqquant_current_run_exchange_volume_usd{%s,exchange="%s"} %s\n' \
         "$METRIC_LABELS" "$exchange" "$volume_usd"
     done <<<"$CURRENT_EXCHANGE_VOLUMES"
+  fi
+  if [[ -n "$CURRENT_EXECUTOR_EQUITIES" ]]; then
+    printf '# HELP tnauqquant_current_executor_equity_usdt Latest account equity by mapped executor in USDT.\n'
+    printf '# TYPE tnauqquant_current_executor_equity_usdt gauge\n'
+    while IFS=$'\t' read -r exchange executor equity_usdt; do
+      printf 'tnauqquant_current_executor_equity_usdt{%s,exchange="%s",executor="%s"} %s\n' \
+        "$METRIC_LABELS" "$exchange" "$executor" "$equity_usdt"
+    done <<<"$CURRENT_EXECUTOR_EQUITIES"
+  fi
+  if [[ -n "$CURRENT_EXECUTOR_REAL_PNLS" ]]; then
+    printf '# HELP tnauqquant_current_executor_real_pnl_usdt Cumulative attributed completed-cycle real PNL for the current run by mapped executor in USDT.\n'
+    printf '# TYPE tnauqquant_current_executor_real_pnl_usdt gauge\n'
+    while IFS=$'\t' read -r exchange executor real_pnl_usdt; do
+      printf 'tnauqquant_current_executor_real_pnl_usdt{%s,exchange="%s",executor="%s"} %s\n' \
+        "$METRIC_LABELS" "$exchange" "$executor" "$real_pnl_usdt"
+    done <<<"$CURRENT_EXECUTOR_REAL_PNLS"
+  fi
+  if [[ -n "$CURRENT_EXECUTOR_CYCLES" ]]; then
+    printf '# HELP tnauqquant_current_executor_cycles_completed Attributed completed cycles for the current run by mapped executor.\n'
+    printf '# TYPE tnauqquant_current_executor_cycles_completed gauge\n'
+    while IFS=$'\t' read -r exchange executor cycles_completed; do
+      printf 'tnauqquant_current_executor_cycles_completed{%s,exchange="%s",executor="%s"} %s\n' \
+        "$METRIC_LABELS" "$exchange" "$executor" "$cycles_completed"
+    done <<<"$CURRENT_EXECUTOR_CYCLES"
+  fi
+  if [[ -n "$CURRENT_EXECUTOR_VOLUMES" ]]; then
+    printf '# HELP tnauqquant_current_run_executor_volume_usd Latest stable current-run volume by mapped executor.\n'
+    printf '# TYPE tnauqquant_current_run_executor_volume_usd gauge\n'
+    while IFS=$'\t' read -r exchange executor volume_usd; do
+      printf 'tnauqquant_current_run_executor_volume_usd{%s,exchange="%s",executor="%s"} %s\n' \
+        "$METRIC_LABELS" "$exchange" "$executor" "$volume_usd"
+    done <<<"$CURRENT_EXECUTOR_VOLUMES"
   fi
   if [[ -n "$DONE_REASON" ]]; then
     printf '# HELP tnauqquant_done_marker Bound terminal marker by normalized reason.\n'

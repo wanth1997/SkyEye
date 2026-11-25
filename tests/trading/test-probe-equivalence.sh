@@ -1425,4 +1425,28 @@ fi
 PASS_COUNT=$((PASS_COUNT + 1))
 printf 'ok      scenario 21 (C7): sha256sum and shasum match with config_snapshot_match=1 on backslash basename\n'
 
+printf '# Scenario 22: single-account popdex-btc & dual-exchange toobit-mexc with initial_equity_recorded + cycle_executor stay byte-identical to baseline\n'
+new_fixture popdex-btc popdex_btc_config 'popdex-main=popdex' Asia/Taipei
+RUN22A="20250717_080000_popdex_btc_config"
+LOG22A="$REPO/logs/live-runs/$RUN22A.raw.log"
+cat >"$LOG22A" <<'EOF'
+time=2025-07-17T08:00:01Z level=INFO msg=initial_equity_recorded equity_usdt=5000.00 equity_usdt_by_executor=popdex-main:5000.00
+time=2025-07-17T08:01:00Z level=INFO msg=pnl_status equity_start=5000 equity_now=5001.25 rebate_usdt=0.15 cash_pnl_usdt=1.10 real_pnl_usdt=1.25 risk_pnl_usdt=1.25 cycles_completed=1 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=popdex-main:5001.25 volume_usd_by_executor=popdex-main:25000.50 cycle_real_pnl_usdt=1.25 cycle_executor=popdex-main cycle=1 session_cycle=1 cycle_id=p.1
+time=2025-07-17T08:02:00Z level=INFO msg=trade_status state=settled phase=entry executor=popdex-main initiator_venue=popdex-main initiator_side=Short initiator_qty_btc=0.00020000 net_side=Short net_qty_btc=0.00020000 portfolio_projection=coordinator_book
+EOF
+touch_epoch "$LOG22A" "$(epoch_of 2025-07-17T08:03:00Z)"
+write_manifest "$RUN22A" "$LOG22A" "2025-07-17T08:00:00Z"
+assert_identical "scenario 22a: single-account popdex-btc with initial_equity_recorded and cycle_executor matches baseline" "$NOW_DEFAULT"
+
+new_fixture toobit-mexc-btc toobit_mexc_btc_config 'toobit-main=toobit,mexc-ui=mexc' Asia/Taipei
+RUN22B="20250717_080000_toobit_mexc_btc_config"
+LOG22B="$REPO/logs/live-runs/$RUN22B.raw.log"
+cat >"$LOG22B" <<'EOF'
+time=2025-07-17T08:00:01Z level=INFO msg=initial_equity_recorded equity_usdt=3000.00 equity_usdt_by_executor=mexc-ui:1000.00,toobit-main:2000.00
+time=2025-07-17T08:01:00Z level=INFO msg=pnl_status equity_start=3000 equity_now=3005.50 rebate_usdt=1.50 cash_pnl_usdt=4.00 real_pnl_usdt=5.50 risk_pnl_usdt=5.50 cycles_completed=1 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=mexc-ui:1002.00,toobit-main:2003.50 volume_usd_by_executor=mexc-ui:5000.00,toobit-main:5000.00 cycle_real_pnl_usdt=5.50 cycle_executor=mexc-ui cycle=1 session_cycle=1 cycle_id=tm.1
+EOF
+touch_epoch "$LOG22B" "$(epoch_of 2025-07-17T08:03:00Z)"
+write_manifest "$RUN22B" "$LOG22B" "2025-07-17T08:00:00Z"
+assert_identical "scenario 22b: dual-exchange toobit-mexc-btc with initial_equity_recorded and cycle_executor matches baseline" "$NOW_DEFAULT"
+
 printf 'PASS: %s probe equivalence checks matched baseline byte-for-byte\n' "$PASS_COUNT"

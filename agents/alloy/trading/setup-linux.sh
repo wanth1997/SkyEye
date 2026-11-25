@@ -218,8 +218,8 @@ fi
 mode="$(file_mode "$ENV_FILE")"
 [[ "$mode" == "600" ]] || die "env file must have mode 600, found $mode"
 
-# systemd reads TQ_BASE_ASSET from the file, not from this shell; only the file counts.
-unset TQ_BASE_ASSET
+# systemd reads env values from the file, not from this shell; only the file counts.
+unset TQ_BASE_ASSET TQ_EXECUTOR_MAP
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
@@ -315,6 +315,12 @@ else
   [[ -z "${TQ_BASE_ASSET+set}" ]] || \
     die "TQ_BASE_ASSET in $ENV_FILE must be a literal TQ_BASE_ASSET=VALUE line; systemd does not read the form this file uses"
 fi
+executor_map_literal="$(installed_env_value TQ_EXECUTOR_MAP "$ENV_FILE")" || \
+  die "TQ_EXECUTOR_MAP in $ENV_FILE must be a literal TQ_EXECUTOR_MAP=EXECUTOR=EXCHANGE[,...] line"
+[[ "$TQ_EXECUTOR_MAP" == "$executor_map_literal" ]] || \
+  die "TQ_EXECUTOR_MAP in $ENV_FILE must be a literal TQ_EXECUTOR_MAP=EXECUTOR=EXCHANGE[,...] line that nothing else in the file changes"
+valid_executor_map "$TQ_EXECUTOR_MAP" || \
+  die "TQ_EXECUTOR_MAP must be comma-separated executor=exchange pairs with unique executors and valid label values"
 [[ "$TQ_TEXTFILE_MODE" == "640" ]] || \
   die "Linux coexistence requires TQ_TEXTFILE_MODE=640"
 
