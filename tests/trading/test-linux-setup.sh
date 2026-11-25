@@ -1359,6 +1359,52 @@ TQ_BASE_ASSET=eth "$SETUP" --render-only "$TEST_ROOT/base-asset-render" --env-fi
 }
 rm -rf "$TEST_ROOT/base-asset-render"
 
+printf 'case: render accepts multi-account same-exchange TQ_EXECUTOR_MAP and refuses invalid forms\n'
+MULTI_MAP_ENV="$TEST_ROOT/$MAINNET.multi-map.env"
+sed 's/^TQ_EXECUTOR_MAP=.*/TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex/' "$MAINNET_ENV" >"$MULTI_MAP_ENV"
+chmod 600 "$MULTI_MAP_ENV"
+"$SETUP" --render-only "$TEST_ROOT/multi-map-render" --env-file "$MULTI_MAP_ENV" >/dev/null
+rg -q '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex$' \
+  "$TEST_ROOT/multi-map-render/instances/$MAINNET.env" || {
+  printf 'FAIL: render did not preserve multi-account TQ_EXECUTOR_MAP\n' >&2
+  exit 1
+}
+rm -rf "$TEST_ROOT/multi-map-render"
+
+for bad_map in \
+  'popdex-main=popdex,' \
+  ',popdex-main=popdex' \
+  'popdex-main=popdex,,popdex-rot2=popdex' \
+  'popdex-main=popdex,popdex-main=popdex' \
+  'popdex-main' \
+  'popdex-main=' \
+  '=popdex' \
+  'popdex-main=popdex=extra' \
+  'bad!name=popdex'
+do
+  sed "s|^TQ_EXECUTOR_MAP=.*|TQ_EXECUTOR_MAP=$bad_map|" "$MAINNET_ENV" >"$MULTI_MAP_ENV"
+  chmod 600 "$MULTI_MAP_ENV"
+  rm -rf "$TEST_ROOT/multi-map-bad-render"
+  if bad_map_out="$("$SETUP" --render-only "$TEST_ROOT/multi-map-bad-render" --env-file "$MULTI_MAP_ENV" 2>&1)"; then
+    printf 'FAIL: render accepted invalid TQ_EXECUTOR_MAP=%s\n' "$bad_map" >&2
+    exit 1
+  fi
+  [[ "$bad_map_out" == *TQ_EXECUTOR_MAP* && ! -e "$TEST_ROOT/multi-map-bad-render" ]] || {
+    printf 'FAIL: refusal of TQ_EXECUTOR_MAP=%s did not name TQ_EXECUTOR_MAP or still wrote: %s\n' "$bad_map" "$bad_map_out" >&2
+    exit 1
+  }
+  : >"$SYSTEMCTL_LOG"
+  if bad_map_add="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" "$SETUP" add --env-file "$MULTI_MAP_ENV" 2>&1)"; then
+    printf 'FAIL: add accepted invalid TQ_EXECUTOR_MAP=%s\n' "$bad_map" >&2
+    exit 1
+  fi
+  [[ "$bad_map_add" == *TQ_EXECUTOR_MAP* ]] || {
+    printf 'FAIL: add refusal of TQ_EXECUTOR_MAP=%s did not name TQ_EXECUTOR_MAP: %s\n' "$bad_map" "$bad_map_add" >&2
+    exit 1
+  }
+  assert_no_mutation "add with invalid TQ_EXECUTOR_MAP=$bad_map"
+done
+
 if rg -q 'tnauqquant' "$SYSTEMCTL_LOG_ALL"; then
   printf 'FAIL: monitoring installer attempted to control a trading service\n' >&2
   exit 1

@@ -285,7 +285,7 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "目前策略最近一次穩定快照的帳戶總權益（USDT）。雙交易所已加總，單交易所顯示該帳戶數值；隨穩定損益快照更新，並非即時可用保證金。尚無有效快照時顯示等待資料。",
+      "description": "目前策略最近一次穩定快照的帳戶總權益（USDT）。多帳號與雙交易所已合併加總，單帳號顯示該帳戶數值；多帳號策略另於下方明細表顯示各帳號分項。尚無有效快照時顯示等待資料。",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1391,6 +1391,283 @@
     },
     {
       "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "description": "僅同交易所多帳號輪替策略顯示各帳號目前餘額、歸屬實現損益、完成週期與本輪成交額；單帳號策略此表無資料屬正常。歸屬實現損益依 cycle_executor 彙總已完成週期，總權益與總損益仍以上方合併面板為準。",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          },
+          "noValue": "—"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Executor"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "帳號"
+              },
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Exchange"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "交易所"
+              },
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Equity"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "目前餘額"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: USDT"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "noValue",
+                "value": "等待餘額資料"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Attributed P&L"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "歸屬實現損益"
+              },
+              {
+                "id": "unit",
+                "value": "suffix: USDT"
+              },
+              {
+                "id": "decimals",
+                "value": 4
+              },
+              {
+                "id": "noValue",
+                "value": "等待完成週期"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "basic",
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "green",
+                      "value": 1E-12
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cycles"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "完成週期"
+              },
+              {
+                "id": "unit",
+                "value": "short"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "noValue",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Run volume"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "本輪成交額"
+              },
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "noValue",
+                "value": "尚無完成交易"
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "id": 15,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "11.2.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (executor, exchange) (trading_strategy_current_executor_equity_usdt{server_id=\"$server_id\",strategy=\"$strategy\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (executor) (trading_strategy_current_executor_real_pnl_usdt{server_id=\"$server_id\",strategy=\"$strategy\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (executor) (trading_strategy_current_executor_cycles_completed{server_id=\"$server_id\",strategy=\"$strategy\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (executor) (trading_strategy_current_run_executor_volume_usd{server_id=\"$server_id\",strategy=\"$strategy\"})",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "D"
+        }
+      ],
+      "title": "各帳號明細 · 多帳號策略",
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "executor",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "__name__": true
+            },
+            "indexByName": {
+              "executor": 0,
+              "exchange": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5
+            },
+            "renameByName": {
+              "executor": "Executor",
+              "exchange": "Exchange",
+              "Value #A": "Equity",
+              "Value #B": "Attributed P&L",
+              "Value #C": "Cycles",
+              "Value #D": "Run volume"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
         "type": "loki",
         "uid": "loki"
       },
@@ -1403,7 +1680,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 34
       },
       "id": 12,
       "options": {
@@ -1444,7 +1721,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 42
       },
       "id": 13,
       "options": {
@@ -1538,7 +1815,7 @@
   "timezone": "Asia/Taipei",
   "title": "Trading · 策略詳情",
   "uid": "trading-strategy-detail",
-  "version": 9,
+  "version": 10,
   "weekStart": "monday",
   "description": "單一策略的損益、餘額與執行診斷頁。監控摘要合併程序、runtime、執行綁定、config、風控與近 15 分鐘高信心事故；最新策略日誌置於關鍵執行事件上方。"
 }

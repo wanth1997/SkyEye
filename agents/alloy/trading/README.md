@@ -14,7 +14,7 @@ Neither component starts, stops, signals, or attaches to the trading process.
 |---|---|
 | `config-linux.alloy.tmpl` | Per-strategy Loki fragment that reuses the existing central receiver |
 | `config-linux-metrics.alloy.tmpl` | Shared textfile collector for all Linux strategy outputs |
-| `deployment-linux-{robinhood,mainnet,ourbit,popdex,popdex-02}.env.example` | Credential-free Trading01 instance examples, including retired lanes. See `scripts/trading-target list` for the current inventory (`popdex` is `popdex-btc` and `popdex-02` is the ETH lane, both on the PopDEX venue). `popdex-02` leaves `TQ_EXECUTABLE` and `TQ_EXECUTOR_MAP` empty until an operator verifies them on the host, so `setup-linux.sh` refuses it as checked in |
+| `deployment-linux-{robinhood,mainnet,ourbit,popdex,popdex-02,popdex-multi-accounts}.env.example` | Credential-free Trading01 instance examples, including retired lanes. See `scripts/trading-target list` for the current inventory (`popdex` is `popdex-btc`, `popdex-02` is the ETH lane, and `popdex-multi-accounts` is the two-account random-rotation BTC lane on PopDEX). `popdex-02` leaves `TQ_EXECUTABLE` empty until an operator verifies it on the host, so `setup-linux.sh` refuses it as checked in; `popdex-multi-accounts` prefills `TQ_EXECUTABLE` and `TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex` for host verification |
 | `setup-linux.sh` | `add` (one-step install/update), `retire`, render-only, and explicit singleton migration |
 | `retire-linux.sh` | Per-strategy retirement with an exact rollback record (run via `setup-linux.sh retire`) |
 | `linux-common.sh` | Shared test-root, systemctl and path guards for the Linux scripts |
@@ -211,8 +211,26 @@ For the original Trading01 Alloy upgrade and shared probe replacement, see
 
 Adding `popdex-02` to Trading01 follows
 [the popdex-02 onboarding](../../../docs/trading01-popdex-02-onboarding.md): the
-lane is installed with `TQ_STRATEGY_DISABLED=1`, and two env values are filled
+lane is installed with `TQ_STRATEGY_DISABLED=1`, and `TQ_EXECUTABLE` is filled
 in on the host after a read-only check.
+
+Adding `popdex-multi-accounts` (two-account `routing.mode: random` PopDEX BTC
+lane replacing `popdex-btc`) follows
+[the popdex-multi-accounts onboarding](../../../docs/trading01-popdex-multi-accounts-onboarding.md).
+Multi-account same-exchange lanes reuse the comma-separated `TQ_EXECUTOR_MAP`
+syntax with distinct executors mapped to the same exchange (for example
+`TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex`): strategy-level equity,
+P&L, cycles, exchange volume and net position stay merged, and four
+low-cardinality per-executor breakdown metrics
+(`tnauqquant_current_executor_equity_usdt`,
+`tnauqquant_current_executor_real_pnl_usdt`,
+`tnauqquant_current_executor_cycles_completed`,
+`tnauqquant_current_run_executor_volume_usd`) are emitted strictly for
+allowlisted executors in `TQ_EXECUTOR_MAP`. Single-account and distinct-exchange
+lanes keep identical behavior and `.prom` output. Because `probe.sh` is shared,
+deploying this change to Trading01 stops and disables all
+`skyeye-trading-probe@*` units first as described under
+[Probe CPU limits and shared probe rollout](#probe-cpu-limits-and-shared-probe-rollout).
 
 Re-running `setup-macos.sh` on the Mac mini (`macmini-m2`) to install the
 current probe, P&L history builder and Trading log scrub, and pinning its Alloy
