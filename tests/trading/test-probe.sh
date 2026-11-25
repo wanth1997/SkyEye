@@ -951,18 +951,20 @@ if rg -q 'rogue-acct' "$METRICS_PATH"; then
   exit 1
 fi
 
-# 2) Close + gross_flat_verified clears position; next open on popdex-main updates cleanly.
+# 2) Confirmed coordinator_book exit clears position; delayed warmup from another account
+#    cannot clear a confirmed open position (C2).
 cat >>"$MULTI_LOG_PATH" <<EOF
-time=${today_local}T09:02:00.000${FIXTURE_OFFSET} level=INFO msg=ui_warmup_async_ready executor=popdex-rot2 reason=gross_flat_verified:coordinated_carrier_exit
+time=${today_local}T09:02:00.000${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=carrier_exit executor=popdex-rot2 net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book
 EOF
 run_probe
-assert_metric tnauqquant_current_position_btc 0 'base_asset="BTC",exchange="popdex",side="flat"'
+assert_metric tnauqquant_current_position_btc 0.00000000 'base_asset="BTC",exchange="popdex",side="flat"'
 assert_metric tnauqquant_current_net_position_btc 0 'base_asset="BTC"}'
 
 cat >>"$MULTI_LOG_PATH" <<EOF
 time=${today_local}T09:02:05.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10002.125 rebate_usdt=0.25 cash_pnl_usdt=1.875 real_pnl_usdt=2.125 risk_pnl_usdt=2.125 cycles_completed=1 risk_stopped=false samples=2 stable=true cycle_completed=true summary="PNL equity_start=10000.00 equity_now=10002.13 real_pnl=+2.1250 cycles=1 risk_stopped=false samples=2 stable=true cycle_completed=true" equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5002.13,rogue-acct:123.45 volume_usd_by_executor=popdex-rot2:28.20,rogue-acct:777.00 cycle_real_pnl_usdt=2.125 cycle_executor=popdex-rot2 cycle=1 session_cycle=1 cycle_id=m.1
 time=${today_local}T09:02:05.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10002.125 rebate_usdt=0.25 cash_pnl_usdt=1.875 real_pnl_usdt=2.125 risk_pnl_usdt=2.125 cycles_completed=1 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5002.13 volume_usd_by_executor=popdex-rot2:28.20 cycle_real_pnl_usdt=2.125 cycle_executor=popdex-rot2 cycle=1 session_cycle=1 cycle_id=m.1
 time=${today_local}T09:03:00.000${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=entry executor=popdex-main initiator_venue=popdex-main initiator_side=Long initiator_qty_btc=0.00040000 net_side=Long net_qty_btc=0.00040000 portfolio_projection=coordinator_book
+time=${today_local}T09:03:05.000${FIXTURE_OFFSET} level=INFO msg=ui_warmup_async_ready executor=popdex-rot2 reason=gross_flat_verified:coordinated_carrier_exit
 time=${today_local}T09:04:00.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10001.500 rebate_usdt=0.40 cash_pnl_usdt=1.100 real_pnl_usdt=1.500 risk_pnl_usdt=1.500 cycles_completed=2 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=popdex-main:4999.38,popdex-rot2:5002.13 volume_usd_by_executor=popdex-main:55.50,popdex-rot2:28.20,rogue-acct:888.00 cycle_real_pnl_usdt=-0.625 cycle_executor=popdex-main cycle=2 session_cycle=2 cycle_id=m.2
 time=${today_local}T09:04:30.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10001.500 rebate_usdt=0.40 cash_pnl_usdt=1.100 real_pnl_usdt=1.500 risk_pnl_usdt=1.500 cycles_completed=3 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=popdex-main:4999.38,popdex-rot2:5002.13 volume_usd_by_executor=popdex-main:55.50,popdex-rot2:28.20 cycle_real_pnl_usdt=99.0 cycle_executor=rogue-acct cycle=3 session_cycle=3 cycle_id=m.3
 EOF
@@ -984,7 +986,7 @@ assert_metric tnauqquant_current_executor_real_pnl_usdt -0.625 'exchange="popdex
 assert_metric tnauqquant_current_executor_real_pnl_usdt 2.125 'exchange="popdex",executor="popdex-rot2"'
 assert_metric tnauqquant_current_executor_cycles_completed 1 'exchange="popdex",executor="popdex-main"'
 assert_metric tnauqquant_current_executor_cycles_completed 1 'exchange="popdex",executor="popdex-rot2"'
-# New open position on popdex-main replaced prior gross-flat cleanly.
+# New open position on popdex-main survived delayed gross_flat_verified warmup from popdex-rot2.
 assert_metric tnauqquant_current_position_btc 0.00040000 'base_asset="BTC",exchange="popdex",side="long"'
 assert_metric tnauqquant_current_net_position_btc 0.0004 'base_asset="BTC"}'
 assert_position_help_pinned
@@ -997,6 +999,25 @@ if rg -q 'rogue-acct' "$METRICS_PATH"; then
   printf 'FAIL: non-allowlisted executor appeared in metrics output\n' >&2
   exit 1
 fi
+
+# 2b) Dedicated C2 replay: main finishes cycle -> rot2 opens confirmed Long 0.02 BTC ->
+#     main's delayed gross_flat_verified warmup finishes after the new open.
+printf 'case: multi-account delayed warmup from prior executor never clears open position (C2)\n'
+cat >"$MULTI_LOG_PATH" <<EOF
+time=${today_local}T09:10:00.000${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=carrier_exit executor=popdex-main net_side=Flat net_qty_btc=0.00000000 portfolio_projection=coordinator_book
+time=${today_local}T09:10:05.000${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=entry executor=popdex-rot2 initiator_venue=popdex-rot2 initiator_side=Long initiator_qty_btc=0.02000000 net_side=Long net_qty_btc=0.02000000 portfolio_projection=coordinator_book
+time=${today_local}T09:10:06.000${FIXTURE_OFFSET} level=INFO msg=ui_warmup_async_ready executor=popdex-main reason=gross_flat_verified:coordinated_carrier_exit
+EOF
+run_probe
+assert_metric tnauqquant_current_position_valid 1
+assert_metric tnauqquant_current_position_btc 0.02000000 'base_asset="BTC",exchange="popdex",side="long"'
+assert_metric tnauqquant_current_net_position_btc 0.02 'base_asset="BTC"}'
+
+# Restore full multi-account log before fail-closed checks.
+cat >"$MULTI_LOG_PATH" <<EOF
+time=${today_local}T09:00:00.100${FIXTURE_OFFSET} level=INFO msg=initial_equity_recorded equity_usdt=10000.00 equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5000.00
+time=${today_local}T09:04:00.000${FIXTURE_OFFSET} level=INFO msg=pnl_status equity_start=10000 equity_now=10001.500 rebate_usdt=0.40 cash_pnl_usdt=1.100 real_pnl_usdt=1.500 risk_pnl_usdt=1.500 cycles_completed=2 risk_stopped=false samples=2 stable=true cycle_completed=true equity_usdt_by_executor=popdex-main:4999.38,popdex-rot2:5002.13 volume_usd_by_executor=popdex-main:55.50,popdex-rot2:28.20 cycle_real_pnl_usdt=-0.625 cycle_executor=popdex-main cycle=2 session_cycle=2 cycle_id=m.2
+EOF
 
 # 3) Fail-closed: missing equity_usdt_by_executor or future pnl_status never falls back to earlier equity.
 cp "$MULTI_LOG_PATH" "$TEST_ROOT/multi.original.log"
@@ -1029,5 +1050,36 @@ printf 'time=2099-01-01T00:00:00Z level=INFO msg=initial_equity_recorded equity_
 run_probe
 assert_metric_missing tnauqquant_current_equity_usdt
 assert_metric_missing tnauqquant_current_executor_equity_usdt
+
+# 5) C3: unmapped rogue executor in warmup or coordinator_book must never autovivify
+#    the awk allowlist (neither hiding valid equities on rogue:bad nor fabricating 0 PnL/cycles).
+printf 'case: rogue executor warmup/book never poisons allowlist on bad equity or rogue-only cycle (C3)\n'
+cat >"$MULTI_LOG_PATH" <<EOF
+time=${today_local}T09:20:00.000${FIXTURE_OFFSET} level=INFO msg=ui_warmup_async_ready executor=rogue-acct reason=gross_flat_verified:coordinated_carrier_exit
+time=${today_local}T09:20:01.000${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=entry executor=rogue-acct initiator_venue=rogue-acct initiator_side=Long initiator_qty_btc=0.01000000 carrier_venue=popdex-main carrier_side=Flat carrier_qty_btc=0.00000000 net_side=Long net_qty_btc=0.01000000 portfolio_projection=coordinator_book
+time=${today_local}T09:20:02.000${FIXTURE_OFFSET} level=INFO msg=pnl_status stable=true cycle_completed=false equity_now=10000.00 real_pnl_usdt=0 cycles_completed=0 equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5000.00,rogue-acct:bad
+EOF
+run_probe
+assert_metric tnauqquant_current_executor_equity_usdt 5000.00 'exchange="popdex",executor="popdex-main"'
+assert_metric tnauqquant_current_executor_equity_usdt 5000.00 'exchange="popdex",executor="popdex-rot2"'
+if rg -q 'rogue-acct' "$METRICS_PATH"; then
+  printf 'FAIL: rogue executor leaked into equity metrics after warmup/book\n' >&2
+  exit 1
+fi
+
+cat >"$MULTI_LOG_PATH" <<EOF
+time=${today_local}T09:21:00.000${FIXTURE_OFFSET} level=INFO msg=ui_warmup_async_ready executor=rogue-acct reason=gross_flat_verified:coordinated_carrier_exit
+time=${today_local}T09:21:01.000${FIXTURE_OFFSET} level=INFO msg=trade_status state=settled phase=entry executor=rogue-acct initiator_venue=rogue-acct initiator_side=Long initiator_qty_btc=0.01000000 carrier_venue=popdex-main carrier_side=Flat carrier_qty_btc=0.00000000 net_side=Long net_qty_btc=0.01000000 portfolio_projection=coordinator_book
+time=${today_local}T09:21:02.000${FIXTURE_OFFSET} level=INFO msg=pnl_status stable=true cycle_completed=true cycle=1 session_cycle=1 cycle_id=r.1 cycle_executor=rogue-acct cycle_real_pnl_usdt=12.50 equity_now=10012.50 real_pnl_usdt=12.50 cycles_completed=1 equity_usdt_by_executor=popdex-main:5000.00,popdex-rot2:5012.50
+EOF
+run_probe
+assert_metric tnauqquant_current_executor_equity_usdt 5000.00 'exchange="popdex",executor="popdex-main"'
+assert_metric tnauqquant_current_executor_equity_usdt 5012.50 'exchange="popdex",executor="popdex-rot2"'
+assert_metric_missing tnauqquant_current_executor_real_pnl_usdt
+assert_metric_missing tnauqquant_current_executor_cycles_completed
+if rg -q 'rogue-acct' "$METRICS_PATH"; then
+  printf 'FAIL: rogue executor leaked into cycle metrics after warmup/book\n' >&2
+  exit 1
+fi
 
 printf 'PASS: trading probe contract\n'

@@ -211,9 +211,9 @@ scan_manifest_log() {
           equals = index(mapping_entries[i], "=")
           executor = substr(mapping_entries[i], 1, equals - 1)
           exchange = substr(mapping_entries[i], equals + 1)
-          mapped_executor[executor] = 1
-          executor_exchange[executor] = exchange
-          if (equals > 1) {
+          if (equals > 1 && executor != "" && exchange != "") {
+            mapped_executor[executor] = 1
+            executor_exchange[executor] = exchange
             executor_order[++executor_count] = executor
           }
           if (!(exchange in exchange_seen)) {
@@ -439,31 +439,33 @@ scan_manifest_log() {
         if (msg_last == "trade_status" && valid_number(volume_usd) &&
             volume_usd + 0 >= 0) {
           epoch = event_epoch(time_first)
-          if (epoch >= 0 && epoch <= future_limit) {
+          if (epoch >= 0 && epoch <= future_limit &&
+              (executor_last in executor_exchange)) {
             exchange = executor_exchange[executor_last]
-            if (exchange != "") {
-              trade_volume[exchange] += volume_usd
-              if (has_shared_exchange) {
-                trade_exec_volume[executor_last] += volume_usd
-              }
+            trade_volume[exchange] += volume_usd
+            if (has_shared_exchange) {
+              trade_exec_volume[executor_last] += volume_usd
             }
           }
         }
 
-        is_gross_flat = (msg_first == "ui_warmup_async_ready" &&
+        # On multi-account same-exchange lanes, per-executor async warmup from a
+        # prior cycle can complete after another account opens a new position; use
+        # version-ordered coordinator_book snapshots instead of gross_flat_verified.
+        is_gross_flat = (!has_shared_exchange &&
+            msg_first == "ui_warmup_async_ready" &&
             index(reason_first, "gross_flat_verified:") == 1 &&
-            executor_first != "" && mapped_executor[executor_first])
+            executor_first != "" && (executor_first in mapped_executor))
 
         if (is_gross_flat) {
           # A gross-flat readiness line clears all venues on a multi-exchange lane;
-          # a single-exchange lane (one or multiple accounts on one venue) adopts it
-          # as a venue source only after a two-leg line.
+          # a single-exchange lane adopts it as a venue source only after a two-leg line.
           if (exchange_count > 1 || latest_venue != "") {
             latest_venue = line_no "\t" (time_last == "" ? "-" : time_last) "\t-\tflat\t0\t-\tflat\t0\tgross_flat"
           }
         } else if (projection == "coordinator_book" &&
-            mapped_executor[initiator_venue] && mapped_executor[carrier_venue] &&
-            executor_exchange[initiator_venue] != executor_exchange[carrier_venue] &&
+            (initiator_venue in mapped_executor) && (carrier_venue in mapped_executor) &&
+            (!has_shared_exchange || executor_exchange[initiator_venue] != executor_exchange[carrier_venue]) &&
             initiator_side != "" && carrier_side != "" &&
             valid_number(initiator_qty) && valid_number(carrier_qty) &&
             initiator_qty + 0 >= 0 && carrier_qty + 0 >= 0) {
@@ -517,8 +519,8 @@ scan_manifest_log() {
             scolon = index(snapshot_entries[i], ":")
             executor = substr(snapshot_entries[i], 1, scolon - 1)
             volume = substr(snapshot_entries[i], scolon + 1)
-            exchange = executor_exchange[executor]
-            if (scolon > 1 && exchange != "" && valid_number(volume) && volume + 0 >= 0) {
+            if (scolon > 1 && (executor in executor_exchange) && valid_number(volume) && volume + 0 >= 0) {
+              exchange = executor_exchange[executor]
               snap_volume[exchange] += volume
               if (has_shared_exchange) {
                 snap_exec_volume[executor] += volume

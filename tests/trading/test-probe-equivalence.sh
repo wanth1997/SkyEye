@@ -1449,4 +1449,18 @@ touch_epoch "$LOG22B" "$(epoch_of 2025-07-17T08:03:00Z)"
 write_manifest "$RUN22B" "$LOG22B" "2025-07-17T08:00:00Z"
 assert_identical "scenario 22b: dual-exchange toobit-mexc-btc with initial_equity_recorded and cycle_executor matches baseline" "$NOW_DEFAULT"
 
+new_fixture popdex-btc-same-venue popdex_btc_same_venue_config 'popdex-main=popdex' Asia/Taipei
+RUN22C="20250717_080000_popdex_btc_same_venue_config"
+LOG22C="$REPO/logs/live-runs/$RUN22C.raw.log"
+cat >"$LOG22C" <<'EOF'
+time=2025-07-17T08:01:15Z level=INFO msg=position_update initiator_venue=popdex-main initiator_side=Long initiator_qty_btc=0.00100000 carrier_venue=popdex-main carrier_side=Flat carrier_qty_btc=0.00000000 net_side=Long net_qty_btc=0.00100000 portfolio_projection=coordinator_book
+EOF
+touch_epoch "$LOG22C" "$(epoch_of 2025-07-17T08:03:00Z)"
+write_manifest "$RUN22C" "$LOG22C" "2025-07-17T08:00:00Z"
+assert_identical "scenario 22c (C4): single-account coordinator_book with matching initiator/carrier venue matches baseline" "$NOW_DEFAULT"
+if ! grep -q '^tnauqquant_position_sample_timestamp_seconds{.*source="venue"} 1752739275$' "$TEXT_NEW/$TQ_TEXTFILE_NAME"; then
+  printf 'FAIL: scenario 22c (C4): expected venue sample timestamp 1752739275 on single-account same-venue coordinator_book\n' >&2
+  exit 1
+fi
+
 printf 'PASS: %s probe equivalence checks matched baseline byte-for-byte\n' "$PASS_COUNT"
