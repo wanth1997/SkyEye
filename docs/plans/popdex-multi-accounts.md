@@ -2,7 +2,7 @@
 
 - Linear: WAN-928
 - Request: popdex-multi-accounts-20261126
-- 狀態: 草稿（2026-11-26），待 manager 核准（PLAN_APPROVED）
+- 狀態: S1 實作完成並通過非 Docker 驗證（2026-11-26）；Docker／promtool 檢查 PENDING（待主機恢復 Docker 後補跑）
 
 ## 目標
 
@@ -112,9 +112,9 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 ### 4. `popdex-multi-accounts` Linux Env Example（隔離規格）
 
 新增 `agents/alloy/trading/deployment-linux-popdex-multi-accounts.env.example`（不更動既有的 `deployment-linux-popdex.env.example`）：
-- `TQ_STRATEGY=popdex-multi-accounts`、`TQ_INSTANCE_ID=popdex-multi-accounts`（預期值，Step 1 依主機 config YAML 核對）
-- `TQ_EXECUTABLE=` 留空（標記 `NOT INSTALLABLE AS CHECKED IN` 與 `# UNVERIFIED`，與 `popdex-02` 一致，由 operator 唯讀查 `/etc/tnauqquant/instances/popdex-multi-accounts/manager.env` 的 `TNAUQ_EXPECTED_BIN` 後填入）
-- `TQ_CONFIG_PATH=/home/ubuntu/tnauqquant/config/popdex_multi_accounts_config.yaml`（依 `popdex_btc_config.yaml` / `popdex_02_config.yaml` 慣例預填，Step 1 核對實際檔名）
+- `TQ_STRATEGY=popdex-multi-accounts`、`TQ_INSTANCE_ID=popdex-multi-accounts`（已向 tnauqquant 側確認，Step 1 依主機 config YAML 再次核對）
+- `TQ_EXECUTABLE=/home/ubuntu/tnauqquant/bin/popdex-multi-accounts`（依 D4 預填；Step 1 必須唯讀核對 `/etc/tnauqquant/instances/popdex-multi-accounts/manager.env` 的 `TNAUQ_EXPECTED_BIN` 並確認為可執行一般檔案，排除目錄或共用 launcher，且絕不讀取 `/home/ubuntu/tnauqquant/.env.popdex-multi-accounts`）
+- `TQ_CONFIG_PATH=/home/ubuntu/tnauqquant/config/popdex_multi_accounts_config.yaml`（已向 tnauqquant 側確認）
 - `TQ_RAW_LOG_GLOB=/home/ubuntu/tnauqquant/logs/live-runs/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]_popdex_multi_accounts_config.raw.log`（嚴格 contract 檔名 glob，通過 `test-linux-env-examples.sh` 隔離與相似度測試）
 - `TQ_RUN_MANIFEST=/home/ubuntu/tnauqquant/run-state/popdex-multi-accounts/current.json`
 - `TQ_DONE_MARKER=/home/ubuntu/tnauqquant/run-state/popdex-multi-accounts/current.done.json`
@@ -216,9 +216,9 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 
 ## 步驟
 
-- [ ] S1 `POPDEX-MULTI-20261126` WAN-928 — 實作雙帳號 `TQ_EXECUTOR_MAP` probe、env example、recording rules、Grafana 分項面板、測試與 onboarding 文件
-  files: agents/alloy/trading/probe.sh, agents/alloy/trading/linux-common.sh, agents/alloy/trading/setup-linux.sh, agents/alloy/trading/deployment-linux-popdex-multi-accounts.env.example, agents/alloy/trading/README.md, prometheus/rules/trading.yml, prometheus/rules/trading-targets.yml, prometheus/rules/tests/trading.test.yml, grafana/dashboards/Trading/trading-strategy-detail.json, docs/trading01-popdex-multi-accounts-onboarding.md, tests/trading/test-probe.sh, tests/trading/test-linux-setup.sh, tests/trading/test-central-config.sh, tests/trading/test-dashboard-semantics.sh, docs/plans/popdex-multi-accounts.md
-  狀態: 待 PLAN_APPROVED
+- [x] S1 `POPDEX-MULTI-20261126` WAN-928 — 實作雙帳號 `TQ_EXECUTOR_MAP` probe、env example、recording rules、Grafana 分項面板、測試與 onboarding 文件
+  files: agents/alloy/trading/probe.sh, agents/alloy/trading/linux-common.sh, agents/alloy/trading/setup-linux.sh, agents/alloy/trading/deployment-linux-popdex-multi-accounts.env.example, agents/alloy/trading/README.md, prometheus/rules/trading.yml, prometheus/rules/trading-targets.yml, prometheus/rules/tests/trading.test.yml, grafana/dashboards/Trading/trading-strategy-detail.json, docs/trading01-popdex-multi-accounts-onboarding.md, tests/trading/test-probe.sh, tests/trading/test-probe-equivalence.sh, tests/trading/test-linux-setup.sh, tests/trading/test-central-config.sh, tests/trading/test-dashboard-semantics.sh, docs/plans/popdex-multi-accounts.md
+  狀態: 已完成實作與非 Docker 驗證；Docker／promtool 項目 PENDING（待本機 Docker 恢復後補跑）
 
 - [ ] S2 `POPDEX-MULTI-DEPLOY` WAN-928 — 依 `docs/trading01-popdex-multi-accounts-onboarding.md` 執行 Trading01 host rollout、monitoring-prod `central-deploy`、canary 核對與 Stage 1 切換
   after: S1 (merged)
@@ -233,14 +233,15 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
 ## 已定的決策
 
 - 2026-11-26 Wan / manager（dispatch）：`popdex-multi-accounts` 採 `routing.mode: random` 輪替 `popdex-main`（沿用 `popdex-btc`）與 `popdex-rot2`（新帳號），兩支不對沖；面板上合併兩支帳號的 equity 與績效於同一 BTC 視圖，預設「合併為主、各帳號分項為輔」；所有告警維持 `shadow`。
-- 2026-11-26 worker（設計）：`TQ_EXECUTOR_MAP` 沿用逗號分隔 `<executor>=<exchange>`（`popdex-main=popdex,popdex-rot2=popdex`），不新增語法或 env 變數；4 個 per-executor 分項 metrics 僅在 `HAS_SHARED_EXCHANGE == 1` 時輸出，確保既有單帳號與雙交易所 lane 的 `.prom` 輸出 byte-for-byte 不變。
+- 2026-11-26 worker（設計）：`TQ_EXECUTOR_MAP` 沿用逗號分隔 `<executor>=<exchange>`（`popdex-main=popdex,popdex-rot2=popdex`），不新增語法或 env 變數；4 個 per-executor 分項 metrics 僅在 `HAS_SHARED_EXCHANGE == 1` 時輸出，嚴格以 `TQ_EXECUTOR_MAP` allowlist 過濾非 allowlist executor，確保既有單帳號與雙交易所 lane 的 `.prom` 輸出 byte-for-byte 不變。
+- 2026-11-26 manager（PLAN_APPROVED，D1）：本 PR 一併執行 `scripts/trading-target add --server trading01 --strategy popdex-multi-accounts --quote USDT`；merge 後至 Trading01 probe 上線前不得執行 `central-deploy`，已寫入 `docs/trading01-popdex-multi-accounts-onboarding.md`。
+- 2026-11-26 manager（PLAN_APPROVED，D2）：核准於 `Trading · 策略詳情` Row 5 新增 `各帳號明細 · 多帳號策略` 表格（合併為主、分項為輔）。
+- 2026-11-26 manager（PLAN_APPROVED，D3）：核准另建 `strategy="popdex-multi-accounts"` 並以兩階段退場 `popdex-btc`；停用 `tnauqquant@popdex-btc` 與啟動新 lane 一律由 Wan／tnauqquant 側執行，SkyEye 文件不含任何啟停 `tnauqquant@*` 指令。
+- 2026-11-26 manager（PLAN_APPROVED，D4）：已向 tnauqquant 側確認 config 為 `config/popdex_multi_accounts_config.yaml`、`instance_id: "popdex-multi-accounts"`、executors 為 `popdex-main`／`popdex-rot2`、lane env 為 `/home/ubuntu/tnauqquant/.env.popdex-multi-accounts`（禁止讀取）、`TQ_EXECUTABLE` 預填 `/home/ubuntu/tnauqquant/bin/popdex-multi-accounts` 並由 operator 於上線 Step 1 核對 `manager.env`。
 
 ## 待決問題
 
-- **D1（`trading-targets.yml` 加入時機，請 manager 核准時確認）**：是否於 S1（本 PR）一併執行 `scripts/trading-target add --server trading01 --strategy popdex-multi-accounts --quote USDT`？（先例 `popdex-btc`、`popdex-02` 皆於準備 PR 一併加入，並於 merge 後至 Trading01 probe 開始 remote-write 前暫停 `central-deploy`；若希望本 PR 先 merge 而不阻塞其他 `central-deploy`，可改由 S2 前另開單行 `trading-target add` PR。）**預設採本 PR 一併執行 `scripts/trading-target add`。**
-- **D2（各帳號分項面板位置與欄位，請 manager 確認）**：預設在 `Trading · 策略詳情` Row 5 新增 `各帳號明細 · 多帳號策略` 表格（4 個數值欄：目前餘額、歸屬實現損益、完成週期、本輪成交額），上方合併面板與 `Trading · 策略總覽` 結構不變。
-- **D3（`popdex-btc` 切換與歷史延續，請 manager 確認）**：預設採「另建 `strategy="popdex-multi-accounts"` + `popdex-btc` 兩階段停用／退場（Stage 1 `TQ_STRATEGY_DISABLED=1` 防雙跑、Stage 2 標準 Remove/retire）」，保留 `popdex-btc` 於 Prometheus/Loki 歷史供 Explore 查閱，不重指舊 `popdex-btc` probe。
-- **D4（Trading01 實際 config 檔名／`instance_id`，待 tnauqquant manager 或 Step 1 確認）**：env example 依慣例預填 `config/popdex_multi_accounts_config.yaml` 與 `instance_id: popdex-multi-accounts`，`TQ_EXECUTABLE=` 留空由 operator 唯讀核對；若 tnauqquant 側採不同檔名（例如 `popdex_rotation_btc_config.yaml`），請於核准或切換通知時告知以便同步對齊 `TQ_CONFIG_PATH` 與 `TQ_RAW_LOG_GLOB`。
+（無；D1–D4 已於 2026-11-26 `PLAN_APPROVED` 拍板。）
 
 ## 驗證
 
@@ -269,6 +270,6 @@ scripts/trading-target check
 
 ## 接續
 
-- 現況：已完成計畫草稿 `docs/plans/popdex-multi-accounts.md` 並作為 `feat/WAN-928-popdex-multi` 的第一個 commit；等待 manager 核准（`PLAN_APPROVED`）與確認 D1–D4。
-- 下一步：收到 `PLAN_APPROVED` 後依核准內容執行 S1（probe、setup-linux、env example、rules、dashboard、測試與 onboarding 文件），跑完 VERIFY 後回報 `DONE`。
+- 現況：S1 已於 `feat/WAN-928-popdex-multi` 實作並 commit 完成（含 probe、setup-linux、env example、target inventory、recording rules、Grafana 分項面板、測試與 `docs/trading01-popdex-multi-accounts-onboarding.md`）。非 Docker 套件（`test-probe.sh`、`test-probe-safety.sh`、`test-probe-equivalence.sh` 68/68、`test-linux-setup.sh`、`test-linux-env-examples.sh`、`test-trading-target.sh` 非 promtool 段、`test-central-config.sh` 非 promtool 段、`bash -n`、`shellcheck -x`、`jq empty`、`scripts/trading-target check`）全數通過；Docker／promtool 檢查（`promtool test rules`、`test-central-config.sh` promtool 段、`test-dashboard-semantics.sh`、`test-trading-target.sh` derived promtool 子檢查）因本機無 Docker 標記為 PENDING。
+- 下一步：本機 Docker 恢復後補跑 PENDING 的 promtool／dashboard-semantics 檢查；通過與 review／publish 後，等 tnauqquant manager 通知切換時窗再派 operator 執行 S2（`docs/trading01-popdex-multi-accounts-onboarding.md`），穩定觀察後執行 S3 退場 `popdex-btc`。
 - 即時狀態：有 manager 時看 `hm.py goals popdex-multi-accounts`；沒有 manager 時看各步驟的勾選與 `狀態:` 行，以及標頭的 Linear 卡 WAN-928。
