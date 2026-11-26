@@ -216,6 +216,61 @@ tests:
               summary: "Runner pool host pool-srv status variable is missing from GitHub"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
 
+  - name: POOL_STATUS variable reported, deleted (stale), fires after 10m, reappears and recovers
+    interval: 1m
+    input_series:
+      - series: 'up{job="pool-status",instance="pool-status:9101"}'
+        values: '1x35'
+      - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
+        values: '0+60x35'
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="srv"}'
+        values: '1x35'
+      # Reports normally steps 0..4 (t=0..4m), variable deleted at step 5 (t=5m: stale then absent
+      # through step 20 = t=20m), reappears at step 21 (t=21m=1260s) and resumes updating.
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+        values: '0+60x4 stale _x15 1260+60x14'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PoolHostStatusMissing
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: PoolHostStatusMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PoolHostStatusMissing
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: runner-pool
+              server_id: pool-srv
+              notification_mode: shadow
+              host: srv
+              job: pool-status
+              instance: pool-status:9101
+            exp_annotations:
+              summary: "Runner pool host pool-srv status variable is missing from GitHub"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+      - eval_time: 20m
+        alertname: PoolHostStatusMissing
+        exp_alerts:
+          - exp_labels:
+              severity: High
+              product: runner-pool
+              server_id: pool-srv
+              notification_mode: shadow
+              host: srv
+              job: pool-status
+              instance: pool-status:9101
+            exp_annotations:
+              summary: "Runner pool host pool-srv status variable is missing from GitHub"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+      - eval_time: 21m
+        alertname: PoolHostStatusMissing
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: PoolHostStatusMissing
+        exp_alerts: []
+
   # ─────────────────────── Unreadable host still alerts Offline ─────────────
   - name: unreadable host fires PoolHostUnreadable and still fires PoolHostOffline when stale
     interval: 1m
@@ -434,7 +489,7 @@ tests:
             exp_annotations:
               summary: "Runner pool host pool-srv2 heavy queue has 2 job(s) waiting with free slots"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
-      # PoolHostPausedLong: fires after 2h (120m) for both paused and draining.
+      # PoolHostPausedLong: fires after 2h (120m) for both paused and draining (state label merged).
       - eval_time: 119m
         alertname: PoolHostPausedLong
         exp_alerts: []
@@ -447,11 +502,10 @@ tests:
               server_id: pool-srv
               notification_mode: shadow
               host: srv
-              state: paused
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv has been paused for over 2h"
+              summary: "Runner pool host pool-srv has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
           - exp_labels:
               severity: Low
@@ -459,12 +513,109 @@ tests:
               server_id: pool-srv4
               notification_mode: shadow
               host: srv4
-              state: draining
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv4 has been draining for over 2h"
+              summary: "Runner pool host pool-srv4 has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+  - name: PoolHostPausedLong tracks continuous paused/draining across state transitions
+    interval: 1m
+    input_series:
+      - series: 'up{job="pool-status",instance="pool-status:9101"}'
+        values: '1x165'
+      - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
+        values: '0+60x165'
+      # pc: paused 90m (steps 0..89), then draining 60m (steps 90..149), then accepting (steps 150..165).
+      # Continuous non-accepting reaches 2h at t=120m without resetting at t=90m.
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="pc"}'
+        values: '0+60x165'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="paused"}'
+        values: '1x89 0x75'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="draining"}'
+        values: '0x89 1x59 0x15'
+      # srv: paused 130m (steps 0..129, already firing at t=120m), switches to draining at t=130m
+      # (steps 130..139) -> must NOT prematurely resolve; returns to accepting at t=140m -> resolves.
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+        values: '0+60x165'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv",state="paused"}'
+        values: '1x129 0x35'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv",state="draining"}'
+        values: '0x129 1x9 0x25'
+    alert_rule_test:
+      - eval_time: 119m
+        alertname: PoolHostPausedLong
+        exp_alerts: []
+      - eval_time: 121m
+        alertname: PoolHostPausedLong
+        exp_alerts:
+          - exp_labels:
+              severity: Low
+              product: runner-pool
+              server_id: pool-pc
+              notification_mode: shadow
+              host: pc
+              job: pool-status
+              instance: pool-status:9101
+            exp_annotations:
+              summary: "Runner pool host pool-pc has been paused or draining (not accepting jobs) for over 2h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+          - exp_labels:
+              severity: Low
+              product: runner-pool
+              server_id: pool-srv
+              notification_mode: shadow
+              host: srv
+              job: pool-status
+              instance: pool-status:9101
+            exp_annotations:
+              summary: "Runner pool host pool-srv has been paused or draining (not accepting jobs) for over 2h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+      # At t=131m and t=135m srv has switched paused -> draining and must remain firing without resolving.
+      - eval_time: 131m
+        alertname: PoolHostPausedLong
+        exp_alerts:
+          - exp_labels:
+              severity: Low
+              product: runner-pool
+              server_id: pool-pc
+              notification_mode: shadow
+              host: pc
+              job: pool-status
+              instance: pool-status:9101
+            exp_annotations:
+              summary: "Runner pool host pool-pc has been paused or draining (not accepting jobs) for over 2h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+          - exp_labels:
+              severity: Low
+              product: runner-pool
+              server_id: pool-srv
+              notification_mode: shadow
+              host: srv
+              job: pool-status
+              instance: pool-status:9101
+            exp_annotations:
+              summary: "Runner pool host pool-srv has been paused or draining (not accepting jobs) for over 2h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+      # At t=145m srv has returned to accepting (resolved at 140m) while pc is still draining.
+      - eval_time: 145m
+        alertname: PoolHostPausedLong
+        exp_alerts:
+          - exp_labels:
+              severity: Low
+              product: runner-pool
+              server_id: pool-pc
+              notification_mode: shadow
+              host: pc
+              job: pool-status
+              instance: pool-status:9101
+            exp_annotations:
+              summary: "Runner pool host pool-pc has been paused or draining (not accepting jobs) for over 2h"
+              runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+      # At t=151m pc has returned to accepting -> both resolved.
+      - eval_time: 151m
+        alertname: PoolHostPausedLong
+        exp_alerts: []
 
   # ─────────────────────── Recovery & BriefOffline (3m) ─────────────────────
   - name: 3-minute host outage then recovery fires only PoolHostBriefOffline and auto-resolves after 30m
@@ -676,18 +827,44 @@ tests:
       - eval_time: 44m
         alertname: PoolHostBriefOffline
         exp_alerts: []
+    promql_expr_test:
+      - expr: 'max_over_time(ALERTS{alertname="PoolHostBriefOffline",alertstate="firing"}[31m])'
+        eval_time: 44m
+        exp_samples: []
 
-  - name: 3-minute exporter container stop (up==0, series absent) never fires BriefOffline
+  - name: 3-minute exporter container stop (up==0, stale then absent) never fires BriefOffline
     interval: 30s
     input_series:
-      # Normal steps 0..20 (t=0..10m), container stopped 3m (steps 21..26: up=0, series absent),
+      # Normal steps 0..20 (t=0..10m), container stopped 3m (step 21 = t=10m30s writes stale
+      # marker on first failed scrape, steps 22..26 = t=11m00s..13m00s absent),
       # restarts at step 27 (t=13m30s=810s: up=1, read_ts=810, updated_ts=785).
       - series: 'up{job="pool-status",instance="pool-status:9101"}'
         values: '1x20 0x5 1x83'
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
-        values: '0 30+30x19 _x6 810+30x83'
+        values: '0 30+30x19 stale _x5 810+30x83'
       - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
-        values: '0 5+30x19 _x6 785+30x83'
+        values: '0 5+30x19 stale _x5 785+30x83'
+    promql_expr_test:
+      # Confirm both timestamp series genuinely vanish during the container stop (not carried via lookback).
+      - expr: 'pool_status_exporter_read_timestamp_seconds'
+        eval_time: 11m
+        exp_samples: []
+      - expr: 'pool_status_updated_timestamp_seconds'
+        eval_time: 11m
+        exp_samples: []
+      - expr: 'pool_status_exporter_read_timestamp_seconds'
+        eval_time: 13m
+        exp_samples: []
+      - expr: 'pool_status_updated_timestamp_seconds'
+        eval_time: 13m
+        exp_samples: []
+      # Confirm zero PoolHostBriefOffline firing across the entire 30-minute window after recovery.
+      - expr: 'max_over_time(ALERTS{alertname="PoolHostBriefOffline",alertstate="firing"}[30m])'
+        eval_time: 43m
+        exp_samples: []
+      - expr: 'max_over_time(ALERTS{alertname="PoolHostBriefOffline",alertstate="firing"}[31m])'
+        eval_time: 44m
+        exp_samples: []
     alert_rule_test:
       - eval_time: 13m
         alertname: PoolHostBriefOffline

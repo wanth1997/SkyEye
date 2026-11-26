@@ -89,9 +89,12 @@ groups:
           summary: "Runner pool host pool-{{ $labels.host }} is in held state and needs operator intervention"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
 
+      # Merge paused and draining before applying `for: 2h` so switching between
+      # them (e.g. paused -> draining) neither resets the timer nor prematurely
+      # resolves an already-firing alert.
       - alert: PoolHostPausedLong
         expr: |
-          (pool_status_state{state=~"paused|draining"} == 1)
+          (max without (state) (pool_status_state{state=~"paused|draining"}) == 1)
           and on(host) (time() - pool_status_updated_timestamp_seconds <= 120)
           and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
         for: 2h
@@ -101,7 +104,7 @@ groups:
           server_id: "pool-{{ $labels.host }}"
           notification_mode: shadow
         annotations:
-          summary: "Runner pool host pool-{{ $labels.host }} has been {{ $labels.state }} for over 2h"
+          summary: "Runner pool host pool-{{ $labels.host }} has been paused or draining (not accepting jobs) for over 2h"
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
 
       # Uses per-host pool_guard_memory_low_threshold_bytes when defined, with a
