@@ -156,6 +156,18 @@ format_wrapper_cmd() {
   printf '%s' "$cmd"
 }
 
+# Invoked via cleanup_remote EXIT trap below.
+# shellcheck disable=SC2329
+format_wrapper_list_cmd() {
+  local cmd="scripts/trading-account list --server $SERVER_ID --strategy $STRATEGY"
+  if [[ "$LOCAL_MODE" -eq 1 ]]; then
+    cmd="$cmd --local"
+  elif [[ "$SSH_TARGET_EXPLICIT" -eq 1 || ( -n "$SSH_TARGET" && "$SSH_TARGET" != "$SERVER_ID" ) ]]; then
+    cmd="$cmd --ssh-target $SSH_TARGET"
+  fi
+  printf '%s' "$cmd"
+}
+
 check_utc_window() {
   local now_hm hh mm total_min
   now_hm="$(date -u '+%H:%M')"
@@ -320,6 +332,9 @@ cleanup_remote() {
       if [[ "$ACCOUNT_CMD_RAN" -eq 1 ]]; then
         if [[ "$ACCOUNT_CMD_RC" -eq 0 ]]; then
           printf 'trading-account: account command result: %s succeeded (rc=0)\n' "$SUBCOMMAND" >&2
+        elif [[ "$ACCOUNT_CMD_RC" -eq 255 ]]; then
+          printf 'trading-account: account command result: UNKNOWN (%s interrupted by SSH transport error, ssh rc=255; remote change may have committed or rolled back)\n' "$SUBCOMMAND" >&2
+          printf 'Verify host state once SSH connectivity returns: %s\n' "$(format_wrapper_list_cmd)" >&2
         else
           printf 'trading-account: account command result: %s failed (rc=%s)\n' "$SUBCOMMAND" "$ACCOUNT_CMD_RC" >&2
         fi
@@ -333,6 +348,9 @@ cleanup_remote() {
       if [[ "$rc" -eq 0 ]]; then
         rc=4
       fi
+    elif [[ "$ACCOUNT_CMD_RAN" -eq 1 && "$ACCOUNT_CMD_RC" -eq 255 ]]; then
+      printf 'trading-account: account command result: UNKNOWN (%s interrupted by SSH transport error, ssh rc=255; remote change may have committed or rolled back)\n' "$SUBCOMMAND" >&2
+      printf 'Verify host state once SSH connectivity returns: %s\n' "$(format_wrapper_list_cmd)" >&2
     fi
   fi
   if [[ -n "${ERR_FILE:-}" && -e "$ERR_FILE" ]]; then

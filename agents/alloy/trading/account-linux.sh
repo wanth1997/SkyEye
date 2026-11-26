@@ -83,10 +83,11 @@ usage() {
     'Verification & timer state:' \
     '  - Never touches Alloy, Alloy fragments, ACLs, systemd units, or shared probe.sh.' \
     '  - Preserves probe timer enabled/active state.' \
-    '  - Active timer: waits for the next timer-triggered .prom snapshot (timestamp' \
-    '    advancing after the write) and verifies executor labels in that snapshot.' \
-    '  - Inactive timer (disabled or stopped): verifies env content and preserved' \
-    '    timer state only; live probe .prom output is not verified.' \
+    '  - Active timer: discards the first advancing post-write .prom snapshot (which' \
+    '    may come from an in-flight pre-write probe), waits for a second advancing' \
+    '    post-write snapshot, and verifies executor labels on that second snapshot.' \
+    '  - Inactive timer (confirmed ActiveState=inactive, not failed): verifies env' \
+    '    content and preserved timer state only; live probe .prom output is not verified.' \
     '  - Any verification failure or interruption (HUP/INT/TERM) atomically restores' \
     '    the backed-up env.' \
     '' \
@@ -577,15 +578,20 @@ timer_label() {
   esac
 }
 
-# Strict systemd timer query: distinguishes bus/query failures and missing
-# units (LoadState=not-found) from genuine disabled/inactive states.
+# Strict systemd timer query: distinguishes bus/query failures, missing
+# units (LoadState=not-found), failed/deactivating timers, and genuine
+# active vs inactive states.
 TIMER_QUERY_ENABLED=""
 TIMER_QUERY_ACTIVE=""
+TIMER_QUERY_ACTIVE_STATE=""
+TIMER_QUERY_UNIT_FILE_STATE=""
 TIMER_QUERY_ERROR=""
 query_timer_state() {
   local unit="$1"
   TIMER_QUERY_ENABLED=""
   TIMER_QUERY_ACTIVE=""
+  TIMER_QUERY_ACTIVE_STATE=""
+  TIMER_QUERY_UNIT_FILE_STATE=""
   TIMER_QUERY_ERROR=""
 
   local out="" err_file="" rc=0 err_msg=""
@@ -621,6 +627,7 @@ query_timer_state() {
     return 1
   fi
 
+  TIMER_QUERY_UNIT_FILE_STATE="$unit_file_state"
   case "$unit_file_state" in
     enabled|enabled-runtime)
       TIMER_QUERY_ENABLED=1
@@ -634,12 +641,16 @@ query_timer_state() {
       ;;
   esac
 
+  TIMER_QUERY_ACTIVE_STATE="$active_state"
   case "$active_state" in
     active|reloading|activating)
       TIMER_QUERY_ACTIVE=1
       ;;
-    inactive|failed|deactivating)
+    inactive)
       TIMER_QUERY_ACTIVE=0
+      ;;
+    failed|deactivating)
+      TIMER_QUERY_ACTIVE=""
       ;;
     *)
       TIMER_QUERY_ERROR="cannot determine active state of $unit (ActiveState=${active_state:-missing})"
@@ -724,6 +735,10 @@ timer_matches_prior() {
   if ! query_timer_state "$INSTANCE_TIMER"; then
     TIMER_CHECK_ERROR="$TIMER_QUERY_ERROR"
     return 2
+  fi
+  if [[ -z "$TIMER_QUERY_ACTIVE" ]]; then
+    TIMER_CHECK_ERROR="$INSTANCE_TIMER entered unexpected ActiveState=$TIMER_QUERY_ACTIVE_STATE (UnitFileState=$TIMER_QUERY_UNIT_FILE_STATE)"
+    return 1
   fi
   if [[ "$TIMER_QUERY_ENABLED" -eq "$PRIOR_TIMER_ENABLED" && "$TIMER_QUERY_ACTIVE" -eq "$PRIOR_TIMER_ACTIVE" ]]; then
     return 0
@@ -1203,11 +1218,17 @@ candidate_readback="$(installed_env_value TQ_EXECUTOR_MAP "$CANDIDATE_ENV")" || 
 if ! query_timer_state "$INSTANCE_TIMER"; then
   die "cannot verify probe timer state before writing: $TIMER_QUERY_ERROR"
 fi
+if [[ -z "$TIMER_QUERY_ACTIVE" ]]; then
+  die "refusing to modify $STRATEGY while probe timer $INSTANCE_TIMER is in ActiveState=$TIMER_QUERY_ACTIVE_STATE (UnitFileState=$TIMER_QUERY_UNIT_FILE_STATE)"
+fi
 PRIOR_TIMER_ENABLED="$TIMER_QUERY_ENABLED"
 PRIOR_TIMER_ACTIVE="$TIMER_QUERY_ACTIVE"
 
 if ! query_probe_service_state "$INSTANCE_SERVICE"; then
   die "cannot verify probe service state before writing: $SVC_QUERY_ERROR"
+fi
+if [[ "$SVC_ACTIVE_STATE" == "failed" ]]; then
+  die "refusing to modify $STRATEGY while probe service $INSTANCE_SERVICE is in ActiveState=failed (Result=${SVC_RESULT:-unknown})"
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -1273,17 +1294,17 @@ fi
 FINAL_PROM_TS=""
 FINAL_PROM_EXECS=""
 if [[ "$PRIOR_TIMER_ACTIVE" -eq 1 ]]; then
-  # Record post-write service invocation baseline and .prom baseline so any
-  # in-flight probe started before or during the env write is excluded and
-  # only a new timer-triggered probe execution started after the write can
-  # satisfy verification.
+  # Record post-write baseline and verify with two advancing post-write .prom
+  # snapshots: the first advancing snapshot may have come from an in-flight
+  # probe started before the env write and is discarded; the second advancing
+  # snapshot is validated without requiring polls to catch an idle gap between
+  # back-to-back oneshot runs.
   POST_WRITE_EPOCH="$(date +%s)"
   if ! query_probe_service_state "$INSTANCE_SERVICE"; then
     ROLLBACK_REASON="cannot inspect probe service baseline after write: $SVC_QUERY_ERROR"
     exit 1
   fi
   EXCLUDED_INVOCATION_ID="$SVC_INVOCATION_ID"
-  BASELINE_EXEC_MONO="$SVC_EXEC_START_MONO"
 
   BASELINE_PROM_EXISTS=0
   BASELINE_PROM_TS=""
@@ -1308,11 +1329,12 @@ if [[ "$PRIOR_TIMER_ACTIVE" -eq 1 ]]; then
   if [[ "$WAIT_SECONDS" -gt 0 ]]; then
     interruptible_sleep "$WAIT_SECONDS"
   fi
-  printf 'Waiting for next timer-triggered probe update to %s (timeout %ss)...\n' \
+  printf 'Waiting for post-write timer-triggered probe updates to %s (timeout %ss)...\n' \
     "$PROM_PATH" "$VERIFY_TIMEOUT"
 
+  FIRST_POST_WRITE_TS=""
   verified=0
-  last_fail_reason="probe timer did not publish an updated .prom snapshot within ${VERIFY_TIMEOUT}s"
+  last_fail_reason="probe timer did not publish two advancing post-write .prom snapshots within ${VERIFY_TIMEOUT}s"
   while true; do
     tm_rc=0
     timer_matches_prior || tm_rc=$?
@@ -1332,80 +1354,56 @@ if [[ "$PRIOR_TIMER_ACTIVE" -eq 1 ]]; then
       ROLLBACK_REASON="probe service $INSTANCE_SERVICE entered failed state (Result=${SVC_RESULT:-unknown})"
       exit 1
     fi
-
-    if [[ -z "$SVC_INVOCATION_ID" || "$SVC_INVOCATION_ID" == "$EXCLUDED_INVOCATION_ID" ]]; then
-      # Still on the pre-write / in-flight probe invocation (or never run yet).
-      # Advance baselines if that excluded invocation finishes and publishes a
-      # snapshot so its stale-env output can never satisfy verification.
-      if [[ "$SVC_EXEC_START_MONO" -gt "$BASELINE_EXEC_MONO" ]]; then
-        BASELINE_EXEC_MONO="$SVC_EXEC_START_MONO"
-      fi
-      excl_rc=0
-      read_prom_snapshot "$PROM_PATH" || excl_rc=$?
-      case "$excl_rc" in
-        11|12|13|14)
-          ROLLBACK_REASON="${PROM_READ_ERROR:-unsafe prom file: $PROM_PATH}"
-          exit 1
-          ;;
-        0)
-          excl_ts="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
-          if [[ -n "$excl_ts" ]]; then
-            if [[ "$BASELINE_PROM_EXISTS" -eq 0 || -z "$BASELINE_PROM_TS" || "$excl_ts" -gt "$BASELINE_PROM_TS" ]]; then
-              BASELINE_PROM_EXISTS=1
-              BASELINE_PROM_TS="$excl_ts"
-            fi
-          fi
-          ;;
-      esac
-      if [[ -n "$EXCLUDED_INVOCATION_ID" && "$SVC_INVOCATION_ID" == "$EXCLUDED_INVOCATION_ID" ]]; then
-        last_fail_reason="waiting for a new timer-triggered probe run after env write (InvocationID $EXCLUDED_INVOCATION_ID started before or during write; timer may not have triggered)"
-      else
-        last_fail_reason="probe service $INSTANCE_SERVICE has not run after env write; timer may not have triggered"
-      fi
-    elif [[ "$SVC_ACTIVE_STATE" != "inactive" ]]; then
-      last_fail_reason="post-write probe run ($SVC_INVOCATION_ID) is still running (ActiveState=$SVC_ACTIVE_STATE)"
-    elif [[ -n "$SVC_RESULT" && "$SVC_RESULT" != "success" ]]; then
+    if [[ "$SVC_ACTIVE_STATE" == "inactive" && -n "$SVC_RESULT" && "$SVC_RESULT" != "success" && \
+          -n "$SVC_INVOCATION_ID" && "$SVC_INVOCATION_ID" != "$EXCLUDED_INVOCATION_ID" ]]; then
       ROLLBACK_REASON="post-write probe service $INSTANCE_SERVICE finished with Result=$SVC_RESULT"
       exit 1
-    elif [[ "$SVC_EXEC_START_MONO" -le "$BASELINE_EXEC_MONO" ]]; then
-      last_fail_reason="probe ExecMainStartTimestampMonotonic ($SVC_EXEC_START_MONO) did not advance past baseline ($BASELINE_EXEC_MONO); timer may not have triggered"
-    else
-      snap_rc=0
-      read_prom_snapshot "$PROM_PATH" || snap_rc=$?
-      case "$snap_rc" in
-        11|12|13|14)
-          ROLLBACK_REASON="${PROM_READ_ERROR:-unsafe prom file: $PROM_PATH}"
-          exit 1
-          ;;
-        10)
-          last_fail_reason="probe output missing: $PROM_PATH"
-          ;;
-        0)
-          if [[ -z "$PROM_SNAPSHOT" ]]; then
-            last_fail_reason="probe output is empty: $PROM_PATH"
+    fi
+
+    snap_rc=0
+    read_prom_snapshot "$PROM_PATH" || snap_rc=$?
+    case "$snap_rc" in
+      11|12|13|14)
+        ROLLBACK_REASON="${PROM_READ_ERROR:-unsafe prom file: $PROM_PATH}"
+        exit 1
+        ;;
+      10)
+        last_fail_reason="probe output missing: $PROM_PATH"
+        ;;
+      0)
+        if [[ -z "$PROM_SNAPSHOT" ]]; then
+          last_fail_reason="probe output is empty: $PROM_PATH"
+        else
+          cur_ts="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
+          if [[ -z "$cur_ts" ]]; then
+            last_fail_reason="tnauqquant_probe_timestamp_seconds missing in $PROM_PATH"
+          elif [[ "$BASELINE_PROM_EXISTS" -eq 1 && -n "$BASELINE_PROM_TS" && "$cur_ts" -le "$BASELINE_PROM_TS" ]]; then
+            last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past post-write baseline ($BASELINE_PROM_TS); timer may not have triggered"
+          elif [[ "$cur_ts" -le "$POST_WRITE_EPOCH" ]]; then
+            last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past env write second ($POST_WRITE_EPOCH); timer may not have triggered"
+          elif [[ -z "$FIRST_POST_WRITE_TS" ]]; then
+            # Discard the first advancing post-write snapshot because it may
+            # have come from an in-flight probe started before our env write.
+            FIRST_POST_WRITE_TS="$cur_ts"
+            last_fail_reason="observed first post-write .prom snapshot ($FIRST_POST_WRITE_TS, may be from an in-flight probe started before or during write); waiting for a second advancing snapshot (timer may not have triggered)"
+          elif [[ "$cur_ts" -le "$FIRST_POST_WRITE_TS" ]]; then
+            last_fail_reason="observed first post-write .prom snapshot ($FIRST_POST_WRITE_TS, may be from an in-flight probe started before or during write); waiting for a second advancing snapshot (timer may not have triggered)"
+          elif [[ -n "$EXCLUDED_INVOCATION_ID" && "$SVC_INVOCATION_ID" == "$EXCLUDED_INVOCATION_ID" ]]; then
+            last_fail_reason="waiting for a new timer-triggered probe invocation after env write (InvocationID $EXCLUDED_INVOCATION_ID started before or during write; timer may not have triggered)"
           else
-            cur_ts="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
-            if [[ -z "$cur_ts" ]]; then
-              last_fail_reason="tnauqquant_probe_timestamp_seconds missing in $PROM_PATH"
-            elif [[ "$BASELINE_PROM_EXISTS" -eq 1 && -n "$BASELINE_PROM_TS" && "$cur_ts" -le "$BASELINE_PROM_TS" ]]; then
-              last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past baseline ($BASELINE_PROM_TS); timer may not have triggered"
-            elif [[ "$cur_ts" -le "$POST_WRITE_EPOCH" ]]; then
-              last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past env write second ($POST_WRITE_EPOCH); timer may not have triggered"
+            unexpected="$(snapshot_unexpected_executors "$PROM_SNAPSHOT" "$NEW_EXECUTOR_MAP")"
+            if [[ -n "$unexpected" ]]; then
+              last_fail_reason="unexpected executor series in $PROM_PATH: $(printf '%s' "$unexpected" | tr '\n' ' ')"
             else
-              unexpected="$(snapshot_unexpected_executors "$PROM_SNAPSHOT" "$NEW_EXECUTOR_MAP")"
-              if [[ -n "$unexpected" ]]; then
-                last_fail_reason="unexpected executor series in $PROM_PATH: $(printf '%s' "$unexpected" | tr '\n' ' ')"
-              else
-                FINAL_PROM_TS="$cur_ts"
-                FINAL_PROM_EXECS="$(snapshot_list_executors "$PROM_SNAPSHOT")"
-                verified=1
-                break
-              fi
+              FINAL_PROM_TS="$cur_ts"
+              FINAL_PROM_EXECS="$(snapshot_list_executors "$PROM_SNAPSHOT")"
+              verified=1
+              break
             fi
           fi
-          ;;
-      esac
-    fi
+        fi
+        ;;
+    esac
 
     if [[ "$SECONDS" -ge "$verify_deadline" ]]; then
       break

@@ -58,6 +58,7 @@ SYSTEMCTL_STATE="$TEST_ROOT/systemctl-state"
 SYSTEMCTL_LOG="$TEST_ROOT/systemctl.log"
 SYSTEMCTL_LOG_ALL="$TEST_ROOT/systemctl-all.log"
 SSH_LOG="$TEST_ROOT/ssh.log"
+SSH_STAGED_PATH_FILE="$TEST_ROOT/ssh-staged-path.txt"
 TAR_CAPTURE="$TEST_ROOT/received.tar"
 REMOTE_STAGING_PARENT="$TEST_ROOT/remote-tmp"
 
@@ -117,10 +118,15 @@ if [[ "$remote_cmd" == *"__SKYEYE_STAGE__="* ]]; then
   if [[ -n "${FAKE_SSH_REMOTE_TMPDIR:-}" ]]; then
     # Run remote_stage_cmd verbatim with a space-containing remote TMPDIR
     # to prove scripts/trading-account ignores remote TMPDIR.
-    TMPDIR="$FAKE_SSH_REMOTE_TMPDIR" exec sh -c "$remote_cmd" <"$TAR_CAPTURE"
+    stage_result="$(TMPDIR="$FAKE_SSH_REMOTE_TMPDIR" sh -c "$remote_cmd" <"$TAR_CAPTURE")"
+  else
+    local_stage_cmd="${remote_cmd/\/tmp\/skyeye-trading-account.XXXXXX/$REMOTE_STAGING_PARENT/skyeye-trading-account.XXXXXX}"
+    stage_result="$(sh -c "$local_stage_cmd" <"$TAR_CAPTURE")"
   fi
-  local_stage_cmd="${remote_cmd/\/tmp\/skyeye-trading-account.XXXXXX/$REMOTE_STAGING_PARENT/skyeye-trading-account.XXXXXX}"
-  exec sh -c "$local_stage_cmd" <"$TAR_CAPTURE"
+  created_dir="$(printf '%s\n' "$stage_result" | sed -n 's/^__SKYEYE_STAGE__=//p' | tail -n 1)"
+  printf '%s\n' "$created_dir" >"$SSH_STAGED_PATH_FILE"
+  printf '%s\n' "$stage_result"
+  exit 0
 fi
 
 # Sudo execution invocation (Step 2)
@@ -134,6 +140,10 @@ if [[ "${FAKE_SSH_EXEC_LOCAL:-0}" == "1" ]]; then
   local_cmd="$remote_cmd"
   local_cmd="${local_cmd#sudo -n -- }"
   local_cmd="${local_cmd#sudo -- }"
+  if [[ -n "${FAKE_SSH_EXEC_EXIT_OVERRIDE:-}" ]]; then
+    sh -c "$local_cmd" || true
+    exit "$FAKE_SSH_EXEC_EXIT_OVERRIDE"
+  fi
   exec sh -c "$local_cmd"
 fi
 
@@ -148,18 +158,18 @@ export SKYEYE_SSH_BIN="$FAKE_BIN/ssh"
 # Stub date supporting both fixed FAKE_UTC_HM and sequential FAKE_UTC_HM_SEQ_FILE (C5).
 REAL_DATE="$(command -v date)"
 cat >"$FAKE_BIN/date" <<EOF
-#!/usr/bin/env bash
-if [[ "\${1:-}" == "-u" && "\${2:-}" == "+%H:%M" ]]; then
-  if [[ -n "\${FAKE_UTC_HM_SEQ_FILE:-}" && -f "\$FAKE_UTC_HM_SEQ_FILE" ]]; then
+#!/bin/sh
+if [ "\${1:-}" = "-u" ] && [ "\${2:-}" = "+%H:%M" ]; then
+  if [ -n "\${FAKE_UTC_HM_SEQ_FILE:-}" ] && [ -f "\$FAKE_UTC_HM_SEQ_FILE" ]; then
     val="\$(head -n 1 "\$FAKE_UTC_HM_SEQ_FILE")"
-    if [[ -n "\$val" ]]; then
+    if [ -n "\$val" ]; then
       tail -n +2 "\$FAKE_UTC_HM_SEQ_FILE" >"\$FAKE_UTC_HM_SEQ_FILE.next"
       mv "\$FAKE_UTC_HM_SEQ_FILE.next" "\$FAKE_UTC_HM_SEQ_FILE"
       printf '%s\n' "\$val"
       exit 0
     fi
   fi
-  if [[ -n "\${FAKE_UTC_HM:-}" ]]; then
+  if [ -n "\${FAKE_UTC_HM:-}" ]; then
     printf '%s\n' "\$FAKE_UTC_HM"
     exit 0
   fi
@@ -170,18 +180,20 @@ EOF
 # Stub cp supporting deterministic fault injection or mid-rollback hook (C3, C20).
 REAL_CP="$(command -v cp)"
 cat >"$FAKE_BIN/cp" <<EOF
-#!/usr/bin/env bash
-if [[ -n "\${FAKE_FAIL_CP_PATTERN:-}" ]]; then
+#!/bin/sh
+if [ -n "\${FAKE_FAIL_CP_PATTERN:-}" ]; then
   for arg in "\$@"; do
-    if [[ "\$arg" == *"\$FAKE_FAIL_CP_PATTERN"* ]]; then
-      if [[ -n "\${FAKE_CP_HOOK:-}" && -x "\$FAKE_CP_HOOK" ]]; then
-        "\$FAKE_CP_HOOK" "\$arg"
-      fi
-      if [[ "\${FAKE_FAIL_CP_EXIT:-1}" != "0" ]]; then
-        printf 'stub cp: injected failure for %s\n' "\$arg" >&2
-        exit 1
-      fi
-    fi
+    case "\$arg" in
+      *"\$FAKE_FAIL_CP_PATTERN"*)
+        if [ -n "\${FAKE_CP_HOOK:-}" ] && [ -x "\$FAKE_CP_HOOK" ]; then
+          "\$FAKE_CP_HOOK" "\$arg"
+        fi
+        if [ "\${FAKE_FAIL_CP_EXIT:-1}" != "0" ]; then
+          printf 'stub cp: injected failure for %s\n' "\$arg" >&2
+          exit 1
+        fi
+        ;;
+    esac
   done
 fi
 exec "$REAL_CP" "\$@"
@@ -452,11 +464,11 @@ EOF
 
 chmod 755 "$FAKE_BIN"/*
 export PATH="$FAKE_BIN:$PATH"
-export SYSTEM_ROOT SYSTEMCTL_STATE SYSTEMCTL_LOG SYSTEMCTL_LOG_ALL SSH_LOG TAR_CAPTURE REMOTE_STAGING_PARENT
+export SYSTEM_ROOT SYSTEMCTL_STATE SYSTEMCTL_LOG SYSTEMCTL_LOG_ALL SSH_LOG SSH_STAGED_PATH_FILE TAR_CAPTURE REMOTE_STAGING_PARENT
 export FAKE_PASSWD_HOME="$TEST_ROOT"
 export FAKE_UTC_HM="12:00"
 export SKYEYE_ACCOUNT_WAIT_SECONDS=0
-export SKYEYE_ACCOUNT_VERIFY_TIMEOUT=4
+export SKYEYE_ACCOUNT_VERIFY_TIMEOUT=6
 export SKYEYE_ACCOUNT_POLL_INTERVAL=1
 
 printf 'case: static safety invariants and help text\n'
@@ -721,8 +733,15 @@ wait_env_change_and_next_second() {
 spawn_timer_tick_on_env_change() {
   local strat="$1"
   local env_path="$SYSTEM_ROOT/etc/skyeye-trading/instances/$strat.env"
+  local prom_path="$TEXTFILE_DIR/tnauqquant-$strat.prom"
   (
     if wait_env_change_and_next_second "$env_path"; then
+      # Snapshot #1 (advancing post-write timestamp that account-linux.sh discards as potentially in-flight)
+      bump_probe_invocation "$strat"
+      printf 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="%s"} %s\n' \
+        "$strat" "$(date +%s)" >"$prom_path"
+      # Snapshot #2 (full real probe.sh run with the newly written env, validated by account-linux.sh)
+      wait_next_epoch_second "$(date +%s)"
       simulate_timer_probe_run "$strat"
     fi
   ) &
@@ -1011,6 +1030,23 @@ rm -f "$SYSTEMCTL_STATE/notfound_skyeye-trading-probe@$MULTI_STRAT.service"
 [[ "$rc" -eq 1 && "$c15_snf_out" == *"LoadState=not-found"* ]] || \
   fail "C15: missing service unit was not refused cleanly (rc=$rc): $c15_snf_out"
 
+printf 'case: C21 failed probe timer or failed probe service is refused before write with actual state\n'
+touch "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.timer"
+rc=0
+c21_tm_out="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
+rm -f "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.timer"
+[[ "$rc" -eq 1 && "$c21_tm_out" == *"ActiveState=failed"* && "$c21_tm_out" != *"enabled/inactive (preserved)"* ]] || \
+  fail "C21: failed timer was not refused before write with actual state (rc=$rc): $c21_tm_out"
+
+touch "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
+rc=0
+c21_svc_out="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
+rm -f "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
+[[ "$rc" -eq 1 && "$c21_svc_out" == *"ActiveState=failed"* ]] || \
+  fail "C21: failed probe service was not refused before write with actual state (rc=$rc): $c21_svc_out"
+
 [[ "$before_sha" == "$(sha_of "$MULTI_ENV")" && "$before_backups" == "$(backup_count)" ]] || \
   fail "refused calls mutated env or created backups"
 
@@ -1052,7 +1088,7 @@ exec 6>&-
 # Interleaved test: start account add waiting on timer tick (holding lock),
 # verify BOTH retire and a second account add are refused while the lock is held.
 c1_out_file="$TEST_ROOT/c1-add.out"
-SKYEYE_ACCOUNT_VERIFY_TIMEOUT=8 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+SKYEYE_ACCOUNT_VERIFY_TIMEOUT=10 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 \
   >"$c1_out_file" 2>&1 &
 c1_pid=$!
@@ -1082,17 +1118,19 @@ if acct_race="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
 fi
 [[ "$acct_race" == *"skyeye-alloy.lock"* ]] || fail "C1: concurrent account refusal unclear: $acct_race"
 
-# Now trigger the simulated timer tick so the first account add commits cleanly.
+# Trigger two advancing post-write timer ticks so the first account add commits cleanly.
+wait_next_epoch_second "$(date +%s)"
+simulate_timer_probe_run "$MULTI_STRAT"
 wait_next_epoch_second "$(date +%s)"
 simulate_timer_probe_run "$MULTI_STRAT"
 wait "$c1_pid" || fail "C1: first account add failed: $(cat "$c1_out_file")"
 assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex,popdex-rot3=popdex$'
 
-# Restore back to 2 executors via remove with simulated timer tick.
-spawn_timer_tick_on_env_change "$MULTI_STRAT"
+# Restore back to 2 executors (fast inactive fixture reset; active remove tested below in C2 & timer combos).
+rm -f "$MULTI_TIMER_ACTIVE"
 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 >/dev/null
-wait_bg_timer
+touch "$MULTI_TIMER_ACTIVE"
 assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex$'
 
 # ---- C2 & C12: Never touches Alloy fragments / shared files / Alloy service; account-only output ----
@@ -1195,7 +1233,7 @@ env_before_c4="$(sha_of "$MULTI_ENV")"
 # spawn any timer tick after the env write -> must time out and roll back!
 simulate_timer_probe_run "$MULTI_STRAT"
 rc=0
-c4_out="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=2 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+c4_out="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
 [[ "$rc" -eq 1 ]] || fail "C4: no-timer-trigger expected rc=1, got rc=$rc: $c4_out"
 [[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "C4: no-timer-trigger did not restore env"
@@ -1282,19 +1320,85 @@ SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
 touch "$MULTI_TIMER_ACTIVE"
 [[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "C4 cleanup did not restore 2-executor env"
 
-# Also verify unexpected executor in post-write .prom triggers rollback, and failed probe service triggers rollback.
-touch "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
+printf 'case: C22 back-to-back oneshot runs keeping service ActiveState=activating on every poll still commit on second post-write snapshot\n'
+# Reproduces the continuous oneshot timing where the previous probe has already
+# published its .prom snapshot and the next oneshot has already started
+# (ActiveState=activating) whenever account-linux.sh polls. InvocationID and
+# .prom timestamps keep advancing while ActiveState NEVER reads inactive.
+touch "$SYSTEMCTL_STATE/activating_${MULTI_SVC}"
+C22_T1_FILE="$TEST_ROOT/c22-t1.txt"
+rm -f "$C22_T1_FILE"
+(
+  if wait_env_change_and_next_second "$MULTI_ENV"; then
+    # Tick 1 (post-write): publishes snapshot #1 while service stays activating (next run starts immediately)
+    bump_probe_invocation "$MULTI_STRAT"
+    # shellcheck disable=SC2016
+    env -i PATH="$PATH" FAKE_UTC_HM="12:00" bash -c \
+      'set -a; source "$1"; set +a; exec "$2"' bash "$MULTI_ENV" "$INSTALLED_PROBE"
+    awk '/^tnauqquant_probe_timestamp_seconds\{/ { print $NF; exit }' "$MULTI_PROM" >"$C22_T1_FILE"
+    # Tick 2: advances InvocationID and timestamp while ActiveState remains activating throughout
+    wait_next_epoch_second "$(date +%s)"
+    bump_probe_invocation "$MULTI_STRAT"
+    # shellcheck disable=SC2016
+    env -i PATH="$PATH" FAKE_UTC_HM="12:00" bash -c \
+      'set -a; source "$1"; set +a; exec "$2"' bash "$MULTI_ENV" "$INSTALLED_PROBE"
+    # Tick 3 (safety tick if poll missed tick 1)
+    wait_next_epoch_second "$(date +%s)"
+    bump_probe_invocation "$MULTI_STRAT"
+    # shellcheck disable=SC2016
+    env -i PATH="$PATH" FAKE_UTC_HM="12:00" bash -c \
+      'set -a; source "$1"; set +a; exec "$2"' bash "$MULTI_ENV" "$INSTALLED_PROBE"
+  fi
+) &
+c22_pid=$!
+BG_PIDS+=("$c22_pid")
+
+c22_rc=0
+c22_out="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=10 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || c22_rc=$?
+kill "$c22_pid" 2>/dev/null || true
+wait "$c22_pid" 2>/dev/null || true
+rm -f "$SYSTEMCTL_STATE/activating_${MULTI_SVC}"
+[[ "$c22_rc" -eq 0 && "$c22_out" == *"Account add committed"* && "$c22_out" == *"prom_verified:"* ]] || \
+  fail "C22 continuous activating oneshot run failed (rc=$c22_rc): $c22_out"
+c22_t1="$(cat "$C22_T1_FILE")"
+c22_final="$(sed -n 's/.*probe_timestamp_seconds=\([0-9]*\).*/\1/p' <<<"$c22_out" | head -n 1)"
+[[ -n "$c22_t1" && -n "$c22_final" && "$c22_final" -gt "$c22_t1" ]] || \
+  fail "C22 did not verify on second advancing snapshot (t1=$c22_t1 final=$c22_final): $c22_out"
+
+# Restore back to 2 executors (fast inactive cleanup)
+rm -f "$MULTI_TIMER_ACTIVE"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 >/dev/null
+touch "$MULTI_TIMER_ACTIVE"
+[[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "C22 cleanup did not restore 2-executor env"
+
+# Verify probe service entering failed state AFTER env write triggers rollback.
+HOOK_SVC_FAIL_AFTER_WRITE="$TEST_ROOT/hook-svc-fail-after-write.sh"
+cat >"$HOOK_SVC_FAIL_AFTER_WRITE" <<EOF
+#!/usr/bin/env bash
+if [[ "\$(shasum -a 256 "$MULTI_ENV" | awk '{print \$1}')" != "$env_before_c4" ]]; then
+  touch "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
+fi
+EOF
+chmod 755 "$HOOK_SVC_FAIL_AFTER_WRITE"
 rc=0
-fail_svc_out="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+fail_svc_out="$(FAKE_SHOW_SERVICE_HOOK="$HOOK_SVC_FAIL_AFTER_WRITE" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
 rm -f "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
 [[ "$rc" -eq 1 && "$fail_svc_out" == *"entered failed state"* ]] || \
-  fail "failed probe service rollback check failed (rc=$rc): $fail_svc_out"
-[[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "failed probe service did not restore env"
+  fail "post-write failed probe service rollback check failed (rc=$rc): $fail_svc_out"
+[[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "post-write failed probe service did not restore env"
 
-# Unexpected executor written by a post-write probe run triggers rollback
+# Unexpected executor written on the second post-write snapshot triggers rollback
 (
   if wait_env_change_and_next_second "$MULTI_ENV"; then
+    # Snapshot #1 (discarded as potentially in-flight)
+    bump_probe_invocation "$MULTI_STRAT"
+    printf 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="%s"} %s\n' \
+      "$MULTI_STRAT" "$(date +%s)" >"$MULTI_PROM"
+    # Snapshot #2 (validated: contains unexpected ghost-exec)
+    wait_next_epoch_second "$(date +%s)"
     bump_probe_invocation "$MULTI_STRAT"
     {
       printf 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="%s"} %s\n' "$MULTI_STRAT" "$(date +%s)"
@@ -1305,7 +1409,7 @@ rm -f "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
 ghost_pid=$!
 BG_PIDS+=("$ghost_pid")
 rc=0
-ghost_out="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=2 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+ghost_out="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=3 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
 wait "$ghost_pid" 2>/dev/null || true
 [[ "$rc" -eq 1 && "$ghost_out" == *"ghost-exec"* ]] || fail "unexpected executor check failed (rc=$rc): $ghost_out"
@@ -1559,14 +1663,12 @@ done
 
 # --local mode runs without SSH
 : >"$SSH_LOG"
-spawn_timer_tick_on_env_change "$MULTI_STRAT"
+rm -f "$MULTI_TIMER_ACTIVE"
 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$WRAPPER" add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 --local >/dev/null
-wait_bg_timer
 [[ ! -s "$SSH_LOG" ]] || fail "--local invoked ssh"
 assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex,popdex-rot3=popdex$'
 
-rm -f "$MULTI_TIMER_ACTIVE"
 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$WRAPPER" remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 --local >/dev/null
 touch "$MULTI_TIMER_ACTIVE"
@@ -1699,23 +1801,26 @@ exec 6>&-
 [[ "$lock_host_err" == *"sudo $TRADING_DIR/setup-linux.sh account add --server trading01 --strategy $MULTI_STRAT --executor popdex-rot3 --dry-run"* ]] || \
   fail "C8: host-side retry did not preserve host mode and --dry-run: $lock_host_err"
 
-# ---- C19: Remote staging ignores space-containing TMPDIR & reports cleanup failures separately ----
+# ---- C19, C23, C24: Remote staging path, cleanup failures (no stderr-derived rm -rf), and SSH rc=255 ----
 
 printf 'case: C19 remote staging uses supported /tmp path ignoring space-containing remote TMPDIR\n'
 : >"$SSH_LOG"
+: >"$SSH_STAGED_PATH_FILE"
 c19_sp_out="$(FAKE_SSH_REMOTE_TMPDIR="/tmp/dir with spaces" FAKE_SSH_EXEC_LOCAL=1 \
   SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$WRAPPER" list --server trading01 --strategy "$MULTI_STRAT" --ssh-target ubuntu@t01)"
 [[ "$c19_sp_out" == *"TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex"* ]] || \
   fail "C19 space TMPDIR remote list failed: $c19_sp_out"
+c19_sp_created="$(cat "$SSH_STAGED_PATH_FILE")"
 c19_rm_path="$(sed -n 's/^FLAGS=-T TARGET=ubuntu@t01 CMD=rm -rf -- '\''\([^'\'']*\)'\''$/\1/p' "$SSH_LOG" | tail -n 1)"
-[[ "$c19_rm_path" == /tmp/skyeye-trading-account.* && ! -e "$c19_rm_path" ]] || \
-  fail "C19 space TMPDIR did not stage under /tmp or leaked dir: path='$c19_rm_path' log=$(cat "$SSH_LOG")"
+[[ "$c19_sp_created" == /tmp/skyeye-trading-account.* && "$c19_rm_path" == "$c19_sp_created" && ! -e "$c19_sp_created" ]] || \
+  fail "C19 space TMPDIR did not stage under /tmp or leaked dir: created='$c19_sp_created' rm='$c19_rm_path' log=$(cat "$SSH_LOG")"
 
-printf 'case: C19 remote temp cleanup failure returns non-zero and reports account result and residual path separately\n'
+printf 'case: C19 & C24 remote temp cleanup failure returns non-zero and reports exact stub-created residual path (reclaimed by TEST_ROOT cleanup)\n'
 # 1) Read-only list succeeds, but remote rm -rf fails -> rc=4, stdout has list,
-#    stderr separates account succeeded (rc=0) from exact residual remote path.
+#    stderr separates account succeeded (rc=0) from exact residual path created by SSH stub.
 : >"$SSH_LOG"
+: >"$SSH_STAGED_PATH_FILE"
 c19_list_stdout="$TEST_ROOT/c19-list.out"
 c19_list_stderr="$TEST_ROOT/c19-list.err"
 c19_list_rc=0
@@ -1725,17 +1830,20 @@ FAKE_SSH_CLEANUP_FAIL=1 FAKE_SSH_EXEC_LOCAL=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_
 [[ "$c19_list_rc" -eq 4 ]] || \
   fail "C19 cleanup failure on list expected rc=4, got $c19_list_rc: $(cat "$c19_list_stderr")"
 assert_contains "$c19_list_stdout" '^configured_executors \(TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex\):$'
+c19_list_expected="$(cat "$SSH_STAGED_PATH_FILE")"
+[[ "$c19_list_expected" == "$REMOTE_STAGING_PARENT"/skyeye-trading-account.* && -d "$c19_list_expected" ]] || \
+  fail "C24 stub did not record staged dir under TEST_ROOT: $c19_list_expected"
 c19_residual="$(sed -n 's/^.*residual path on ubuntu@t01: //p' "$c19_list_stderr" | head -n 1)"
-[[ -n "$c19_residual" && -d "$c19_residual" ]] || \
-  fail "C19 cleanup failure did not report existing residual dir: $(cat "$c19_list_stderr")"
+[[ "$c19_residual" == "$c19_list_expected" ]] || \
+  fail "C19/C24 reported residual path '$c19_residual' != stub-created '$c19_list_expected': $(cat "$c19_list_stderr")"
 assert_contains "$c19_list_stderr" 'account command result: list succeeded \(rc=0\)'
 assert_contains "$c19_list_stderr" 'remote temp cleanup FAILED'
-assert_contains "$c19_list_stderr" "Manual cleanup: ssh 'ubuntu@t01' rm -rf -- '$c19_residual'"
-rm -rf -- "$c19_residual"
+assert_contains "$c19_list_stderr" "Manual cleanup: ssh 'ubuntu@t01' rm -rf -- '$c19_list_expected'"
 
 # 2) Committed add succeeds, but remote rm -rf fails -> rc=4, env IS committed,
-#    stderr separates add succeeded (rc=0) from exact residual remote path.
+#    stderr separates add succeeded (rc=0) from exact stub-created residual path.
 rm -f "$MULTI_TIMER_ACTIVE" # fast inactive commit to test wrapper cleanup reporting
+: >"$SSH_STAGED_PATH_FILE"
 c19_add_stdout="$TEST_ROOT/c19-add.out"
 c19_add_stderr="$TEST_ROOT/c19-add.err"
 c19_add_rc=0
@@ -1746,12 +1854,57 @@ FAKE_SSH_CLEANUP_FAIL=1 FAKE_SSH_EXEC_LOCAL=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_
   fail "C19 cleanup failure on committed add expected rc=4, got $c19_add_rc: $(cat "$c19_add_stderr")"
 assert_contains "$c19_add_stdout" '^Account add committed for trading01/popdex-multi-accounts:$'
 assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex,popdex-rot3=popdex$'
+c19_add_expected="$(cat "$SSH_STAGED_PATH_FILE")"
+[[ "$c19_add_expected" == "$REMOTE_STAGING_PARENT"/skyeye-trading-account.* && -d "$c19_add_expected" ]] || \
+  fail "C24 stub did not record staged dir under TEST_ROOT for add: $c19_add_expected"
 c19_add_residual="$(sed -n 's/^.*residual path on ubuntu@t01: //p' "$c19_add_stderr" | head -n 1)"
-[[ -n "$c19_add_residual" && -d "$c19_add_residual" ]] || \
-  fail "C19 cleanup failure on add did not report existing residual dir: $(cat "$c19_add_stderr")"
+[[ "$c19_add_residual" == "$c19_add_expected" ]] || \
+  fail "C19/C24 reported residual path '$c19_add_residual' != stub-created '$c19_add_expected': $(cat "$c19_add_stderr")"
 assert_contains "$c19_add_stderr" 'account command result: add succeeded \(rc=0\)'
 assert_contains "$c19_add_stderr" 'remote temp cleanup FAILED'
-rm -rf -- "$c19_add_residual"
+# Restore 2-executor env cleanly (residual dirs under REMOTE_STAGING_PARENT are reclaimed by TEST_ROOT cleanup).
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 >/dev/null
+
+printf 'case: C23 SSH transport drop (rc=255) reports unknown account result with list verification command and separate cleanup path\n'
+# 1) Remote add commits, then SSH drops (rc=255) and cleanup also fails ->
+#    must report UNKNOWN (never "add failed (rc=255)"), give list verify command
+#    with same --ssh-target and --strategy, and separately report residual path.
+: >"$SSH_STAGED_PATH_FILE"
+c23_out="$TEST_ROOT/c23-drop.out"
+c23_err="$TEST_ROOT/c23-drop.err"
+c23_rc=0
+FAKE_SSH_EXEC_LOCAL=1 FAKE_SSH_EXEC_EXIT_OVERRIDE=255 FAKE_SSH_CLEANUP_FAIL=1 \
+  SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$WRAPPER" add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 --ssh-target ubuntu@t01 \
+  >"$c23_out" 2>"$c23_err" || c23_rc=$?
+[[ "$c23_rc" -eq 255 ]] || fail "C23 SSH drop expected rc=255, got $c23_rc: $(cat "$c23_err")"
+# Confirm remote add actually committed before the reply was lost
+assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex,popdex-rot3=popdex$'
+assert_contains "$c23_err" 'account command result: UNKNOWN'
+assert_not_contains "$c23_err" 'account command result: add failed'
+assert_contains "$c23_err" "scripts/trading-account list --server trading01 --strategy $MULTI_STRAT --ssh-target ubuntu@t01"
+c23_expected="$(cat "$SSH_STAGED_PATH_FILE")"
+[[ "$c23_expected" == "$REMOTE_STAGING_PARENT"/skyeye-trading-account.* && -d "$c23_expected" ]] || \
+  fail "C23/C24 stub did not record staged dir under TEST_ROOT: $c23_expected"
+c23_residual="$(sed -n 's/^.*residual path on ubuntu@t01: //p' "$c23_err" | head -n 1)"
+[[ "$c23_residual" == "$c23_expected" ]] || \
+  fail "C23 reported residual path '$c23_residual' != stub-created '$c23_expected': $(cat "$c23_err")"
+assert_contains "$c23_err" 'remote temp cleanup FAILED'
+assert_contains "$c23_err" "Manual cleanup: ssh 'ubuntu@t01' rm -rf -- '$c23_expected'"
+
+# 2) SSH drop (rc=255) when cleanup succeeds -> still reports UNKNOWN + list verify command, no cleanup error.
+c23_okcl_err="$TEST_ROOT/c23-drop-clean.err"
+c23_okcl_rc=0
+FAKE_SSH_EXEC_LOCAL=1 FAKE_SSH_EXEC_EXIT_OVERRIDE=255 FAKE_SSH_CLEANUP_FAIL=0 \
+  SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$WRAPPER" list --server trading01 --strategy "$MULTI_STRAT" --ssh-target ubuntu@t01 \
+  >/dev/null 2>"$c23_okcl_err" || c23_okcl_rc=$?
+[[ "$c23_okcl_rc" -eq 255 ]] || fail "C23 SSH drop with ok cleanup expected rc=255, got $c23_okcl_rc"
+assert_contains "$c23_okcl_err" 'account command result: UNKNOWN'
+assert_contains "$c23_okcl_err" "scripts/trading-account list --server trading01 --strategy $MULTI_STRAT --ssh-target ubuntu@t01"
+assert_not_contains "$c23_okcl_err" 'remote temp cleanup FAILED'
+
 # Restore 2-executor env and active timer cleanly
 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 >/dev/null

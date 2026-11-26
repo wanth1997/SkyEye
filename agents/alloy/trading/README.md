@@ -318,24 +318,24 @@ or reads credentials/full configs of `tnauqquant@*`):
   rollback.
 - Refuses missing instances, non-mode-`0600` or symlinked env files, duplicate
   or ambiguous `EnvironmentFile=` assignments (including leading whitespace),
-  symlinked/non-regular/oversized (>4 MiB) `.prom` files, unreadable or missing
-  systemd probe units, invalid names, duplicate adds, removing a missing or last
-  executor, ambiguous exchange inference, or `--server` / `TQ_SERVER_ID`
-  mismatch.
+  symlinked/non-regular/oversized (>4 MiB) `.prom` files, unreadable, missing,
+  or `failed` systemd probe timers/services, invalid names, duplicate adds,
+  removing a missing or last executor, ambiguous exchange inference, or
+  `--server` / `TQ_SERVER_ID` mismatch.
 - Never modifies Alloy, Alloy fragments, `/etc/default/alloy`, ACLs, systemd
   units, or shared `probe.sh`.
 - Backs up the existing env under `/etc/skyeye-trading/account-backup/`, edits
   only the single `TQ_EXECUTOR_MAP=` line (preserving every other byte and
   original line endings), and atomically replaces the instance env preserving
   owner/group and mode `0600`.
-- **Active probe timer**: records the post-write probe invocation baseline so
-  any in-flight probe started before the write is excluded, waits for a new
-  timer-triggered probe run (default timeout 45s) with advancing
-  `tnauqquant_probe_timestamp_seconds`, and checks executor labels on that same
-  snapshot.
-- **Inactive probe timer (disabled or stopped)**: preserves the timer state and
-  verifies env content/mode and timer state only; live probe `.prom` output is
-  not verified.
+- **Active probe timer**: discards the first advancing post-write `.prom`
+  snapshot (which may come from an in-flight probe started before the write),
+  waits for a second advancing post-write snapshot (default timeout 45s) with
+  advancing `tnauqquant_probe_timestamp_seconds`, and checks executor labels on
+  that second snapshot.
+- **Inactive probe timer (confirmed `ActiveState=inactive`, not `failed`)**:
+  preserves the timer state and verifies env content/mode and timer state only;
+  live probe `.prom` output is not verified.
 - Any verification failure, unexpected error, or interruption (`HUP`/`INT`/`TERM`)
   ignores subsequent `HUP`/`INT`/`TERM` signals while automatically restoring
   the backed-up env atomically and verifying the restore with `cmp`; if rollback
