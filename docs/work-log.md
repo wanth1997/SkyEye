@@ -15,6 +15,20 @@
 ---
 -->
 
+## 2026-11-26 08:30 — scripts/trading-account：一個指令增減 Trading 策略帳號（WAN-954）
+
+**改動摘要：** 已安裝的 Linux Trading 策略要新增或移除帳號（executor）時，改用 `scripts/trading-account add|remove|list`，1–2 分鐘完成，不需要 repo PR、review 或 `central-deploy`。做法是在主機鎖內原子替換 instance env 的 `TQ_EXECUTOR_MAP` 一行（probe unit 每次執行都重讀 `EnvironmentFile`），不 reload Alloy、不動任何共用檔，並用 timer 觸發的新快照驗證，失敗或中斷自動還原。
+
+**修改的檔案：**
+- `agents/alloy/trading/account-linux.sh` — 主機端 add／remove／list：持有 `/run/skyeye-alloy.lock`（與 setup／retire 同一把）、UTC 18:10–19:30 拒絕（預檢、寫入前與 rename 前各一次）、嚴格的 systemd 狀態查詢（failed timer／service 拒絕）、只允許改 `TQ_EXECUTOR_MAP` 一行（位元組比對、拒絕縮排／重複／export 等歧義賦值）、備份到 `/etc/skyeye-trading/account-backup/`、丟掉寫入後第一份快照再以第二份驗證 executor、訊號安全的冪等還原、`.prom` 讀取拒絕 symlink 且上限 4 MiB。
+- `agents/alloy/trading/setup-linux.sh` — 新增 `account` 子命令轉給 `account-linux.sh`。
+- `scripts/trading-account` — 本機入口：以一般 SSH 使用者上傳 3 個 helper 到 `/tmp` 私有目錄後 `sudo` 執行（有 TTY 時 `-t`），結束清理；`--local` 在主機上直接執行；`--dry-run`；SSH 中斷時回報結果未知並給出 `list` 確認指令。
+- `agents/alloy/trading/README.md` — 新增「Add or remove an account (executor)」：指令、只適用 Linux lane、與 tnauqquant 的順序（新增：先 SkyEye 後 tnauqquant；移除：先 tnauqquant 後 SkyEye）、何時仍要走 `trading-target` 或共用 probe 更新流程。
+- `AGENTS.md` — trading target 規則補上帳號增減用 `scripts/trading-account`。
+- `tests/trading/test-trading-account.sh` — 拒絕條件、成功路徑、timer 狀態保留、在途 probe、時段跨越、訊號中斷、還原失敗、wrapper 與 SSH stub 等案例，約 56 秒。
+
+**原因/備註：** 使用者要求加速帳號增減（11-26）。三輪 code review（R1 1B/10M/3m、R2 7M/2m、R3 4M）已處理；R2 C17（同 UID 程序改暫存腳本）判為威脅模型外，README 註明前提。
+
 ## 2026-11-26 05:10 — popdex-multi-accounts 雙帳號 probe 與合併面板（WAN-928）
 
 **改動摘要：** 支援 Trading01 新 lane `popdex-multi-accounts`：在兩支 PopDEX 帳號（`popdex-main`、`popdex-rot2`）之間 random routing，將取代 `popdex-btc`。probe 支援同交易所多帳號的 `TQ_EXECUTOR_MAP`；總覽顯示合併 equity／績效，策略詳情新增各帳號明細；附 plan 與上線 runbook。
