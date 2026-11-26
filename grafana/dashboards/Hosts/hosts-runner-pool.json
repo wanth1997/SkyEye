@@ -61,7 +61,7 @@
       "id": 10,
       "type": "table",
       "title": "各主機狀態總覽（每台一列）",
-      "description": "每台預期池主機一列：狀態年齡（> 120s 標紅）、state、guard.state、heavy/light 的 busy/slots/queued、可用記憶體（< 2,500 MiB 標紅）、24h 拒絕數、可讀性，以及 pc 對應的 Windows 層 wans-windows up。",
+      "description": "每台預期池主機一列：狀態年齡（嚴格 > 120s 標紅）、state、guard.state、heavy/light 的 busy/slots/queued、可用記憶體（< 2,500 MiB 標紅）、24h 拒絕數、可讀性，以及 pc 對應的 Windows 層 wans-windows 新鮮度與 up 狀態。",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "x": 0, "y": 1, "w": 20, "h": 7 },
       "targets": [
@@ -159,7 +159,7 @@
         {
           "refId": "N",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "max by (host) (label_replace(up{job=\"integrations/windows\",server_id=\"wans-windows\"}, \"host\", \"pc\", \"\", \"\"))",
+          "expr": "max by (host) (label_replace(((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 1) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 0) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) > 120) * 0 + 2), \"host\", \"pc\", \"\", \"\"))",
           "format": "table",
           "instant": true
         }
@@ -249,7 +249,7 @@
                   "steps": [
                     { "color": "green", "value": null },
                     { "color": "yellow", "value": 90 },
-                    { "color": "red", "value": 120 }
+                    { "color": "red", "value": 120.001 }
                   ]
                 }
               }
@@ -342,8 +342,9 @@
                   {
                     "type": "value",
                     "options": {
-                      "1": { "text": "UP", "color": "green", "index": 0 },
-                      "0": { "text": "DOWN", "color": "red", "index": 1 }
+                      "1": { "text": "UP (新鮮)", "color": "green", "index": 0 },
+                      "0": { "text": "Exporter 失敗", "color": "red", "index": 1 },
+                      "2": { "text": "陳舊 (>120s)", "color": "red", "index": 2 }
                     }
                   }
                 ]
@@ -357,14 +358,14 @@
       "id": 11,
       "type": "stat",
       "title": "Windows 層 (wans-windows)",
-      "description": "Windows PC 的 Windows 層回報狀態（up{job=\"integrations/windows\",server_id=\"wans-windows\"}）。此處為 UP 但 pc 狀態過期時，代表問題在 WSL2 distro 或 pool-agent，而非整台 Windows 離線。",
+      "description": "依樣本新鮮度（time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120s）區分新鮮的 1（Windows 與 Alloy 正常推送）、新鮮的 0（Windows 端 exporter 失敗）、陳舊（>120s，remote_write 停送但尚在 5m lookback 內）或缺樣（無資料）。調查已恢復事件時請對照中斷當時的歷史資料與開機時間，不可只看現在值。",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "x": 20, "y": 1, "w": 4, "h": 7 },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "up{job=\"integrations/windows\",server_id=\"wans-windows\"}",
+          "expr": "max(((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 1) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 0) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) > 120) * 0 + 2))",
           "instant": true
         }
       ],
@@ -382,8 +383,9 @@
             {
               "type": "value",
               "options": {
-                "1": { "text": "UP", "color": "green", "index": 0 },
-                "0": { "text": "DOWN", "color": "red", "index": 1 }
+                "1": { "text": "UP (新鮮)", "color": "green", "index": 0 },
+                "0": { "text": "Exporter 失敗", "color": "red", "index": 1 },
+                "2": { "text": "陳舊 (>120s)", "color": "red", "index": 2 }
               }
             }
           ],
@@ -391,10 +393,11 @@
             "mode": "absolute",
             "steps": [
               { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
+              { "color": "green", "value": 1 },
+              { "color": "red", "value": 2 }
             ]
           },
-          "noValue": "無資料"
+          "noValue": "缺樣 / 無資料"
         },
         "overrides": []
       }
@@ -635,7 +638,7 @@
       "id": 33,
       "type": "timeseries",
       "title": "狀態寫入頻率（每 5 分鐘 seq 變化次數）",
-      "description": "changes(pool_status_seq[5m])。每 30 秒寫入一次時正常約為 9–10 次；降到 0 表示主機停止寫入。",
+      "description": "changes(pool_status_seq[5m])。每 30 秒寫入一次時正常約為 9–10 次；降到 0 表示 exporter 未觀察到 seq 變化，請先看下方「最後成功讀取距今」排除 exporter 讀取失敗，再判斷主機是否停止寫入。",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "x": 12, "y": 23, "w": 12, "h": 7 },
       "targets": [

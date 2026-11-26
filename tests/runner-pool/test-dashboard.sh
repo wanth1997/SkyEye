@@ -92,6 +92,18 @@ check(not bad_ds, "every panel and target uses a pinned datasource UID" + ("" if
 check(any(expr == 'ALERTS{product="runner-pool"}' for _, _, _, expr in pool_targets),
       'dashboard includes an alert panel filtering ALERTS{product="runner-pool"} (including shadow)')
 
+# C8: Panel 10 status-age red threshold must be strictly > 120 (Grafana steps are >=).
+age_red_steps = []
+for ov in (pool_by_id[10].get("fieldConfig") or {}).get("overrides") or []:
+    if (ov.get("matcher") or {}).get("options") == "狀態年齡":
+        for prop in ov.get("properties") or []:
+            if prop.get("id") == "thresholds":
+                for step in (prop.get("value") or {}).get("steps") or []:
+                    if step.get("color") == "red":
+                        age_red_steps.append(step.get("value"))
+check(len(age_red_steps) == 1 and isinstance(age_red_steps[0], (int, float)) and 120 < age_red_steps[0] < 121,
+      f"panel 10 status-age red threshold is strictly > 120 (got {age_red_steps!r})")
+
 # 2. Recording rules file to syntax-check ALL hosts-runner-pool.json PromQL queries
 rules_lines = ["groups:", "  - name: hosts_runner_pool_syntax", "    rules:"]
 for idx, (pid, _, _, expr) in enumerate(pool_targets):
@@ -173,6 +185,56 @@ tests:
         exp_samples:
           - labels: '{{job="pool-status",instance="pool-status:9101"}}'
             value: 0
+
+  - name: hosts-runner-pool Windows-layer panels distinguish fresh up=1, fresh up=0, stale sample and missing
+    interval: 1m
+    input_series:
+      # t=0..2m: fresh up=1; t=3m..4m: fresh up=0; t=5m: fresh up=1 then stops pushing (no stale
+      # marker because remote_write pushes): at t=8m (age=180s > 120s, still inside 5m lookback)
+      # sample is stale (must return 2, not 1); at t=11m (age=360s > 5m lookback) sample is missing ([]).
+      - series: 'up{{job="integrations/windows",instance="WIN-PC",product="github-runner",server_id="wans-windows"}}'
+        values: '1 1 1 0 0 1 _x10'
+    promql_expr_test:
+      # Fresh up == 1 at t=2m -> 1
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
+        eval_time: 2m
+        exp_samples:
+          - labels: '{{host="pc"}}'
+            value: 1
+      - expr: {yaml_expr(get_expr(pool_by_id, 11, "A"))}
+        eval_time: 2m
+        exp_samples:
+          - labels: '{{}}'
+            value: 1
+      # Fresh up == 0 at t=4m -> 0
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{host="pc"}}'
+            value: 0
+      - expr: {yaml_expr(get_expr(pool_by_id, 11, "A"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{}}'
+            value: 0
+      # Stale sample (last push at t=5m, now t=8m => age=180s > 120s) -> 2 (not 1)
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
+        eval_time: 8m
+        exp_samples:
+          - labels: '{{host="pc"}}'
+            value: 2
+      - expr: {yaml_expr(get_expr(pool_by_id, 11, "A"))}
+        eval_time: 8m
+        exp_samples:
+          - labels: '{{}}'
+            value: 2
+      # Missing sample (last push at t=5m, now t=11m => beyond 5m lookback) -> []
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
+        eval_time: 11m
+        exp_samples: []
+      - expr: {yaml_expr(get_expr(pool_by_id, 11, "A"))}
+        eval_time: 11m
+        exp_samples: []
 
   - name: Overview and Stack health up panels handle new job="pool-status" (no product/server_id label) cleanly
     interval: 1m
