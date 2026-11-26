@@ -597,30 +597,74 @@ Fine-grained PAT used by the `pool-status` exporter to read `POOL_STATUS_*` repo
 - **Scope:** Resource owner `wanwanlabs`, repository **`self-hosted-runner` only**, Repository permissions: **Variables: Read-only** (`Metadata: Read-only` is added automatically). Approve the pending org request as org owner.
 - **Cadence:** 1-year expiry (or org maximum); rotate 2 weeks before expiry. If forgotten, `PoolStatusUnreadable` alerts within ~15 minutes (`reason="http_401"`).
 
-On `monitoring-prod`, overwrite the token file without echoing or placing it in shell history or command arguments. The directory is initialized with `2750` group `65534` (`nogroup`), so `>` preserves group `65534` on the existing file; if creating the file fresh after a rebuild, also run `sudo chgrp 65534` on the directory (`2750`) and file (`0640`):
+On `monitoring-prod`, rotate the token file inside a subshell using a dedicated variable name (`POOL_STATUS_PAT`, never touching the operator's `GH_TOKEN`), `read -rs`, and Bash's builtin `printf` (no echo, shell history, or subprocess argv exposure). The directory is initialized with `2750` group `65534` (`nogroup`), so `>` preserves group `65534` on the existing file; if creating the file fresh after a rebuild, first run `sudo chgrp 65534` on the directory (`2750`) and file (`0640`).
+
+No container restart is needed: `pool-status` rereads the file on every request. The block below aborts without modifying the live file if reading fails or input is empty, records the write timestamp (`ROTATED_AT`), waits until `pool_status_exporter_read_timestamp_seconds` strictly exceeds `ROTATED_AT` (proving a GitHub read succeeded with the new PAT), and restores the previous credential automatically if the readability check fails or verification times out:
 
 ```bash
-cd /home/ubuntu/SkyEye
-read -rs GH_TOKEN < /dev/tty
-printf '%s' "$GH_TOKEN" > /home/ubuntu/SkyEye/pool-status/secrets/github_token
-unset GH_TOKEN
-chmod 640 /home/ubuntu/SkyEye/pool-status/secrets/github_token
-stat -c '%a %U %g' /home/ubuntu/SkyEye/pool-status/secrets/github_token   # must print: 640 ubuntu 65534
-wc -c < /home/ubuntu/SkyEye/pool-status/secrets/github_token             # length only, never print the token
+(
+  set -euo pipefail
+  cd /home/ubuntu/SkyEye
+  TARGET=/home/ubuntu/SkyEye/pool-status/secrets/github_token
+
+  IFS= read -rs POOL_STATUS_PAT < /dev/tty || { echo "aborted: failed to read PAT; existing token kept" >&2; exit 1; }
+  if [ -z "${POOL_STATUS_PAT//[[:space:]]/}" ]; then
+    echo "aborted: empty PAT; existing token kept" >&2
+    exit 1
+  fi
+
+  BACKUP=""
+  RESTORE_ON_EXIT=0
+  cleanup() {
+    if [ "$RESTORE_ON_EXIT" -eq 1 ] && [ -n "$BACKUP" ] && [ -f "$BACKUP" ]; then
+      cat "$BACKUP" > "$TARGET"
+      chmod 640 "$TARGET"
+      echo "restored previous token; DO NOT revoke the old PAT" >&2
+    fi
+    [ -z "$BACKUP" ] || rm -f "$BACKUP"
+  }
+  trap cleanup EXIT
+  trap 'exit 130' INT TERM
+  if [ -f "$TARGET" ]; then
+    BACKUP=$(umask 077 && mktemp)
+    cat "$TARGET" > "$BACKUP"
+  fi
+
+  # builtin printf keeps the token out of subprocess argv; > preserves group 65534.
+  RESTORE_ON_EXIT=1
+  builtin printf '%s' "$POOL_STATUS_PAT" > "$TARGET"
+  unset POOL_STATUS_PAT
+  chmod 640 "$TARGET"
+  stat -c '%a %U %g' "$TARGET"   # must print: 640 ubuntu 65534
+  wc -c < "$TARGET"              # length only, never print the token
+
+  ROTATED_AT=$(date +%s)
+  if ! sudo docker compose exec -T pool-status test -r /run/secrets/pool-status/github_token; then
+    echo "error: container cannot read token" >&2
+    exit 1
+  fi
+
+  # Wait up to 120s for a fresh successful GitHub read strictly after ROTATED_AT + 15s
+  # (margin > HTTP timeout ensures an in-flight old-PAT request cannot pass verification).
+  DEADLINE=$((ROTATED_AT + 120))
+  while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+    READ_TS=$(curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+      --data-urlencode 'query=pool_status_exporter_read_timestamp_seconds' \
+      | jq -r '.data.result[0].value[1] // 0' 2>/dev/null || echo 0)
+    if awk -v ts="$READ_TS" -v cut="$ROTATED_AT" 'BEGIN { exit !(ts > cut + 15) }'; then
+      RESTORE_ON_EXIT=0
+      echo "OK: exporter read succeeded after rotation (read_ts=$READ_TS > rotated_at=$ROTATED_AT); safe to revoke old PAT"
+      exit 0
+    fi
+    sleep 5
+  done
+
+  echo "error: timed out waiting for a successful read after rotation; check exporter logs and PAT scope/approval" >&2
+  exit 1
+)
 ```
 
-No container restart is needed: `pool-status` rereads the file on every request. Verify readability inside the container and confirm reads succeed before revoking the old PAT on GitHub:
-
-```bash
-sudo docker compose exec -T pool-status test -r /run/secrets/pool-status/github_token && echo readable
-# Wait >= 35s for the next poll, then verify read timestamp advances and error counters stay flat:
-curl -fsS --get http://127.0.0.1:9090/api/v1/query \
-  --data-urlencode 'query=time() - pool_status_exporter_read_timestamp_seconds' | jq -c '.data.result'
-curl -fsS --get http://127.0.0.1:9090/api/v1/query \
-  --data-urlencode 'query=pool_status_exporter_read_errors_total{reason=~"token|http_401|http_403"}' | jq -c '.data.result'
-```
-
-Revoke the old PAT in GitHub, save the new token in the password manager, and set a reminder 2 weeks before the new expiry date.
+Only after the script prints `OK: exporter read succeeded after rotation ...` (and `increase(pool_status_exporter_read_errors_total{reason=~"token|http_401|http_403"}[15m])` stays empty), revoke the old PAT in GitHub, save the new token in the password manager, and set a reminder 2 weeks before the new expiry date.
 
 ---
 
