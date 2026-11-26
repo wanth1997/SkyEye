@@ -41,6 +41,9 @@ PAYLOAD_FILES=(
 
 REMOTE_TMP=""
 ERR_FILE=""
+CLEANUP_ERR_FILE=""
+ACCOUNT_CMD_RAN=0
+ACCOUNT_CMD_RC=""
 
 usage() {
   printf '%s\n' \
@@ -296,10 +299,41 @@ done
 # shellcheck disable=SC2329
 cleanup_remote() {
   local rc=$?
-  trap - EXIT HUP INT TERM
+  trap - EXIT
+  trap '' HUP INT TERM
+  local cleanup_rc=0 cleanup_err=""
   if [[ -n "${REMOTE_TMP:-}" ]]; then
-    "$SSH_BIN" -T -- "$SSH_TARGET" "rm -rf -- $(shell_quote "$REMOTE_TMP")" >/dev/null 2>&1 || true
+    local residual_tmp="$REMOTE_TMP"
+    CLEANUP_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/skyeye-trading-account-cleanup.XXXXXX" 2>/dev/null || true)"
+    if [[ -n "$CLEANUP_ERR_FILE" ]]; then
+      "$SSH_BIN" -T -- "$SSH_TARGET" "rm -rf -- $(shell_quote "$residual_tmp")" >/dev/null 2>"$CLEANUP_ERR_FILE" || cleanup_rc=$?
+      if [[ -s "$CLEANUP_ERR_FILE" ]]; then
+        cleanup_err="$(tr '\n' ' ' <"$CLEANUP_ERR_FILE" | sed 's/[[:space:]]*$//')"
+      fi
+      rm -f -- "$CLEANUP_ERR_FILE"
+      CLEANUP_ERR_FILE=""
+    else
+      "$SSH_BIN" -T -- "$SSH_TARGET" "rm -rf -- $(shell_quote "$residual_tmp")" >/dev/null 2>&1 || cleanup_rc=$?
+    fi
     REMOTE_TMP=""
+    if [[ "$cleanup_rc" -ne 0 ]]; then
+      if [[ "$ACCOUNT_CMD_RAN" -eq 1 ]]; then
+        if [[ "$ACCOUNT_CMD_RC" -eq 0 ]]; then
+          printf 'trading-account: account command result: %s succeeded (rc=0)\n' "$SUBCOMMAND" >&2
+        else
+          printf 'trading-account: account command result: %s failed (rc=%s)\n' "$SUBCOMMAND" "$ACCOUNT_CMD_RC" >&2
+        fi
+      else
+        printf 'trading-account: account command result: did not complete (rc=%s)\n' "$rc" >&2
+      fi
+      printf 'trading-account: remote temp cleanup FAILED (rc=%s%s); residual path on %s: %s\n' \
+        "$cleanup_rc" "${cleanup_err:+: $cleanup_err}" "$SSH_TARGET" "$residual_tmp" >&2
+      printf 'Manual cleanup: ssh %s rm -rf -- %s\n' \
+        "$(shell_quote "$SSH_TARGET")" "$(shell_quote "$residual_tmp")" >&2
+      if [[ "$rc" -eq 0 ]]; then
+        rc=4
+      fi
+    fi
   fi
   if [[ -n "${ERR_FILE:-}" && -e "$ERR_FILE" ]]; then
     rm -f -- "$ERR_FILE"
@@ -313,10 +347,12 @@ trap 'exit 143' TERM
 trap cleanup_remote EXIT
 
 # Step 1: Upload only the 3 allowlisted helper scripts as the SSH user (no PTY).
+# Create the staging directory explicitly under /tmp so a remote user TMPDIR
+# containing spaces cannot break path validation or leak a directory.
 # POSIX sh compatible so any remote login shell works.
 # Expanded by the remote shell, not locally.
 # shellcheck disable=SC2016
-remote_stage_cmd='set -eu; d=$(mktemp -d "${TMPDIR:-/tmp}/skyeye-trading-account.XXXXXX"); ok=0; trap '\''[ "$ok" = 1 ] || rm -rf -- "$d"'\'' 0; chmod 700 "$d"; tar -xf - -C "$d"; ok=1; printf "__SKYEYE_STAGE__=%s\n" "$d"'
+remote_stage_cmd='set -eu; d=$(mktemp -d /tmp/skyeye-trading-account.XXXXXX); ok=0; trap '\''[ "$ok" = 1 ] || rm -rf -- "$d"'\'' 0; chmod 700 "$d"; tar -xf - -C "$d"; ok=1; printf "__SKYEYE_STAGE__=%s\n" "$d"'
 
 stage_out=""
 stage_rc=0
@@ -339,6 +375,8 @@ exec_rc=0
 if [[ -t 0 && -t 1 ]]; then
   remote_exec_cmd="sudo -- $(shell_quote "$remote_script_path")$quoted_args"
   "$SSH_BIN" -t -- "$SSH_TARGET" "$remote_exec_cmd" || exec_rc=$?
+  ACCOUNT_CMD_RAN=1
+  ACCOUNT_CMD_RC="$exec_rc"
   if [[ "$exec_rc" -eq 1 ]]; then
     printf 'Retry after resolving the error above: %s\n' "$(format_wrapper_cmd)" >&2
   fi
@@ -346,6 +384,8 @@ else
   ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/skyeye-trading-account-ssh.XXXXXX")"
   remote_exec_cmd="sudo -n -- $(shell_quote "$remote_script_path")$quoted_args"
   "$SSH_BIN" -T -- "$SSH_TARGET" "$remote_exec_cmd" 2>"$ERR_FILE" || exec_rc=$?
+  ACCOUNT_CMD_RAN=1
+  ACCOUNT_CMD_RC="$exec_rc"
   if [[ -s "$ERR_FILE" ]]; then
     cat "$ERR_FILE" >&2
   fi

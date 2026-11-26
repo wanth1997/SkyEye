@@ -280,10 +280,13 @@ scripts/trading-account remove --server trading01 --strategy popdex-multi-accoun
 Transport options on `scripts/trading-account`:
 
 - Default remote mode: uploads only `account-linux.sh`, `linux-common.sh`, and
-  `install-common.sh` to a temporary directory on the host as the SSH user,
-  executes `sudo <tmp>/.../account-linux.sh` (passing `ssh -t` when local
-  stdin/stdout is an interactive TTY so passworded `sudo` can prompt), and
-  always removes the temporary directory on exit.
+  `install-common.sh` to a mode-`0700` temporary directory under `/tmp` owned by
+  the SSH user, executes `sudo <tmp>/.../account-linux.sh` (passing `ssh -t`
+  when local stdin/stdout is an interactive TTY so passworded `sudo` can
+  prompt), and removes the temporary directory on exit (reporting the account
+  result and exact residual path separately if remote cleanup fails). Remote
+  mode runs in that SSH user's private temporary directory under the assumption
+  that the SSH account itself is not compromised.
 - `--ssh-target HOST` (or `SKYEYE_SSH_TARGET`): SSH destination when it differs
   from `--server`.
 - `--local`: run directly on the local Linux host without SSH.
@@ -307,32 +310,37 @@ or reads credentials/full configs of `tnauqquant@*`):
 **Built-in safety guards and verification:**
 
 - Refuses mutating commands (`add`/`remove`) during **UTC 18:10–19:30**
-  (checked both at preflight and again inside the host lock immediately before
-  writing); read-only `list` remains available anytime.
+  (checked at preflight, inside the host lock before backup, and again right
+  before the atomic rename; rollback rename remains permitted in the window);
+  read-only `list` remains available anytime.
 - Serializes with `setup-linux.sh` / `retire-linux.sh` via the shared
   `/run/skyeye-alloy.lock` held from instance read through verification or
   rollback.
-- Refuses missing instances, non-mode-`0600` or symlinked env files, symlinked
-  or non-regular `.prom` files, invalid names, duplicate adds, removing a
-  missing or last executor, ambiguous exchange inference, or `--server` /
-  `TQ_SERVER_ID` mismatch.
+- Refuses missing instances, non-mode-`0600` or symlinked env files, duplicate
+  or ambiguous `EnvironmentFile=` assignments (including leading whitespace),
+  symlinked/non-regular/oversized (>4 MiB) `.prom` files, unreadable or missing
+  systemd probe units, invalid names, duplicate adds, removing a missing or last
+  executor, ambiguous exchange inference, or `--server` / `TQ_SERVER_ID`
+  mismatch.
 - Never modifies Alloy, Alloy fragments, `/etc/default/alloy`, ACLs, systemd
   units, or shared `probe.sh`.
 - Backs up the existing env under `/etc/skyeye-trading/account-backup/`, edits
   only the single `TQ_EXECUTOR_MAP=` line (preserving every other byte and
   original line endings), and atomically replaces the instance env preserving
   owner/group and mode `0600`.
-- **Active probe timer**: records the post-write baseline, waits for the next
-  timer-triggered `.prom` snapshot (default timeout 45s) with advancing
+- **Active probe timer**: records the post-write probe invocation baseline so
+  any in-flight probe started before the write is excluded, waits for a new
+  timer-triggered probe run (default timeout 45s) with advancing
   `tnauqquant_probe_timestamp_seconds`, and checks executor labels on that same
   snapshot.
 - **Inactive probe timer (disabled or stopped)**: preserves the timer state and
   verifies env content/mode and timer state only; live probe `.prom` output is
   not verified.
 - Any verification failure, unexpected error, or interruption (`HUP`/`INT`/`TERM`)
-  automatically restores the backed-up env atomically and verifies the restore
-  with `cmp`; if rollback itself cannot complete, it exits `3` with exact
-  manual recovery and verification commands.
+  ignores subsequent `HUP`/`INT`/`TERM` signals while automatically restoring
+  the backed-up env atomically and verifying the restore with `cmp`; if rollback
+  itself cannot complete (or timer state cannot be verified), it exits `3` with
+  exact manual recovery and verification commands.
 
 **When you still need the full `trading-target` or shared probe workflow:**
 

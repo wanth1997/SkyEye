@@ -46,7 +46,6 @@ cleanup() {
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   done
-  chmod 700 "$TEST_ROOT/etc/skyeye-trading/instances" 2>/dev/null || true
   rm -rf "$TEST_ROOT"
 }
 trap cleanup EXIT
@@ -105,13 +104,23 @@ printf 'FLAGS=%s TARGET=%s CMD=%s\n' "$flags" "$target" "$remote_cmd" >>"$SSH_LO
 
 # Cleanup invocation (Step 3)
 if [[ "$remote_cmd" == "rm -rf -- "* ]]; then
+  if [[ "${FAKE_SSH_CLEANUP_FAIL:-0}" == "1" ]]; then
+    printf 'stub ssh: permission denied removing remote temp dir\n' >&2
+    exit 1
+  fi
   exec sh -c "$remote_cmd"
 fi
 
 # Stage upload invocation (Step 1)
 if [[ "$remote_cmd" == *"__SKYEYE_STAGE__="* ]]; then
   cat >"$TAR_CAPTURE"
-  TMPDIR="$REMOTE_STAGING_PARENT" exec sh -c "$remote_cmd" <"$TAR_CAPTURE"
+  if [[ -n "${FAKE_SSH_REMOTE_TMPDIR:-}" ]]; then
+    # Run remote_stage_cmd verbatim with a space-containing remote TMPDIR
+    # to prove scripts/trading-account ignores remote TMPDIR.
+    TMPDIR="$FAKE_SSH_REMOTE_TMPDIR" exec sh -c "$remote_cmd" <"$TAR_CAPTURE"
+  fi
+  local_stage_cmd="${remote_cmd/\/tmp\/skyeye-trading-account.XXXXXX/$REMOTE_STAGING_PARENT/skyeye-trading-account.XXXXXX}"
+  exec sh -c "$local_stage_cmd" <"$TAR_CAPTURE"
 fi
 
 # Sudo execution invocation (Step 2)
@@ -158,6 +167,26 @@ fi
 exec "$REAL_DATE" "\$@"
 EOF
 
+# Stub cp supporting deterministic fault injection or mid-rollback hook (C3, C20).
+REAL_CP="$(command -v cp)"
+cat >"$FAKE_BIN/cp" <<EOF
+#!/usr/bin/env bash
+if [[ -n "\${FAKE_FAIL_CP_PATTERN:-}" ]]; then
+  for arg in "\$@"; do
+    if [[ "\$arg" == *"\$FAKE_FAIL_CP_PATTERN"* ]]; then
+      if [[ -n "\${FAKE_CP_HOOK:-}" && -x "\$FAKE_CP_HOOK" ]]; then
+        "\$FAKE_CP_HOOK" "\$arg"
+      fi
+      if [[ "\${FAKE_FAIL_CP_EXIT:-1}" != "0" ]]; then
+        printf 'stub cp: injected failure for %s\n' "\$arg" >&2
+        exit 1
+      fi
+    fi
+  done
+fi
+exec "$REAL_CP" "\$@"
+EOF
+
 cat >"$FAKE_BIN/alloy" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -181,6 +210,11 @@ for log_path in "$SYSTEMCTL_LOG" "$SYSTEMCTL_LOG_ALL"; do
   } >>"$log_path"
 done
 
+if [[ "${FAKE_SYSTEMCTL_BUS_ERROR:-0}" == "1" || -e "$SYSTEMCTL_STATE/bus_error" ]]; then
+  printf 'Failed to connect to bus: No such file or directory\n' >&2
+  exit 1
+fi
+
 state_path() {
   local kind="$1" unit="$2"
   printf '%s/%s_%s\n' "$SYSTEMCTL_STATE" "$kind" "${unit//\//_}"
@@ -201,11 +235,18 @@ state_exists() {
   [[ -e "$(state_path "$kind" "$unit")" ]]
 }
 
-# Optional hook executed once on is-failed check to inject deterministic faults
-# mid-verification (e.g., read-only instances dir or timer drift for C6).
-if [[ "$cmd" == "is-failed" && -n "${FAKE_IS_FAILED_HOOK:-}" && -x "$FAKE_IS_FAILED_HOOK" ]]; then
-  "$FAKE_IS_FAILED_HOOK"
-fi
+bump_service_invocation() {
+  local unit="$1"
+  local seq_file="$SYSTEMCTL_STATE/inv_seq"
+  local seq=0
+  if [[ -f "$seq_file" ]]; then
+    seq="$(cat "$seq_file")"
+  fi
+  seq=$((seq + 1))
+  printf '%s\n' "$seq" >"$seq_file"
+  printf 'inv-%s-%s\n' "${unit//\//_}" "$seq" >"$(state_path inv "$unit")"
+  printf '%s000000\n' "$seq" >"$(state_path mono "$unit")"
+}
 
 case "$cmd" in
   is-active|is-enabled|is-failed)
@@ -236,13 +277,23 @@ case "$cmd" in
       strat="${unit#skyeye-trading-probe@}"
       strat="${strat%.service}"
       rm -f "$(state_path failed "$unit")"
+      touch "$(state_path activating "$unit")"
+      bump_service_invocation "$unit"
       env_path="$SYSTEM_ROOT/etc/skyeye-trading/instances/$strat.env"
       probe_bin="$SYSTEM_ROOT/usr/local/libexec/skyeye-trading/probe.sh"
+      run_rc=0
       if [[ -f "$env_path" && -x "$probe_bin" ]]; then
         # shellcheck disable=SC2016
         env -i PATH="$PATH" FAKE_UTC_HM="${FAKE_UTC_HM:-}" bash -c \
-          'set -a; source "$1"; set +a; exec "$2"' bash "$env_path" "$probe_bin"
+          'set -a; source "$1"; set +a; exec "$2"' bash "$env_path" "$probe_bin" || run_rc=$?
       fi
+      rm -f "$(state_path activating "$unit")"
+      if [[ "$run_rc" -ne 0 ]]; then
+        touch "$(state_path failed "$unit")"
+        printf 'exit-code\n' >"$(state_path result "$unit")"
+        exit "$run_rc"
+      fi
+      printf 'success\n' >"$(state_path result "$unit")"
       exit 0
     fi
     touch "$(state_path active "$unit")"
@@ -259,7 +310,109 @@ case "$cmd" in
     [[ -e "$(state_path active "$1")" ]] || exit 1
     ;;
   show)
-    printf '%s\n' "${FAKE_ALLOY_CAN_RELOAD:-yes}"
+    props=()
+    value_only=0
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --no-pager) shift ;;
+        --value) value_only=1; shift ;;
+        -p)
+          props+=("$2")
+          shift 2
+          ;;
+        -p*)
+          props+=("${1#-p}")
+          shift
+          ;;
+        --)
+          shift
+          break
+          ;;
+        *)
+          break
+          ;;
+      esac
+    done
+    unit="${1:-}"
+
+    if [[ "$unit" == "alloy" ]]; then
+      printf '%s\n' "${FAKE_ALLOY_CAN_RELOAD:-yes}"
+      exit 0
+    fi
+
+    # Optional hook executed when querying a probe service unit to inject
+    # deterministic faults mid-verification (e.g., failed service, timer drift,
+    # or bus error for C6/C15/C20).
+    if [[ "$unit" == skyeye-trading-probe@*.service && -n "${FAKE_SHOW_SERVICE_HOOK:-}" && -x "$FAKE_SHOW_SERVICE_HOOK" ]]; then
+      "$FAKE_SHOW_SERVICE_HOOK" "$unit"
+      if [[ "${FAKE_SYSTEMCTL_BUS_ERROR:-0}" == "1" || -e "$SYSTEMCTL_STATE/bus_error" ]]; then
+        printf 'Failed to connect to bus: No such file or directory\n' >&2
+        exit 1
+      fi
+    fi
+
+    load_state="loaded"
+    if [[ -e "$(state_path notfound "$unit")" ]]; then
+      load_state="not-found"
+    elif [[ "$unit" == skyeye-trading-probe@*.timer && ! -f "$SYSTEM_ROOT/etc/systemd/system/skyeye-trading-probe@.timer" ]]; then
+      load_state="not-found"
+    elif [[ "$unit" == skyeye-trading-probe@*.service && ! -f "$SYSTEM_ROOT/etc/systemd/system/skyeye-trading-probe@.service" ]]; then
+      load_state="not-found"
+    fi
+
+    unit_file_state=""
+    if [[ "$load_state" == "loaded" ]]; then
+      if state_exists enabled "$unit"; then
+        unit_file_state="enabled"
+      else
+        unit_file_state="disabled"
+      fi
+    fi
+
+    active_state="inactive"
+    if [[ "$load_state" == "loaded" ]]; then
+      if state_exists failed "$unit"; then
+        active_state="failed"
+      elif state_exists activating "$unit"; then
+        active_state="activating"
+      elif state_exists active "$unit"; then
+        active_state="active"
+      fi
+    fi
+
+    result_state="success"
+    if state_exists failed "$unit"; then
+      result_state="exit-code"
+    elif [[ -f "$(state_path result "$unit")" ]]; then
+      result_state="$(cat "$(state_path result "$unit")")"
+    fi
+
+    inv_id=""
+    if [[ -f "$(state_path inv "$unit")" ]]; then
+      inv_id="$(cat "$(state_path inv "$unit")")"
+    fi
+
+    exec_mono="0"
+    if [[ -f "$(state_path mono "$unit")" ]]; then
+      exec_mono="$(cat "$(state_path mono "$unit")")"
+    fi
+
+    for p in "${props[@]}"; do
+      val=""
+      case "$p" in
+        LoadState) val="$load_state" ;;
+        UnitFileState) val="$unit_file_state" ;;
+        ActiveState) val="$active_state" ;;
+        Result) val="$result_state" ;;
+        InvocationID) val="$inv_id" ;;
+        ExecMainStartTimestampMonotonic) val="$exec_mono" ;;
+      esac
+      if [[ "$value_only" -eq 1 ]]; then
+        printf '%s\n' "$val"
+      else
+        printf '%s=%s\n' "$p" "$val"
+      fi
+    done
     ;;
   *)
     printf 'unexpected fake systemctl command: %s\n' "$cmd" >&2
@@ -498,25 +651,80 @@ backup_count() {
 }
 
 # Simulates systemd's 15s timer firing AFTER the instance env changes: watches
-# for env SHA change, waits >=1s so timestamp advances strictly past
-# POST_WRITE_EPOCH, then runs the real installed probe.sh with the new env.
+# for env SHA change, settles briefly past POST_WRITE_EPOCH, waits for the next
+# integer second, advances InvocationID / ExecMainStartTimestampMonotonic, and
+# runs the real installed probe.sh with the new env.
+bump_probe_invocation() {
+  local strat="$1"
+  local unit="skyeye-trading-probe@${strat}.service"
+  local seq_file="$SYSTEMCTL_STATE/inv_seq"
+  local seq=0
+  if [[ -f "$seq_file" ]]; then
+    seq="$(cat "$seq_file")"
+  fi
+  seq=$((seq + 1))
+  printf '%s\n' "$seq" >"$seq_file"
+  printf 'inv-%s-%s\n' "${unit//\//_}" "$seq" >"$SYSTEMCTL_STATE/inv_${unit}"
+  printf '%s000000\n' "$seq" >"$SYSTEMCTL_STATE/mono_${unit}"
+  printf 'success\n' >"$SYSTEMCTL_STATE/result_${unit}"
+  rm -f "$SYSTEMCTL_STATE/failed_${unit}"
+}
+
+simulate_timer_probe_run() {
+  local strat="$1"
+  local env_path="$SYSTEM_ROOT/etc/skyeye-trading/instances/$strat.env"
+  local unit="skyeye-trading-probe@${strat}.service"
+  touch "$SYSTEMCTL_STATE/activating_${unit}"
+  bump_probe_invocation "$strat"
+  # shellcheck disable=SC2016
+  env -i PATH="$PATH" FAKE_UTC_HM="${FAKE_UTC_HM:-}" bash -c \
+    'set -a; source "$1"; set +a; exec "$2"' bash "$env_path" "$INSTALLED_PROBE"
+  rm -f "$SYSTEMCTL_STATE/activating_${unit}"
+}
+
+wait_next_epoch_second() {
+  local base_sec="$1"
+  perl -e '
+    my ($base) = @ARGV;
+    while (time() <= $base) {
+      select(undef, undef, undef, 0.05);
+    }
+  ' "$base_sec"
+}
+
+wait_env_change_and_next_second() {
+  local env_path="$1"
+  perl -e '
+    my ($path) = @ARGV;
+    sub read_all {
+      open(my $f, "<:raw", $_[0]) or return undef;
+      local $/; my $d = <$f>; close($f); return $d;
+    }
+    my $orig = read_all($path);
+    my $deadline = time() + 10;
+    while (time() < $deadline) {
+      my $cur = read_all($path);
+      if (defined($cur) && (!defined($orig) || $cur ne $orig)) {
+        select(undef, undef, undef, 0.08);
+        my $base = time();
+        while (time() <= $base) {
+          select(undef, undef, undef, 0.02);
+        }
+        exit 0;
+      }
+      select(undef, undef, undef, 0.02);
+    }
+    exit 1;
+  ' "$env_path"
+}
+
 spawn_timer_tick_on_env_change() {
   local strat="$1"
   local env_path="$SYSTEM_ROOT/etc/skyeye-trading/instances/$strat.env"
-  local start_sha
-  start_sha="$(sha_of "$env_path")"
   (
-    local i
-    for ((i = 0; i < 60; i++)); do
-      if [[ "$(sha_of "$env_path")" != "$start_sha" ]]; then
-        sleep 1.1
-        # shellcheck disable=SC2016
-        env -i PATH="$PATH" FAKE_UTC_HM="${FAKE_UTC_HM:-}" bash -c \
-          'set -a; source "$1"; set +a; exec "$2"' bash "$env_path" "$INSTALLED_PROBE"
-        exit 0
-      fi
-      sleep 0.1
-    done
+    if wait_env_change_and_next_second "$env_path"; then
+      simulate_timer_probe_run "$strat"
+    fi
   ) &
   BG_PIDS+=("$!")
   LAST_TIMER_PID=$!
@@ -592,9 +800,27 @@ fi
 [[ "$fifo_add" == *"non-regular"* ]] || fail "FIFO refusal in add unclear: $fifo_add"
 [[ "$(sha_of "$MULTI_ENV")" == "$env_before_c10" ]] || fail "FIFO .prom add did not restore env"
 rm -f "$MULTI_PROM"
+
+printf 'case: C18 oversized .prom exceeding 4 MiB read cap is refused immediately in list and rolls back add\n'
+perl -e 'print "x" x (4 * 1024 * 1024 + 1)' >"$MULTI_PROM"
+if big_list="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account list --server trading01 --strategy "$MULTI_STRAT" 2>&1)"; then
+  fail "C18: list accepted .prom exceeding 4 MiB cap"
+fi
+[[ "$big_list" == *"exceeds maximum allowed size (4194304 bytes)"* ]] || \
+  fail "C18: oversized .prom refusal in list unclear: $big_list"
+
+if big_add="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)"; then
+  fail "C18: add accepted .prom exceeding 4 MiB cap"
+fi
+[[ "$big_add" == *"exceeds maximum allowed size (4194304 bytes)"* ]] || \
+  fail "C18: oversized .prom refusal in add unclear: $big_add"
+[[ "$(sha_of "$MULTI_ENV")" == "$env_before_c10" ]] || fail "C18: oversized .prom add did not restore env"
+rm -f "$MULTI_PROM"
 mv "$MULTI_PROM.real" "$MULTI_PROM"
 
-# ---- Time window protection & C5 (preflight 18:09 -> pre-write inside lock 18:10) ----
+# ---- Time window protection & C5 (preflight 18:09 -> pre-backup / pre-rename 18:10) ----
 
 printf 'case: time protection refuses add/remove in UTC 18:10-19:30 and allows boundaries & list\n'
 before_sha="$(sha_of "$MULTI_ENV")"
@@ -631,21 +857,39 @@ done
 [[ "$before_sha" == "$(sha_of "$MULTI_ENV")" && "$before_backups" == "$(backup_count)" ]] || \
   fail "time-window tests modified env or created backups"
 
-printf 'case: C5 UTC 18:10-19:30 re-checked inside lock before write (18:09 preflight -> 18:10 pre-write refused; started tx still rolls back at 18:10)\n'
+printf 'case: C5 UTC 18:10-19:30 re-checked before backup AND after staging right before rename (rollback rename still allowed at 18:10)\n'
 UTC_SEQ="$TEST_ROOT/utc-seq.txt"
+# 1) Preflight 18:09 -> lock-entry pre-backup check 18:10 (no backup created, env untouched)
 printf '18:09\n18:10\n' >"$UTC_SEQ"
 before_backups="$(backup_count)"
 if c5_out="$(FAKE_UTC_HM_SEQ_FILE="$UTC_SEQ" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)"; then
-  fail "C5: add proceeded after clock crossed from 18:09 into 18:10 before write"
+  fail "C5: add proceeded after clock crossed from 18:09 into 18:10 before backup"
 fi
-[[ "$c5_out" == *"18:10-19:30"* && "$c5_out" == *"18:10"* ]] || fail "C5 refusal unclear: $c5_out"
+[[ "$c5_out" == *"18:10-19:30"* && "$c5_out" == *"18:10"* ]] || fail "C5 pre-backup refusal unclear: $c5_out"
 [[ "$(sha_of "$MULTI_ENV")" == "$before_sha" && "$(backup_count)" == "$before_backups" ]] || \
-  fail "C5 refused write still modified env or created backup"
+  fail "C5 pre-backup refused write still modified env or created backup"
 
-# Already-started transaction (18:09 preflight + 18:09 pre-write) that fails at
-# 18:10 must STILL roll back cleanly.
+# 2) Preflight 18:09 -> pre-backup 18:09 -> backup + temp staged -> pre-rename check 18:10
+# Must refuse BEFORE mv -f, leave installed env untouched, clean up staged temp, and record refused_utc_window.
 printf '18:09\n18:09\n18:10\n' >"$UTC_SEQ"
+if c5_mv_out="$(FAKE_UTC_HM_SEQ_FILE="$UTC_SEQ" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)"; then
+  fail "C5: add performed rename after clock crossed into 18:10 following backup/staging"
+fi
+[[ "$c5_mv_out" == *"18:10-19:30"* && "$c5_mv_out" == *"18:10"* ]] || \
+  fail "C5 pre-rename refusal unclear: $c5_mv_out"
+[[ "$(sha_of "$MULTI_ENV")" == "$before_sha" ]] || \
+  fail "C5 pre-rename 18:10 check still modified installed env"
+c5_mv_dir="$(sed -n 's/^Backup record: //p' <<<"$c5_mv_out" | head -n 1)"
+assert_contains "$c5_mv_dir/account.meta" '^status=refused_utc_window$'
+assert_not_contains "$c5_mv_dir/account.meta" '^status=committed$'
+leftover_c5_tmp="$(find "$SYSTEM_ROOT/etc/skyeye-trading/instances" -name '*.tmp.*' -print)"
+[[ -z "$leftover_c5_tmp" ]] || fail "C5 pre-rename refusal left temp file behind: $leftover_c5_tmp"
+
+# 3) Already-started transaction (preflight 18:09 + pre-backup 18:09 + pre-rename 18:09)
+# that fails verification during 18:10 MUST still execute rollback rename cleanly.
+printf '18:09\n18:09\n18:09\n18:10\n' >"$UTC_SEQ"
 if c5_rb="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=1 FAKE_UTC_HM_SEQ_FILE="$UTC_SEQ" \
   SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)"; then
@@ -655,7 +899,7 @@ fi
 c5_dir="$(sed -n 's/^Backup record: //p' <<<"$c5_rb" | head -n 1)"
 assert_contains "$c5_dir/account.meta" '^status=rolled_back$'
 
-# ---- Standard refusal conditions ----
+# ---- Standard refusal conditions, C16 (EnvironmentFile= duplicates/indentation), C15 (systemd query errors) ----
 
 printf 'case: refusal conditions reject invalid operations without mutating host\n'
 before_backups="$(backup_count)"
@@ -706,6 +950,35 @@ cp "$MULTI_ENV" "$TEST_ROOT/multi.env.save"
 printf 'TQ_EXECUTOR_MAP=popdex-main=popdex\n' >>"$MULTI_ENV"
 expect_refuse "duplicate TQ_EXECUTOR_MAP lines" "exactly one literal TQ_EXECUTOR_MAP=" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3
+
+printf 'case: C16 indented, export, and line-continued EnvironmentFile= assignments are refused before write\n'
+cp "$TEST_ROOT/multi.env.save" "$MULTI_ENV"
+chmod 600 "$MULTI_ENV"
+printf '  TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex\n' >>"$MULTI_ENV"
+expect_refuse "C16 indented duplicate TQ_EXECUTOR_MAP (add)" "leading whitespace" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3
+expect_refuse "C16 indented duplicate TQ_EXECUTOR_MAP (remove)" "leading whitespace" \
+  "$SETUP" account remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot2
+expect_refuse "C16 indented duplicate TQ_EXECUTOR_MAP (list)" "leading whitespace" \
+  "$SETUP" account list --server trading01 --strategy "$MULTI_STRAT"
+
+cp "$TEST_ROOT/multi.env.save" "$MULTI_ENV"
+chmod 600 "$MULTI_ENV"
+printf 'export TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex\n' >>"$MULTI_ENV"
+expect_refuse "C16 export duplicate TQ_EXECUTOR_MAP" "export" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3
+
+cp "$TEST_ROOT/multi.env.save" "$MULTI_ENV"
+chmod 600 "$MULTI_ENV"
+printf '  TQ_SERVER_ID=trading01\n' >>"$MULTI_ENV"
+expect_refuse "C16 indented duplicate TQ_SERVER_ID" "leading whitespace" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3
+
+perl -pe 's/^TQ_EXECUTOR_MAP=/TQ_DUMMY=abc\\\nTQ_EXECUTOR_MAP=/' "$TEST_ROOT/multi.env.save" >"$MULTI_ENV"
+chmod 600 "$MULTI_ENV"
+expect_refuse "C16 backslash line continuation into TQ_EXECUTOR_MAP" "line continuation" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3
+
 # Literal "$EXP" in fixture is intentional.
 # shellcheck disable=SC2016
 sed 's/^TQ_EXECUTOR_MAP=.*/TQ_EXECUTOR_MAP="$EXP"/' "$TEST_ROOT/multi.env.save" >"$MULTI_ENV"
@@ -715,8 +988,54 @@ expect_refuse "non-literal TQ_EXECUTOR_MAP" "cannot be read safely" \
 cp "$TEST_ROOT/multi.env.save" "$MULTI_ENV"
 chmod 600 "$MULTI_ENV"
 
+printf 'case: C15 systemctl bus error and missing timer/service units are refused before write\n'
+rc=0
+c15_bus_out="$(FAKE_SYSTEMCTL_BUS_ERROR=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
+[[ "$rc" -eq 1 && "$c15_bus_out" == *"Failed to connect to bus"* ]] || \
+  fail "C15: systemctl bus failure was not refused cleanly (rc=$rc): $c15_bus_out"
+
+touch "$SYSTEMCTL_STATE/notfound_skyeye-trading-probe@$MULTI_STRAT.timer"
+rc=0
+c15_nf_out="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
+rm -f "$SYSTEMCTL_STATE/notfound_skyeye-trading-probe@$MULTI_STRAT.timer"
+[[ "$rc" -eq 1 && "$c15_nf_out" == *"LoadState=not-found"* ]] || \
+  fail "C15: missing timer unit was not refused cleanly (rc=$rc): $c15_nf_out"
+
+touch "$SYSTEMCTL_STATE/notfound_skyeye-trading-probe@$MULTI_STRAT.service"
+rc=0
+c15_snf_out="$(SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
+rm -f "$SYSTEMCTL_STATE/notfound_skyeye-trading-probe@$MULTI_STRAT.service"
+[[ "$rc" -eq 1 && "$c15_snf_out" == *"LoadState=not-found"* ]] || \
+  fail "C15: missing service unit was not refused cleanly (rc=$rc): $c15_snf_out"
+
 [[ "$before_sha" == "$(sha_of "$MULTI_ENV")" && "$before_backups" == "$(backup_count)" ]] || \
   fail "refused calls mutated env or created backups"
+
+# C15 rollback check: bus fails mid-verification -> env restores, timer state is
+# reported truthfully as unknown (rollback_incomplete, rc=3), never falsely preserved.
+HOOK_BUS_AFTER_WRITE="$TEST_ROOT/hook-bus-after-write.sh"
+cat >"$HOOK_BUS_AFTER_WRITE" <<EOF
+#!/usr/bin/env bash
+if [[ "\$(shasum -a 256 "$MULTI_ENV" | awk '{print \$1}')" != "$before_sha" ]]; then
+  touch "$SYSTEMCTL_STATE/bus_error"
+fi
+EOF
+chmod 755 "$HOOK_BUS_AFTER_WRITE"
+rc=0
+c15_rb_out="$(FAKE_SHOW_SERVICE_HOOK="$HOOK_BUS_AFTER_WRITE" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
+rm -f "$SYSTEMCTL_STATE/bus_error"
+[[ "$rc" -eq 3 ]] || fail "C15 rollback bus failure expected rc=3, got rc=$rc: $c15_rb_out"
+[[ "$(sha_of "$MULTI_ENV")" == "$before_sha" ]] || fail "C15 rollback bus failure did not restore env"
+c15_dir="$(sed -n 's/^Backup record: //p' <<<"$c15_rb_out" | head -n 1)"
+assert_contains "$c15_dir/account.meta" '^status=rollback_incomplete$'
+assert_contains "$c15_dir/account.meta" '^rollback_env_restored=1$'
+assert_contains "$c15_dir/account.meta" '^rollback_timer_preserved=unknown$'
+[[ "$c15_rb_out" == *"Timer state check UNKNOWN"* && "$c15_rb_out" == *"Failed to connect to bus"* ]] || \
+  fail "C15 rollback bus failure message did not truthfully report unknown timer state: $c15_rb_out"
 
 # ---- C1: Shared /run/skyeye-alloy.lock serializes account/retire and account/account ----
 
@@ -764,10 +1083,8 @@ fi
 [[ "$acct_race" == *"skyeye-alloy.lock"* ]] || fail "C1: concurrent account refusal unclear: $acct_race"
 
 # Now trigger the simulated timer tick so the first account add commits cleanly.
-sleep 1.1
-# shellcheck disable=SC2016
-env -i PATH="$PATH" FAKE_UTC_HM="12:00" bash -c \
-  'set -a; source "$1"; set +a; exec "$2"' bash "$MULTI_ENV" "$INSTALLED_PROBE"
+wait_next_epoch_second "$(date +%s)"
+simulate_timer_probe_run "$MULTI_STRAT"
 wait "$c1_pid" || fail "C1: first account add failed: $(cat "$c1_out_file")"
 assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex,popdex-rot3=popdex$'
 
@@ -861,28 +1178,109 @@ SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   --executor mexc-rot2 --exchange mexc >/dev/null
 wait_bg_timer
 assert_contains "$MULTI_EXCH_ENV" '^TQ_EXECUTOR_MAP=toobit-main=toobit,mexc-ui=mexc,mexc-rot2=mexc$'
-spawn_timer_tick_on_env_change "$MULTI_EXCH_STRAT"
+# Newly added executor has zero .prom series before tnauqquant restarts, and add still commits.
+assert_not_contains "$TEXTFILE_DIR/tnauqquant-$MULTI_EXCH_STRAT.prom" 'executor="mexc-rot2"'
+rm -f "$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MULTI_EXCH_STRAT.timer"
 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account remove --server trading01 --strategy "$MULTI_EXCH_STRAT" \
   --executor mexc-rot2 --exchange mexc >/dev/null
-wait_bg_timer
+touch "$SYSTEMCTL_STATE/active_skyeye-trading-probe@$MULTI_EXCH_STRAT.timer"
 assert_contains "$MULTI_EXCH_ENV" '^TQ_EXECUTOR_MAP=toobit-main=toobit,mexc-ui=mexc$'
 
-# ---- C4: Post-write baseline rejects missing timer trigger & inactive timer handling ----
+# ---- C4: Post-write baseline rejects missing timer trigger & in-flight pre-write probes ----
 
 printf 'case: C4 active timer waits for post-write timer-triggered .prom snapshot and fails when timer never triggers\n'
 env_before_c4="$(sha_of "$MULTI_ENV")"
 # Refresh .prom right BEFORE account add (simulating a recent sample) and DO NOT
 # spawn any timer tick after the env write -> must time out and roll back!
-# shellcheck disable=SC2016
-env -i PATH="$PATH" FAKE_UTC_HM="12:00" bash -c \
-  'set -a; source "$1"; set +a; exec "$2"' bash "$MULTI_ENV" "$INSTALLED_PROBE"
+simulate_timer_probe_run "$MULTI_STRAT"
 rc=0
 c4_out="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=2 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
 [[ "$rc" -eq 1 ]] || fail "C4: no-timer-trigger expected rc=1, got rc=$rc: $c4_out"
 [[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "C4: no-timer-trigger did not restore env"
 [[ "$c4_out" == *"timer may not have triggered"* ]] || fail "C4: error did not report missing timer trigger: $c4_out"
+
+printf 'case: C4 in-flight probe started before env write delivering old map after write is excluded\n'
+# Subcase 4a: A probe invocation started BEFORE account add (holding the old
+# env in memory) finishes AFTER the env write and publishes a newer timestamp
+# with the old allowlist. Without a subsequent post-write timer run, add MUST
+# fail and roll back instead of accepting the stale-env snapshot.
+MULTI_SVC="skyeye-trading-probe@${MULTI_STRAT}.service"
+cp "$MULTI_ENV" "$TEST_ROOT/multi.inflight-old.env"
+chmod 600 "$TEST_ROOT/multi.inflight-old.env"
+bump_probe_invocation "$MULTI_STRAT"
+touch "$SYSTEMCTL_STATE/activating_${MULTI_SVC}"
+
+(
+  if wait_env_change_and_next_second "$MULTI_ENV"; then
+    # In-flight pre-write probe finishes with the OLD env (same InvocationID!)
+    # shellcheck disable=SC2016
+    env -i PATH="$PATH" FAKE_UTC_HM="12:00" bash -c \
+      'set -a; source "$1"; set +a; exec "$2"' bash "$TEST_ROOT/multi.inflight-old.env" "$INSTALLED_PROBE"
+    rm -f "$SYSTEMCTL_STATE/activating_${MULTI_SVC}"
+  fi
+) &
+inflight_fail_pid=$!
+BG_PIDS+=("$inflight_fail_pid")
+
+rc=0
+c4_inf_fail="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=2 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
+wait "$inflight_fail_pid" 2>/dev/null || true
+rm -f "$SYSTEMCTL_STATE/activating_${MULTI_SVC}"
+[[ "$rc" -eq 1 ]] || fail "C4 in-flight old-map probe falsely succeeded (rc=$rc): $c4_inf_fail"
+[[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "C4 in-flight failure did not restore env"
+[[ "$c4_inf_fail" == *"started before or during write"* ]] || \
+  fail "C4 in-flight failure reason unclear: $c4_inf_fail"
+
+# Subcase 4b: Same in-flight pre-write probe delivers old-map snapshot at t1 > POST_WRITE_EPOCH,
+# followed by a genuinely new post-write timer run at t2 > t1 with the NEW env (where the newly
+# added executor popdex-rot3 has NO equity series yet because tnauqquant has not restarted). Must
+# exclude t1, accept t2, and commit cleanly!
+bump_probe_invocation "$MULTI_STRAT"
+touch "$SYSTEMCTL_STATE/activating_${MULTI_SVC}"
+INFLIGHT_TS_FILE="$TEST_ROOT/c4-inflight-t1.txt"
+rm -f "$INFLIGHT_TS_FILE"
+
+(
+  if wait_env_change_and_next_second "$MULTI_ENV"; then
+    # 1) In-flight pre-write probe finishes with OLD env (same InvocationID!)
+    # shellcheck disable=SC2016
+    env -i PATH="$PATH" FAKE_UTC_HM="12:00" bash -c \
+      'set -a; source "$1"; set +a; exec "$2"' bash "$TEST_ROOT/multi.inflight-old.env" "$INSTALLED_PROBE"
+    rm -f "$SYSTEMCTL_STATE/activating_${MULTI_SVC}"
+    t1="$(awk '/^tnauqquant_probe_timestamp_seconds\{/ { print $NF; exit }' "$MULTI_PROM")"
+    printf '%s\n' "$t1" >"$INFLIGHT_TS_FILE"
+    # 2) Next timer tick starts strictly AFTER write with NEW env & new InvocationID
+    wait_next_epoch_second "$(date +%s)"
+    simulate_timer_probe_run "$MULTI_STRAT"
+  fi
+) &
+inflight_ok_pid=$!
+BG_PIDS+=("$inflight_ok_pid")
+
+c4_inf_rc=0
+c4_inf_ok="$(SKYEYE_ACCOUNT_VERIFY_TIMEOUT=10 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || c4_inf_rc=$?
+wait "$inflight_ok_pid" 2>/dev/null || true
+rm -f "$SYSTEMCTL_STATE/activating_${MULTI_SVC}"
+[[ "$c4_inf_rc" -eq 0 ]] || fail "C4 in-flight recovery failed (rc=$c4_inf_rc): $c4_inf_ok"
+[[ -f "$INFLIGHT_TS_FILE" ]] || fail "C4 in-flight recovery helper never wrote $INFLIGHT_TS_FILE"
+t1_ts="$(cat "$INFLIGHT_TS_FILE")"
+t2_ts="$(sed -n 's/.*probe_timestamp_seconds=\([0-9]*\).*/\1/p' <<<"$c4_inf_ok" | head -n 1)"
+[[ "$c4_inf_ok" == *"Account add committed"* && -n "$t1_ts" && -n "$t2_ts" && "$t2_ts" -gt "$t1_ts" ]] || \
+  fail "C4 in-flight recovery did not wait for post-write run (t1=$t1_ts t2=$t2_ts): $c4_inf_ok"
+# Before tnauqquant restarts with popdex-rot3, popdex-rot3 has no equity series in .prom
+# (equity stays fail-closed while strategy totals keep publishing).
+assert_not_contains "$MULTI_PROM" 'tnauqquant_current_executor_equity_usdt.*executor="popdex-rot3"'
+
+# Restore back to 2 executors (fast inactive cleanup)
+rm -f "$MULTI_TIMER_ACTIVE"
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 >/dev/null
+touch "$MULTI_TIMER_ACTIVE"
+[[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "C4 cleanup did not restore 2-executor env"
 
 # Also verify unexpected executor in post-write .prom triggers rollback, and failed probe service triggers rollback.
 touch "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
@@ -894,20 +1292,15 @@ rm -f "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
   fail "failed probe service rollback check failed (rc=$rc): $fail_svc_out"
 [[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "failed probe service did not restore env"
 
-# Unexpected executor written after env write triggers rollback
+# Unexpected executor written by a post-write probe run triggers rollback
 (
-  start_sha="$(sha_of "$MULTI_ENV")"
-  for ((i = 0; i < 40; i++)); do
-    if [[ "$(sha_of "$MULTI_ENV")" != "$start_sha" ]]; then
-      sleep 1.1
-      {
-        printf 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="%s"} %s\n' "$MULTI_STRAT" "$(date +%s)"
-        printf 'tnauqquant_current_run_executor_volume_usd{product="tnauqquant",environment="production",server_id="trading01",strategy="%s",exchange="popdex",executor="ghost-exec"} 10\n' "$MULTI_STRAT"
-      } >"$MULTI_PROM"
-      exit 0
-    fi
-    sleep 0.1
-  done
+  if wait_env_change_and_next_second "$MULTI_ENV"; then
+    bump_probe_invocation "$MULTI_STRAT"
+    {
+      printf 'tnauqquant_probe_timestamp_seconds{product="tnauqquant",environment="production",server_id="trading01",strategy="%s"} %s\n' "$MULTI_STRAT" "$(date +%s)"
+      printf 'tnauqquant_current_run_executor_volume_usd{product="tnauqquant",environment="production",server_id="trading01",strategy="%s",exchange="popdex",executor="ghost-exec"} 10\n' "$MULTI_STRAT"
+    } >"$MULTI_PROM"
+  fi
 ) &
 ghost_pid=$!
 BG_PIDS+=("$ghost_pid")
@@ -918,9 +1311,7 @@ wait "$ghost_pid" 2>/dev/null || true
 [[ "$rc" -eq 1 && "$ghost_out" == *"ghost-exec"* ]] || fail "unexpected executor check failed (rc=$rc): $ghost_out"
 [[ "$(sha_of "$MULTI_ENV")" == "$env_before_c4" ]] || fail "unexpected executor did not restore env"
 # Restore clean .prom
-# shellcheck disable=SC2016
-env -i PATH="$PATH" FAKE_UTC_HM="12:00" bash -c \
-  'set -a; source "$1"; set +a; exec "$2"' bash "$MULTI_ENV" "$INSTALLED_PROBE"
+simulate_timer_probe_run "$MULTI_STRAT"
 
 # All 4 timer state combinations preserved; inactive timers verify env/timer only (no .prom wait).
 printf 'case: timer state preservation across all four enabled/active combinations\n'
@@ -965,32 +1356,67 @@ wait_bg_timer
 [[ "$t_out" == *"timer_state: enabled/active (preserved)"* && "$t_out" == *"prom_verified:"* ]] || \
   fail "enabled/active output unclear: $t_out"
 
-# ---- C3: SIGTERM after write triggers idempotent rollback and cleans temp files ----
+# ---- C3: SIGTERM after write + second SIGTERM/SIGHUP mid-rollback still completes rollback ----
 
-printf 'case: C3 SIGTERM after env write triggers idempotent transactional rollback and cleans temp files\n'
+printf 'case: C3 SIGTERM after env write ignores follow-up SIGTERM/SIGHUP during rollback and completes restore\n'
 env_before_c3="$(sha_of "$MULTI_ENV")"
 c3_out="$TEST_ROOT/c3-term.out"
-SKYEYE_ACCOUNT_VERIFY_TIMEOUT=15 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+C3_IN_RB_FLAG="$TEST_ROOT/c3-in-rollback"
+C3_RELEASE_FLAG="$TEST_ROOT/c3-second-term-sent"
+rm -f "$C3_IN_RB_FLAG" "$C3_RELEASE_FLAG"
+
+C3_RB_HOOK="$TEST_ROOT/c3-rollback-hook.sh"
+cat >"$C3_RB_HOOK" <<EOF
+#!/usr/bin/env bash
+touch "$C3_IN_RB_FLAG"
+for ((k = 0; k < 40; k++)); do
+  [[ -e "$C3_RELEASE_FLAG" ]] && break
+  perl -e 'select(undef, undef, undef, 0.05)'
+done
+# Small extra pause so the second SIGTERM/SIGHUP is definitely delivered before cp completes.
+perl -e 'select(undef, undef, undef, 0.15)'
+EOF
+chmod 755 "$C3_RB_HOOK"
+
+FAKE_FAIL_CP_PATTERN=".env.before" FAKE_FAIL_CP_EXIT=0 FAKE_CP_HOOK="$C3_RB_HOOK" \
+  SKYEYE_ACCOUNT_VERIFY_TIMEOUT=15 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 \
   >"$c3_out" 2>&1 &
 c3_pid=$!
 BG_PIDS+=("$c3_pid")
 
 c3_mutated=0
-for ((i = 0; i < 40; i++)); do
+for ((i = 0; i < 60; i++)); do
   if rg -q '^TQ_EXECUTOR_MAP=.*,popdex-rot3=popdex$' "$MULTI_ENV"; then
     c3_mutated=1
     break
   fi
-  sleep 0.1
+  perl -e 'select(undef, undef, undef, 0.05)'
 done
-[[ "$c3_mutated" -eq 1 ]] || fail "C3: env was not mutated before sending SIGTERM"
+[[ "$c3_mutated" -eq 1 ]] || fail "C3: env was not mutated before sending first SIGTERM"
 
+# First SIGTERM initiates transactional rollback.
 kill -TERM "$c3_pid"
+
+c3_entered_rb=0
+for ((i = 0; i < 60; i++)); do
+  if [[ -e "$C3_IN_RB_FLAG" ]]; then
+    c3_entered_rb=1
+    break
+  fi
+  perl -e 'select(undef, undef, undef, 0.05)'
+done
+[[ "$c3_entered_rb" -eq 1 ]] || fail "C3: rollback copy hook was never entered"
+
+# Deliver follow-up SIGTERM and SIGHUP while rollback is mid-restore!
+kill -TERM "$c3_pid"
+kill -HUP "$c3_pid"
+touch "$C3_RELEASE_FLAG"
+
 c3_rc=0
 wait "$c3_pid" || c3_rc=$?
-[[ "$c3_rc" -eq 143 ]] || fail "C3: expected SIGTERM exit 143, got $c3_rc: $(cat "$c3_out")"
-[[ "$(sha_of "$MULTI_ENV")" == "$env_before_c3" ]] || fail "C3: SIGTERM rollback did not restore env"
+[[ "$c3_rc" -eq 143 ]] || fail "C3: expected SIGTERM exit 143 after second TERM mid-rollback, got $c3_rc: $(cat "$c3_out")"
+[[ "$(sha_of "$MULTI_ENV")" == "$env_before_c3" ]] || fail "C3: follow-up SIGTERM interrupted rollback and left env mutated"
 c3_dir="$(sed -n 's/^Backup record: //p' "$c3_out" | head -n 1)"
 assert_contains "$c3_dir/account.meta" '^status=rolled_back$'
 assert_contains "$c3_dir/account.meta" '^rollback_reason=interrupted by SIGTERM$'
@@ -998,28 +1424,30 @@ assert_not_contains "$c3_dir/account.meta" '^status=committed$'
 leftover_tmp="$(find "$SYSTEM_ROOT/etc/skyeye-trading/instances" -name '*.tmp.*' -print)"
 [[ -z "$leftover_tmp" ]] || fail "C3: leftover staged temp files after SIGTERM: $leftover_tmp"
 
-# ---- C6: Separate env & timer rollback accounting + exact manual recovery commands ----
+# ---- C6 & C20: Separate env & timer rollback accounting via root-safe cp stub ----
 
-printf 'case: C6 incomplete rollback reports env and timer results separately and gives exact manual recovery commands\n'
+printf 'case: C6 & C20 incomplete rollback reports env and timer results separately using cp stub (root-safe, no chmod 500)\n'
 env_before_c6="$(sha_of "$MULTI_ENV")"
 cp "$MULTI_ENV" "$TEST_ROOT/multi.c6-save"
 
-# 1) Env restore fails (instances dir made read-only during verification) while timer stays intact
-HOOK_RO="$TEST_ROOT/hook-ro.sh"
-cat >"$HOOK_RO" <<EOF
+# 1) Env restore fails via cp stub rejecting only .env.before restore copy (works under root too)
+#    while timer stays intact.
+HOOK_FAIL_SVC="$TEST_ROOT/hook-fail-svc.sh"
+cat >"$HOOK_FAIL_SVC" <<EOF
 #!/usr/bin/env bash
-chmod 500 "$SYSTEM_ROOT/etc/skyeye-trading/instances"
-touch "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
+if [[ "\$(shasum -a 256 "$MULTI_ENV" | awk '{print \$1}')" != "$env_before_c6" ]]; then
+  touch "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
+fi
 EOF
-chmod 755 "$HOOK_RO"
+chmod 755 "$HOOK_FAIL_SVC"
 
 rc=0
-c6_env_out="$(FAKE_IS_FAILED_HOOK="$HOOK_RO" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+c6_env_out="$(FAKE_FAIL_CP_PATTERN=".env.before" FAKE_FAIL_CP_EXIT=1 \
+  FAKE_SHOW_SERVICE_HOOK="$HOOK_FAIL_SVC" SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
-chmod 700 "$SYSTEM_ROOT/etc/skyeye-trading/instances"
 rm -f "$SYSTEMCTL_STATE/failed_skyeye-trading-probe@$MULTI_STRAT.service"
 
-[[ "$rc" -eq 3 ]] || fail "C6 env restore failure expected rc=3, got rc=$rc: $c6_env_out"
+[[ "$rc" -eq 3 ]] || fail "C6/C20 env restore failure expected rc=3, got rc=$rc: $c6_env_out"
 c6_dir="$(sed -n 's/^Backup record: //p' <<<"$c6_env_out" | head -n 1)"
 assert_contains "$c6_dir/account.meta" '^status=rollback_incomplete$'
 assert_contains "$c6_dir/account.meta" '^rollback_env_restored=0$'
@@ -1029,7 +1457,7 @@ assert_contains "$c6_dir/account.meta" '^rollback_timer_preserved=1$'
    "$c6_env_out" == *"sudo install -m 600 $c6_dir/$MULTI_STRAT.env.before $MULTI_ENV"* &&
    "$c6_env_out" == *"sudo cmp -s $c6_dir/$MULTI_STRAT.env.before $MULTI_ENV"* &&
    "$c6_env_out" != *"original env was restored"* ]] || \
-  fail "C6 env restore failure message inaccurate: $c6_env_out"
+  fail "C6/C20 env restore failure message inaccurate: $c6_env_out"
 # Restore fixture env back to pre-C6 state
 install -m 600 "$TEST_ROOT/multi.c6-save" "$MULTI_ENV"
 
@@ -1037,12 +1465,13 @@ install -m 600 "$TEST_ROOT/multi.c6-save" "$MULTI_ENV"
 HOOK_TIMER_DRIFT="$TEST_ROOT/hook-timer-drift.sh"
 cat >"$HOOK_TIMER_DRIFT" <<EOF
 #!/usr/bin/env bash
-rm -f "$MULTI_TIMER_ACTIVE"
+if [[ "\$(shasum -a 256 "$MULTI_ENV" | awk '{print \$1}')" != "$env_before_c6" ]]; then
+  rm -f "$MULTI_TIMER_ACTIVE"
+fi
 EOF
 chmod 755 "$HOOK_TIMER_DRIFT"
-# Trigger drift right before timer_matches_prior runs on second poll (or via is-failed hook)
 rc=0
-c6_tm_out="$(FAKE_IS_FAILED_HOOK="$HOOK_TIMER_DRIFT" SKYEYE_ACCOUNT_VERIFY_TIMEOUT=2 \
+c6_tm_out="$(FAKE_SHOW_SERVICE_HOOK="$HOOK_TIMER_DRIFT" SKYEYE_ACCOUNT_VERIFY_TIMEOUT=2 \
   SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$SETUP" account add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 2>&1)" || rc=$?
 touch "$MULTI_TIMER_ACTIVE"
@@ -1137,10 +1566,11 @@ wait_bg_timer
 [[ ! -s "$SSH_LOG" ]] || fail "--local invoked ssh"
 assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex,popdex-rot3=popdex$'
 
-spawn_timer_tick_on_env_change "$MULTI_STRAT"
+rm -f "$MULTI_TIMER_ACTIVE"
 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$WRAPPER" remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 --local >/dev/null
-wait_bg_timer
+touch "$MULTI_TIMER_ACTIVE"
+[[ ! -s "$SSH_LOG" ]] || fail "--local remove invoked ssh"
 assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex$'
 
 # Remote non-TTY mode: uploads ONLY the 3 minimal scripts (-T), executes via sudo -n (-T),
@@ -1174,10 +1604,10 @@ actual:
 $actual_tar_files"
 
 # Clean back to 2 executors via remote remove
-spawn_timer_tick_on_env_change "$MULTI_STRAT"
+rm -f "$MULTI_TIMER_ACTIVE"
 FAKE_SSH_EXEC_LOCAL=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
   "$WRAPPER" remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 --ssh-target ubuntu@t01 >/dev/null
-wait_bg_timer
+touch "$MULTI_TIMER_ACTIVE"
 assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex$'
 
 printf 'case: C7 remote wrapper allocates PTY (-t) when attached to interactive TTY and keeps tar upload without PTY (-T)\n'
@@ -1268,6 +1698,64 @@ exec 6>&-
 [[ "$rc" -ne 0 ]] || fail "direct host lock refusal unexpectedly exited 0"
 [[ "$lock_host_err" == *"sudo $TRADING_DIR/setup-linux.sh account add --server trading01 --strategy $MULTI_STRAT --executor popdex-rot3 --dry-run"* ]] || \
   fail "C8: host-side retry did not preserve host mode and --dry-run: $lock_host_err"
+
+# ---- C19: Remote staging ignores space-containing TMPDIR & reports cleanup failures separately ----
+
+printf 'case: C19 remote staging uses supported /tmp path ignoring space-containing remote TMPDIR\n'
+: >"$SSH_LOG"
+c19_sp_out="$(FAKE_SSH_REMOTE_TMPDIR="/tmp/dir with spaces" FAKE_SSH_EXEC_LOCAL=1 \
+  SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$WRAPPER" list --server trading01 --strategy "$MULTI_STRAT" --ssh-target ubuntu@t01)"
+[[ "$c19_sp_out" == *"TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex"* ]] || \
+  fail "C19 space TMPDIR remote list failed: $c19_sp_out"
+c19_rm_path="$(sed -n 's/^FLAGS=-T TARGET=ubuntu@t01 CMD=rm -rf -- '\''\([^'\'']*\)'\''$/\1/p' "$SSH_LOG" | tail -n 1)"
+[[ "$c19_rm_path" == /tmp/skyeye-trading-account.* && ! -e "$c19_rm_path" ]] || \
+  fail "C19 space TMPDIR did not stage under /tmp or leaked dir: path='$c19_rm_path' log=$(cat "$SSH_LOG")"
+
+printf 'case: C19 remote temp cleanup failure returns non-zero and reports account result and residual path separately\n'
+# 1) Read-only list succeeds, but remote rm -rf fails -> rc=4, stdout has list,
+#    stderr separates account succeeded (rc=0) from exact residual remote path.
+: >"$SSH_LOG"
+c19_list_stdout="$TEST_ROOT/c19-list.out"
+c19_list_stderr="$TEST_ROOT/c19-list.err"
+c19_list_rc=0
+FAKE_SSH_CLEANUP_FAIL=1 FAKE_SSH_EXEC_LOCAL=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$WRAPPER" list --server trading01 --strategy "$MULTI_STRAT" --ssh-target ubuntu@t01 \
+  >"$c19_list_stdout" 2>"$c19_list_stderr" || c19_list_rc=$?
+[[ "$c19_list_rc" -eq 4 ]] || \
+  fail "C19 cleanup failure on list expected rc=4, got $c19_list_rc: $(cat "$c19_list_stderr")"
+assert_contains "$c19_list_stdout" '^configured_executors \(TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex\):$'
+c19_residual="$(sed -n 's/^.*residual path on ubuntu@t01: //p' "$c19_list_stderr" | head -n 1)"
+[[ -n "$c19_residual" && -d "$c19_residual" ]] || \
+  fail "C19 cleanup failure did not report existing residual dir: $(cat "$c19_list_stderr")"
+assert_contains "$c19_list_stderr" 'account command result: list succeeded \(rc=0\)'
+assert_contains "$c19_list_stderr" 'remote temp cleanup FAILED'
+assert_contains "$c19_list_stderr" "Manual cleanup: ssh 'ubuntu@t01' rm -rf -- '$c19_residual'"
+rm -rf -- "$c19_residual"
+
+# 2) Committed add succeeds, but remote rm -rf fails -> rc=4, env IS committed,
+#    stderr separates add succeeded (rc=0) from exact residual remote path.
+rm -f "$MULTI_TIMER_ACTIVE" # fast inactive commit to test wrapper cleanup reporting
+c19_add_stdout="$TEST_ROOT/c19-add.out"
+c19_add_stderr="$TEST_ROOT/c19-add.err"
+c19_add_rc=0
+FAKE_SSH_CLEANUP_FAIL=1 FAKE_SSH_EXEC_LOCAL=1 SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$WRAPPER" add --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 --ssh-target ubuntu@t01 \
+  >"$c19_add_stdout" 2>"$c19_add_stderr" || c19_add_rc=$?
+[[ "$c19_add_rc" -eq 4 ]] || \
+  fail "C19 cleanup failure on committed add expected rc=4, got $c19_add_rc: $(cat "$c19_add_stderr")"
+assert_contains "$c19_add_stdout" '^Account add committed for trading01/popdex-multi-accounts:$'
+assert_contains "$MULTI_ENV" '^TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex,popdex-rot3=popdex$'
+c19_add_residual="$(sed -n 's/^.*residual path on ubuntu@t01: //p' "$c19_add_stderr" | head -n 1)"
+[[ -n "$c19_add_residual" && -d "$c19_add_residual" ]] || \
+  fail "C19 cleanup failure on add did not report existing residual dir: $(cat "$c19_add_stderr")"
+assert_contains "$c19_add_stderr" 'account command result: add succeeded \(rc=0\)'
+assert_contains "$c19_add_stderr" 'remote temp cleanup FAILED'
+rm -rf -- "$c19_add_residual"
+# Restore 2-executor env and active timer cleanly
+SKYEYE_TRADING_TEST_ROOT="$SYSTEM_ROOT" \
+  "$SETUP" account remove --server trading01 --strategy "$MULTI_STRAT" --executor popdex-rot3 >/dev/null
+touch "$MULTI_TIMER_ACTIVE"
 
 # ---- C14: README bash examples are complete copy-pasteable commands ----
 

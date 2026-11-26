@@ -29,6 +29,7 @@ DRY_RUN=0
 WAIT_SECONDS="${SKYEYE_ACCOUNT_WAIT_SECONDS:-0}"
 VERIFY_TIMEOUT="${SKYEYE_ACCOUNT_VERIFY_TIMEOUT:-45}"
 POLL_INTERVAL="${SKYEYE_ACCOUNT_POLL_INTERVAL:-2}"
+MAX_PROM_BYTES="${SKYEYE_ACCOUNT_MAX_PROM_BYTES:-4194304}"
 
 # Transaction state shared with signal/exit traps.
 WORK_DIR=""
@@ -49,6 +50,7 @@ ROLLBACK_FAILED=0
 ROLLBACK_REASON=""
 SLEEP_PID=""
 PROM_ERR_TMP=""
+SYSTEMCTL_ERR_TMP=""
 
 usage() {
   printf '%s\n' \
@@ -152,6 +154,9 @@ check_utc_window() {
   total_min=$((10#$hh * 60 + 10#$mm))
   # Refuse UTC 18:10 (1090) through 19:30 (1170) inclusive.
   if [[ "$total_min" -ge 1090 && "$total_min" -le 1170 ]]; then
+    if [[ -n "${BACKUP_DIR:-}" && -d "$BACKUP_DIR" && -f "$BACKUP_DIR/account.meta" ]]; then
+      printf 'status=refused_utc_window\n' >>"$BACKUP_DIR/account.meta"
+    fi
     printf 'SkyEye trading account: refusing to modify trading accounts during the UTC 18:10-19:30 maintenance/restart window (current UTC: %s). Retry after 19:30 UTC.\n' \
       "$now_hm" >&2
     print_host_retry_hint "Retry after 19:30 UTC"
@@ -160,14 +165,16 @@ check_utc_window() {
 }
 
 # Atomically opens a .prom file without following symlinks (O_NOFOLLOW | O_NONBLOCK),
-# verifies fstat(fd) is a regular file, and reads its complete contents from that
+# verifies fstat(fd) is a regular file, enforces a strict byte read cap
+# (MAX_PROM_BYTES, default 4 MiB), and reads its complete contents from that
 # single descriptor into PROM_SNAPSHOT. Shared by list and post-write verification.
 # Return codes:
 #   0  = regular file read into PROM_SNAPSHOT
 #   10 = ENOENT (file does not exist)
 #   11 = ELOOP (symlink refused)
-#   13 = non-regular file (FIFO, directory, etc. refused)
 #   12 = other open/read error
+#   13 = non-regular file (FIFO, directory, etc. refused)
+#   14 = file size or bytes read exceeds MAX_PROM_BYTES
 PROM_SNAPSHOT=""
 PROM_READ_ERROR=""
 read_prom_snapshot() {
@@ -184,7 +191,7 @@ read_prom_snapshot() {
   PROM_SNAPSHOT="$(perl -MFcntl=O_RDONLY,O_NOFOLLOW,O_NONBLOCK -e '
     use strict;
     use warnings;
-    my ($path) = @ARGV;
+    my ($path, $max_bytes) = @ARGV;
     my $fh;
     if (!sysopen($fh, $path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)) {
       if ($!{ENOENT}) { exit 10; }
@@ -197,7 +204,14 @@ read_prom_snapshot() {
       print STDERR "refusing non-regular prom file: $path\n";
       exit 13;
     }
+    my $fsize = -s $fh;
+    if (defined($fsize) && $fsize > $max_bytes) {
+      close($fh);
+      print STDERR "prom file exceeds maximum allowed size ($max_bytes bytes): $path\n";
+      exit 14;
+    }
     my $data = "";
+    my $total = 0;
     while (1) {
       my $buf = "";
       my $n = sysread($fh, $buf, 65536);
@@ -207,11 +221,17 @@ read_prom_snapshot() {
         exit 12;
       }
       last if $n == 0;
+      $total += $n;
+      if ($total > $max_bytes) {
+        close($fh);
+        print STDERR "prom file exceeds maximum allowed size ($max_bytes bytes): $path\n";
+        exit 14;
+      }
       $data .= $buf;
     }
     close($fh);
     print $data;
-  ' "$prom_path" 2>"$PROM_ERR_TMP")" || rc=$?
+  ' "$prom_path" "$MAX_PROM_BYTES" 2>"$PROM_ERR_TMP")" || rc=$?
   if [[ -s "$PROM_ERR_TMP" ]]; then
     PROM_READ_ERROR="$(cat "$PROM_ERR_TMP")"
   fi
@@ -342,6 +362,90 @@ snapshot_unexpected_executors() {
   ' <<<"$snapshot"
 }
 
+# Validates that key instance variables appear exactly once as unambiguous
+# column-1 VAR=... assignments without executing the env file. Detects leading
+# whitespace (which systemd EnvironmentFile= accepts), 'export VAR=', spaces
+# before '=', duplicate lines, and backslash line-continuation ambiguity.
+validate_env_assignments() {
+  local env_file="$1"
+  perl -e '
+    use strict;
+    use warnings;
+    my ($path) = @ARGV;
+    my @watched = qw(
+      TQ_EXECUTOR_MAP
+      TQ_STRATEGY
+      TQ_SERVER_ID
+      TQ_TEXTFILE_DIR
+      TQ_TEXTFILE_NAME
+    );
+    my %watched_set = map { $_ => 1 } @watched;
+    my %lines_for = map { $_ => [] } @watched;
+
+    open(my $in, "<:raw", $path) or die "SkyEye trading account: cannot open $path: $!\n";
+    local $/;
+    my $raw = <$in>;
+    close($in);
+    defined($raw) or $raw = "";
+
+    my @lines = split(/(?<=\n)/, $raw, -1);
+    pop @lines if @lines && $lines[-1] eq "";
+
+    my $prev_continued = 0;
+    for my $idx (0..$#lines) {
+      my $lineno = $idx + 1;
+      my $line = $lines[$idx];
+      $line =~ s/\r?\n\z//;
+
+      my $ends_with_cont = 0;
+      if ($line !~ /^[ \t]*[#;]/ && $line =~ /(\\+)\z/) {
+        $ends_with_cont = (length($1) % 2 == 1) ? 1 : 0;
+      }
+
+      if ($prev_continued) {
+        if ($line =~ /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=/ && $watched_set{$1}) {
+          die "SkyEye trading account: ambiguous backslash line continuation into $1 at line $lineno in $path; expected exactly one literal $1= line\n";
+        }
+        $prev_continued = $ends_with_cont;
+        next;
+      }
+
+      if ($line =~ /^[ \t]*$/ || $line =~ /^[ \t]*[#;]/) {
+        next;
+      }
+
+      if ($line =~ /^([ \t]*)(export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)([ \t]*)=/) {
+        my ($lead_ws, $exp_kw, $var, $pre_eq_ws) = ($1, $2, $3, $4);
+        if ($watched_set{$var}) {
+          push @{ $lines_for{$var} }, $lineno;
+          if ($lead_ws ne "") {
+            die "SkyEye trading account: ambiguous $var assignment with leading whitespace at line $lineno in $path (EnvironmentFile= accepts indented assignments); expected exactly one literal $var= line\n";
+          }
+          if (defined($exp_kw) && $exp_kw ne "") {
+            die "SkyEye trading account: ambiguous '\''export'\'' $var assignment at line $lineno in $path; expected exactly one literal $var= line\n";
+          }
+          if ($pre_eq_ws ne "") {
+            die "SkyEye trading account: ambiguous whitespace before '\''='\'' in $var assignment at line $lineno in $path; expected exactly one literal $var= line\n";
+          }
+          if ($ends_with_cont) {
+            die "SkyEye trading account: unsupported trailing backslash continuation in $var at line $lineno in $path; expected exactly one literal $var= line\n";
+          }
+        }
+      }
+
+      $prev_continued = $ends_with_cont;
+    }
+
+    for my $var (@watched) {
+      my $n = scalar(@{ $lines_for{$var} });
+      if ($n != 1) {
+        my $where = $n > 0 ? " (lines " . join(",", @{ $lines_for{$var} }) . ")" : "";
+        die "SkyEye trading account: expected exactly one literal $var= line in $path, found $n$where\n";
+      }
+    }
+  ' "$env_file"
+}
+
 # Replaces ONLY the single TQ_EXECUTOR_MAP= line in raw byte mode, preserving
 # every other byte and original line endings (including missing final newline).
 rewrite_executor_map_exact() {
@@ -429,8 +533,11 @@ file_owner_uid_gid() {
 
 # Atomically writes src_file into target_env using a temp file in target_env's
 # directory, preserving owner/group (when root / non-test) and mode 0600.
+# When enforce_utc=1 (forward apply), re-checks the UTC 18:10-19:30 guard after
+# staging and immediately before mv -f, then marks TX_STARTED=1. Rollback calls
+# with enforce_utc=0 so restoring a backup is never blocked by the UTC window.
 atomic_replace_env() {
-  local src_file="$1" target_env="$2" owner_uid_gid="$3"
+  local src_file="$1" target_env="$2" owner_uid_gid="$3" enforce_utc="${4:-0}"
   local target_dir target_base tmp_path old_umask
   target_dir="$(dirname "$target_env")"
   target_base="$(basename "$target_env")"
@@ -450,6 +557,10 @@ atomic_replace_env() {
     chown "$owner_uid_gid" "$tmp_path" || return 1
   fi
   cmp -s "$src_file" "$tmp_path" || return 1
+  if [[ "$enforce_utc" -eq 1 ]]; then
+    check_utc_window
+    TX_STARTED=1
+  fi
   mv -f -- "$tmp_path" "$target_env" || return 1
   STAGED_ENV_TEMP=""
   cmp -s "$src_file" "$target_env" || return 1
@@ -466,11 +577,159 @@ timer_label() {
   esac
 }
 
+# Strict systemd timer query: distinguishes bus/query failures and missing
+# units (LoadState=not-found) from genuine disabled/inactive states.
+TIMER_QUERY_ENABLED=""
+TIMER_QUERY_ACTIVE=""
+TIMER_QUERY_ERROR=""
+query_timer_state() {
+  local unit="$1"
+  TIMER_QUERY_ENABLED=""
+  TIMER_QUERY_ACTIVE=""
+  TIMER_QUERY_ERROR=""
+
+  local out="" err_file="" rc=0 err_msg=""
+  err_file="$(mktemp "${TMPDIR:-/tmp}/skyeye-systemctl-err.XXXXXX")"
+  SYSTEMCTL_ERR_TMP="$err_file"
+  out="$("$SYSTEMCTL_BIN" show --no-pager -p LoadState -p UnitFileState -p ActiveState -- "$unit" 2>"$err_file")" || rc=$?
+  if [[ -s "$err_file" ]]; then
+    err_msg="$(tr '\n' ' ' <"$err_file" | sed 's/[[:space:]]*$//')"
+  fi
+  rm -f -- "$err_file"
+  SYSTEMCTL_ERR_TMP=""
+
+  if [[ "$rc" -ne 0 ]]; then
+    TIMER_QUERY_ERROR="systemctl show failed for $unit (rc=$rc${err_msg:+: $err_msg})"
+    return 1
+  fi
+
+  local load_state="" unit_file_state="" active_state="" line
+  while IFS= read -r line; do
+    case "$line" in
+      LoadState=*) load_state="${line#LoadState=}" ;;
+      UnitFileState=*) unit_file_state="${line#UnitFileState=}" ;;
+      ActiveState=*) active_state="${line#ActiveState=}" ;;
+    esac
+  done <<<"$out"
+
+  if [[ "$load_state" == "not-found" ]]; then
+    TIMER_QUERY_ERROR="systemd unit does not exist (LoadState=not-found): $unit"
+    return 1
+  fi
+  if [[ "$load_state" != "loaded" ]]; then
+    TIMER_QUERY_ERROR="systemd unit $unit is not loaded (LoadState=${load_state:-missing}${err_msg:+; $err_msg})"
+    return 1
+  fi
+
+  case "$unit_file_state" in
+    enabled|enabled-runtime)
+      TIMER_QUERY_ENABLED=1
+      ;;
+    disabled|static|indirect|masked|masked-runtime|linked|linked-runtime|generated)
+      TIMER_QUERY_ENABLED=0
+      ;;
+    *)
+      TIMER_QUERY_ERROR="cannot determine enabled state of $unit (UnitFileState=${unit_file_state:-missing})"
+      return 1
+      ;;
+  esac
+
+  case "$active_state" in
+    active|reloading|activating)
+      TIMER_QUERY_ACTIVE=1
+      ;;
+    inactive|failed|deactivating)
+      TIMER_QUERY_ACTIVE=0
+      ;;
+    *)
+      TIMER_QUERY_ERROR="cannot determine active state of $unit (ActiveState=${active_state:-missing})"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# Strict systemd probe service query: returns LoadState verification plus
+# ActiveState, Result, InvocationID, and ExecMainStartTimestampMonotonic.
+SVC_ACTIVE_STATE=""
+SVC_RESULT=""
+SVC_INVOCATION_ID=""
+SVC_EXEC_START_MONO=""
+SVC_QUERY_ERROR=""
+query_probe_service_state() {
+  local unit="$1"
+  SVC_ACTIVE_STATE=""
+  SVC_RESULT=""
+  SVC_INVOCATION_ID=""
+  SVC_EXEC_START_MONO=""
+  SVC_QUERY_ERROR=""
+
+  local out="" err_file="" rc=0 err_msg=""
+  err_file="$(mktemp "${TMPDIR:-/tmp}/skyeye-systemctl-err.XXXXXX")"
+  SYSTEMCTL_ERR_TMP="$err_file"
+  out="$("$SYSTEMCTL_BIN" show --no-pager \
+    -p LoadState -p ActiveState -p Result -p InvocationID -p ExecMainStartTimestampMonotonic \
+    -- "$unit" 2>"$err_file")" || rc=$?
+  if [[ -s "$err_file" ]]; then
+    err_msg="$(tr '\n' ' ' <"$err_file" | sed 's/[[:space:]]*$//')"
+  fi
+  rm -f -- "$err_file"
+  SYSTEMCTL_ERR_TMP=""
+
+  if [[ "$rc" -ne 0 ]]; then
+    SVC_QUERY_ERROR="systemctl show failed for $unit (rc=$rc${err_msg:+: $err_msg})"
+    return 1
+  fi
+
+  local load_state="" line
+  while IFS= read -r line; do
+    case "$line" in
+      LoadState=*) load_state="${line#LoadState=}" ;;
+      ActiveState=*) SVC_ACTIVE_STATE="${line#ActiveState=}" ;;
+      Result=*) SVC_RESULT="${line#Result=}" ;;
+      InvocationID=*) SVC_INVOCATION_ID="${line#InvocationID=}" ;;
+      ExecMainStartTimestampMonotonic=*) SVC_EXEC_START_MONO="${line#ExecMainStartTimestampMonotonic=}" ;;
+    esac
+  done <<<"$out"
+
+  if [[ "$load_state" == "not-found" ]]; then
+    SVC_QUERY_ERROR="systemd unit does not exist (LoadState=not-found): $unit"
+    return 1
+  fi
+  if [[ "$load_state" != "loaded" ]]; then
+    SVC_QUERY_ERROR="systemd unit $unit is not loaded (LoadState=${load_state:-missing}${err_msg:+; $err_msg})"
+    return 1
+  fi
+  if [[ -z "$SVC_ACTIVE_STATE" ]]; then
+    SVC_QUERY_ERROR="cannot determine ActiveState of $unit"
+    return 1
+  fi
+  if [[ -z "$SVC_EXEC_START_MONO" ]]; then
+    SVC_EXEC_START_MONO=0
+  fi
+  [[ "$SVC_EXEC_START_MONO" =~ ^[0-9]+$ ]] || {
+    SVC_QUERY_ERROR="unexpected ExecMainStartTimestampMonotonic for $unit: $SVC_EXEC_START_MONO"
+    return 1
+  }
+  return 0
+}
+
+# Returns:
+#   0 = timer queried cleanly and matches prior enabled/active state
+#   1 = timer queried cleanly and drifted from prior state
+#   2 = timer could not be queried (systemd error or missing unit)
+TIMER_CHECK_ERROR=""
 timer_matches_prior() {
-  local cur_e=0 cur_a=0
-  "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && cur_e=1
-  "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && cur_a=1
-  [[ "$cur_e" -eq "$PRIOR_TIMER_ENABLED" && "$cur_a" -eq "$PRIOR_TIMER_ACTIVE" ]]
+  TIMER_CHECK_ERROR=""
+  if ! query_timer_state "$INSTANCE_TIMER"; then
+    TIMER_CHECK_ERROR="$TIMER_QUERY_ERROR"
+    return 2
+  fi
+  if [[ "$TIMER_QUERY_ENABLED" -eq "$PRIOR_TIMER_ENABLED" && "$TIMER_QUERY_ACTIVE" -eq "$PRIOR_TIMER_ACTIVE" ]]; then
+    return 0
+  fi
+  TIMER_CHECK_ERROR="$INSTANCE_TIMER changed from $(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE") to $(timer_label "$TIMER_QUERY_ENABLED" "$TIMER_QUERY_ACTIVE")"
+  return 1
 }
 
 interruptible_sleep() {
@@ -502,11 +761,17 @@ perform_rollback() {
   kill_pending_sleep
   printf 'SkyEye trading account: %s; restoring backup from %s\n' "$reason" "$BACKUP_ENV" >&2
 
-  local env_restored=0 timer_preserved=0
+  # Clean any half-staged forward temp file before staging the backup restore.
+  if [[ -n "${STAGED_ENV_TEMP:-}" && -e "$STAGED_ENV_TEMP" ]]; then
+    rm -f -- "$STAGED_ENV_TEMP"
+    STAGED_ENV_TEMP=""
+  fi
+
+  local env_restored=0 timer_preserved=0 timer_status_label="0" timer_check_detail=""
   if [[ -f "$BACKUP_ENV" ]]; then
     if cmp -s "$BACKUP_ENV" "$INSTALL_ENV" && [[ "$(file_mode "$INSTALL_ENV")" == "600" ]]; then
       env_restored=1
-    elif atomic_replace_env "$BACKUP_ENV" "$INSTALL_ENV" "$ORIG_ENV_OWNER" 2>/dev/null; then
+    elif atomic_replace_env "$BACKUP_ENV" "$INSTALL_ENV" "$ORIG_ENV_OWNER" 0 2>/dev/null; then
       if cmp -s "$BACKUP_ENV" "$INSTALL_ENV" && [[ "$(file_mode "$INSTALL_ENV")" == "600" ]]; then
         env_restored=1
       fi
@@ -519,15 +784,26 @@ perform_rollback() {
     fi
   fi
 
-  if timer_matches_prior; then
+  local tm_rc=0
+  timer_matches_prior || tm_rc=$?
+  if [[ "$tm_rc" -eq 0 ]]; then
     timer_preserved=1
+    timer_status_label="1"
+  elif [[ "$tm_rc" -eq 2 ]]; then
+    timer_preserved=0
+    timer_status_label="unknown"
+    timer_check_detail="Timer state check UNKNOWN: could not query $INSTANCE_TIMER ($TIMER_CHECK_ERROR)."
+  else
+    timer_preserved=0
+    timer_status_label="0"
+    timer_check_detail="Timer state check FAILED: $TIMER_CHECK_ERROR."
   fi
 
   if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
     {
       printf 'rollback_reason=%s\n' "$reason"
       printf 'rollback_env_restored=%s\n' "$env_restored"
-      printf 'rollback_timer_preserved=%s\n' "$timer_preserved"
+      printf 'rollback_timer_preserved=%s\n' "$timer_status_label"
     } >>"$BACKUP_DIR/account.meta"
   fi
 
@@ -547,7 +823,7 @@ perform_rollback() {
   fi
 
   printf 'CRITICAL: rollback_incomplete (env_restored=%s timer_preserved=%s)\n' \
-    "$env_restored" "$timer_preserved" >&2
+    "$env_restored" "$timer_status_label" >&2
   if [[ "$env_restored" -ne 1 ]]; then
     printf '%s\n' \
       "Env restore FAILED: $INSTALL_ENV could not be restored to match $BACKUP_ENV." \
@@ -560,9 +836,9 @@ perform_rollback() {
   fi
   if [[ "$timer_preserved" -ne 1 ]]; then
     printf '%s\n' \
-      "Timer state check FAILED: $INSTANCE_TIMER no longer matches prior state ($(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE"))." \
+      "$timer_check_detail" \
       "Inspect timer state with:" \
-      "  sudo systemctl is-enabled $INSTANCE_TIMER; sudo systemctl is-active $INSTANCE_TIMER" >&2
+      "  sudo systemctl show -p LoadState -p UnitFileState -p ActiveState $INSTANCE_TIMER" >&2
   fi
   printf 'Backup record: %s\n' "$BACKUP_DIR" >&2
   ROLLBACK_FAILED=1
@@ -585,7 +861,10 @@ on_signal() {
 # shellcheck disable=SC2329
 on_exit() {
   local status=$?
-  trap - EXIT HUP INT TERM
+  # Clear only EXIT so subsequent HUP/INT/TERM signals stay ignored while
+  # rollback, verification, metadata recording, and temp cleanup complete.
+  trap - EXIT
+  trap '' HUP INT TERM
   kill_pending_sleep
   if [[ "$TX_STARTED" -eq 1 && "$TX_COMMITTED" -eq 0 ]]; then
     local reason="${ROLLBACK_REASON:-unexpected exit (rc=$status)}"
@@ -597,6 +876,9 @@ on_exit() {
   fi
   if [[ -n "${PROM_ERR_TMP:-}" && -e "$PROM_ERR_TMP" ]]; then
     rm -f -- "$PROM_ERR_TMP"
+  fi
+  if [[ -n "${SYSTEMCTL_ERR_TMP:-}" && -e "$SYSTEMCTL_ERR_TMP" ]]; then
+    rm -f -- "$SYSTEMCTL_ERR_TMP"
   fi
   if [[ -n "${STAGED_ENV_TEMP:-}" && -e "$STAGED_ENV_TEMP" ]]; then
     rm -f -- "$STAGED_ENV_TEMP"
@@ -669,6 +951,9 @@ if [[ -n "$SERVER_ID" ]]; then
   valid_label_value "$SERVER_ID" || die "invalid server_id: $SERVER_ID"
 fi
 
+[[ "$MAX_PROM_BYTES" =~ ^[0-9]+$ && "$MAX_PROM_BYTES" -ge 1 ]] || \
+  die "SKYEYE_ACCOUNT_MAX_PROM_BYTES must be a positive integer, got: $MAX_PROM_BYTES"
+
 if [[ "$SUBCOMMAND" == "list" ]]; then
   [[ -z "$EXECUTOR" ]] || die "list does not take --executor"
   [[ -z "$EXCHANGE" ]] || die "list does not take --exchange"
@@ -695,13 +980,11 @@ load_installed_instance() {
   [[ -f "$INSTALL_ENV" ]] || \
     die "installed strategy instance not found: $INSTALL_ENV (to onboard a new strategy, follow 'Add or remove a Trading target' in agents/alloy/trading/README.md)"
 
-  local env_mode map_line_count
+  local env_mode
   env_mode="$(file_mode "$INSTALL_ENV")"
   [[ "$env_mode" == "600" ]] || die "installed env must have mode 600, found $env_mode: $INSTALL_ENV"
 
-  map_line_count="$(grep -c '^TQ_EXECUTOR_MAP=' "$INSTALL_ENV" || true)"
-  [[ "$map_line_count" == "1" ]] || \
-    die "expected exactly one literal TQ_EXECUTOR_MAP= line in $INSTALL_ENV, found $map_line_count"
+  validate_env_assignments "$INSTALL_ENV" || exit 1
 
   ENV_STRATEGY="$(installed_env_value TQ_STRATEGY "$INSTALL_ENV")" || \
     die "TQ_STRATEGY in $INSTALL_ENV cannot be read safely"
@@ -910,15 +1193,22 @@ chmod 600 "$CANDIDATE_ENV"
 if ! verify_single_line_env_diff_exact "$INSTALL_ENV" "$CANDIDATE_ENV" "$NEW_EXECUTOR_MAP"; then
   die "refusing to apply: staged env changed bytes outside the single TQ_EXECUTOR_MAP line"
 fi
+validate_env_assignments "$CANDIDATE_ENV" || \
+  die "staged env failed assignment validation"
 candidate_readback="$(installed_env_value TQ_EXECUTOR_MAP "$CANDIDATE_ENV")" || \
   die "staged env TQ_EXECUTOR_MAP cannot be read back safely"
 [[ "$candidate_readback" == "$NEW_EXECUTOR_MAP" ]] || \
   die "staged env TQ_EXECUTOR_MAP readback mismatch"
 
-PRIOR_TIMER_ENABLED=0
-PRIOR_TIMER_ACTIVE=0
-"$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && PRIOR_TIMER_ENABLED=1
-"$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && PRIOR_TIMER_ACTIVE=1
+if ! query_timer_state "$INSTANCE_TIMER"; then
+  die "cannot verify probe timer state before writing: $TIMER_QUERY_ERROR"
+fi
+PRIOR_TIMER_ENABLED="$TIMER_QUERY_ENABLED"
+PRIOR_TIMER_ACTIVE="$TIMER_QUERY_ACTIVE"
+
+if ! query_probe_service_state "$INSTANCE_SERVICE"; then
+  die "cannot verify probe service state before writing: $SVC_QUERY_ERROR"
+fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf 'Dry run (%s) for %s/%s:\n' "$SUBCOMMAND" "$ENV_SERVER_ID" "$STRATEGY"
@@ -935,7 +1225,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-# Re-check UTC 18:10-19:30 window INSIDE the lock right before writing.
+# Re-check UTC 18:10-19:30 window INSIDE the lock before creating backups,
+# and again inside atomic_replace_env after temp staging immediately before mv.
 check_utc_window
 
 # Capture original owner/group before replacing.
@@ -967,20 +1258,33 @@ if [[ "$INFERRED_EXCHANGE" -eq 1 ]]; then
   printf 'Inferred exchange from existing TQ_EXECUTOR_MAP: %s\n' "$TARGET_EXCHANGE"
 fi
 
-# Begin transaction: from here any error or signal triggers idempotent rollback.
-TX_STARTED=1
-if ! atomic_replace_env "$CANDIDATE_ENV" "$INSTALL_ENV" "$ORIG_ENV_OWNER"; then
-  ROLLBACK_REASON="atomic replacement of $INSTALL_ENV failed"
-  exit 1
+# Stage replacement env, re-check UTC window immediately before mv -f, mark
+# TX_STARTED=1 right before rename, and atomically replace INSTALL_ENV.
+if ! atomic_replace_env "$CANDIDATE_ENV" "$INSTALL_ENV" "$ORIG_ENV_OWNER" 1; then
+  if [[ "$TX_STARTED" -eq 1 ]]; then
+    ROLLBACK_REASON="atomic replacement of $INSTALL_ENV failed"
+    exit 1
+  fi
+  printf 'status=aborted_before_write\n' >>"$BACKUP_DIR/account.meta"
+  die "failed to stage replacement env before rename (original $INSTALL_ENV untouched)"
 fi
 
 # Verify according to prior timer state.
 FINAL_PROM_TS=""
 FINAL_PROM_EXECS=""
 if [[ "$PRIOR_TIMER_ACTIVE" -eq 1 ]]; then
-  # Record post-write baseline so only a timer-triggered snapshot written AFTER
-  # our atomic env replacement can satisfy verification.
+  # Record post-write service invocation baseline and .prom baseline so any
+  # in-flight probe started before or during the env write is excluded and
+  # only a new timer-triggered probe execution started after the write can
+  # satisfy verification.
   POST_WRITE_EPOCH="$(date +%s)"
+  if ! query_probe_service_state "$INSTANCE_SERVICE"; then
+    ROLLBACK_REASON="cannot inspect probe service baseline after write: $SVC_QUERY_ERROR"
+    exit 1
+  fi
+  EXCLUDED_INVOCATION_ID="$SVC_INVOCATION_ID"
+  BASELINE_EXEC_MONO="$SVC_EXEC_START_MONO"
+
   BASELINE_PROM_EXISTS=0
   BASELINE_PROM_TS=""
   base_rc=0
@@ -1010,50 +1314,98 @@ if [[ "$PRIOR_TIMER_ACTIVE" -eq 1 ]]; then
   verified=0
   last_fail_reason="probe timer did not publish an updated .prom snapshot within ${VERIFY_TIMEOUT}s"
   while true; do
-    if ! timer_matches_prior; then
-      ROLLBACK_REASON="probe timer state changed during post-write verification"
+    tm_rc=0
+    timer_matches_prior || tm_rc=$?
+    if [[ "$tm_rc" -eq 2 ]]; then
+      ROLLBACK_REASON="cannot verify probe timer state during post-write verification: $TIMER_CHECK_ERROR"
       exit 1
-    fi
-    if "$SYSTEMCTL_BIN" is-failed --quiet "$INSTANCE_SERVICE" >/dev/null 2>&1; then
-      ROLLBACK_REASON="probe service $INSTANCE_SERVICE entered failed state"
+    elif [[ "$tm_rc" -ne 0 ]]; then
+      ROLLBACK_REASON="probe timer state changed during post-write verification ($TIMER_CHECK_ERROR)"
       exit 1
     fi
 
-    snap_rc=0
-    read_prom_snapshot "$PROM_PATH" || snap_rc=$?
-    case "$snap_rc" in
-      11|12|13)
-        ROLLBACK_REASON="${PROM_READ_ERROR:-unsafe prom file: $PROM_PATH}"
-        exit 1
-        ;;
-      10)
-        last_fail_reason="probe output missing: $PROM_PATH"
-        ;;
-      0)
-        if [[ -z "$PROM_SNAPSHOT" ]]; then
-          last_fail_reason="probe output is empty: $PROM_PATH"
-        else
-          cur_ts="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
-          if [[ -z "$cur_ts" ]]; then
-            last_fail_reason="tnauqquant_probe_timestamp_seconds missing in $PROM_PATH"
-          elif [[ "$BASELINE_PROM_EXISTS" -eq 1 && -n "$BASELINE_PROM_TS" && "$cur_ts" -le "$BASELINE_PROM_TS" ]]; then
-            last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past post-write baseline ($BASELINE_PROM_TS); timer may not have triggered"
-          elif [[ "$cur_ts" -le "$POST_WRITE_EPOCH" ]]; then
-            last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past env write second ($POST_WRITE_EPOCH); timer may not have triggered"
-          else
-            unexpected="$(snapshot_unexpected_executors "$PROM_SNAPSHOT" "$NEW_EXECUTOR_MAP")"
-            if [[ -n "$unexpected" ]]; then
-              last_fail_reason="unexpected executor series in $PROM_PATH: $(printf '%s' "$unexpected" | tr '\n' ' ')"
-            else
-              FINAL_PROM_TS="$cur_ts"
-              FINAL_PROM_EXECS="$(snapshot_list_executors "$PROM_SNAPSHOT")"
-              verified=1
-              break
+    if ! query_probe_service_state "$INSTANCE_SERVICE"; then
+      ROLLBACK_REASON="cannot inspect probe service during post-write verification: $SVC_QUERY_ERROR"
+      exit 1
+    fi
+    if [[ "$SVC_ACTIVE_STATE" == "failed" ]]; then
+      ROLLBACK_REASON="probe service $INSTANCE_SERVICE entered failed state (Result=${SVC_RESULT:-unknown})"
+      exit 1
+    fi
+
+    if [[ -z "$SVC_INVOCATION_ID" || "$SVC_INVOCATION_ID" == "$EXCLUDED_INVOCATION_ID" ]]; then
+      # Still on the pre-write / in-flight probe invocation (or never run yet).
+      # Advance baselines if that excluded invocation finishes and publishes a
+      # snapshot so its stale-env output can never satisfy verification.
+      if [[ "$SVC_EXEC_START_MONO" -gt "$BASELINE_EXEC_MONO" ]]; then
+        BASELINE_EXEC_MONO="$SVC_EXEC_START_MONO"
+      fi
+      excl_rc=0
+      read_prom_snapshot "$PROM_PATH" || excl_rc=$?
+      case "$excl_rc" in
+        11|12|13|14)
+          ROLLBACK_REASON="${PROM_READ_ERROR:-unsafe prom file: $PROM_PATH}"
+          exit 1
+          ;;
+        0)
+          excl_ts="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
+          if [[ -n "$excl_ts" ]]; then
+            if [[ "$BASELINE_PROM_EXISTS" -eq 0 || -z "$BASELINE_PROM_TS" || "$excl_ts" -gt "$BASELINE_PROM_TS" ]]; then
+              BASELINE_PROM_EXISTS=1
+              BASELINE_PROM_TS="$excl_ts"
             fi
           fi
-        fi
-        ;;
-    esac
+          ;;
+      esac
+      if [[ -n "$EXCLUDED_INVOCATION_ID" && "$SVC_INVOCATION_ID" == "$EXCLUDED_INVOCATION_ID" ]]; then
+        last_fail_reason="waiting for a new timer-triggered probe run after env write (InvocationID $EXCLUDED_INVOCATION_ID started before or during write; timer may not have triggered)"
+      else
+        last_fail_reason="probe service $INSTANCE_SERVICE has not run after env write; timer may not have triggered"
+      fi
+    elif [[ "$SVC_ACTIVE_STATE" != "inactive" ]]; then
+      last_fail_reason="post-write probe run ($SVC_INVOCATION_ID) is still running (ActiveState=$SVC_ACTIVE_STATE)"
+    elif [[ -n "$SVC_RESULT" && "$SVC_RESULT" != "success" ]]; then
+      ROLLBACK_REASON="post-write probe service $INSTANCE_SERVICE finished with Result=$SVC_RESULT"
+      exit 1
+    elif [[ "$SVC_EXEC_START_MONO" -le "$BASELINE_EXEC_MONO" ]]; then
+      last_fail_reason="probe ExecMainStartTimestampMonotonic ($SVC_EXEC_START_MONO) did not advance past baseline ($BASELINE_EXEC_MONO); timer may not have triggered"
+    else
+      snap_rc=0
+      read_prom_snapshot "$PROM_PATH" || snap_rc=$?
+      case "$snap_rc" in
+        11|12|13|14)
+          ROLLBACK_REASON="${PROM_READ_ERROR:-unsafe prom file: $PROM_PATH}"
+          exit 1
+          ;;
+        10)
+          last_fail_reason="probe output missing: $PROM_PATH"
+          ;;
+        0)
+          if [[ -z "$PROM_SNAPSHOT" ]]; then
+            last_fail_reason="probe output is empty: $PROM_PATH"
+          else
+            cur_ts="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
+            if [[ -z "$cur_ts" ]]; then
+              last_fail_reason="tnauqquant_probe_timestamp_seconds missing in $PROM_PATH"
+            elif [[ "$BASELINE_PROM_EXISTS" -eq 1 && -n "$BASELINE_PROM_TS" && "$cur_ts" -le "$BASELINE_PROM_TS" ]]; then
+              last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past baseline ($BASELINE_PROM_TS); timer may not have triggered"
+            elif [[ "$cur_ts" -le "$POST_WRITE_EPOCH" ]]; then
+              last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past env write second ($POST_WRITE_EPOCH); timer may not have triggered"
+            else
+              unexpected="$(snapshot_unexpected_executors "$PROM_SNAPSHOT" "$NEW_EXECUTOR_MAP")"
+              if [[ -n "$unexpected" ]]; then
+                last_fail_reason="unexpected executor series in $PROM_PATH: $(printf '%s' "$unexpected" | tr '\n' ' ')"
+              else
+                FINAL_PROM_TS="$cur_ts"
+                FINAL_PROM_EXECS="$(snapshot_list_executors "$PROM_SNAPSHOT")"
+                verified=1
+                break
+              fi
+            fi
+          fi
+          ;;
+      esac
+    fi
 
     if [[ "$SECONDS" -ge "$verify_deadline" ]]; then
       break
@@ -1071,8 +1423,13 @@ else
     ROLLBACK_REASON="installed env verification failed after atomic write"
     exit 1
   fi
-  if ! timer_matches_prior; then
-    ROLLBACK_REASON="probe timer state changed from inactive $(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE")"
+  tm_rc=0
+  timer_matches_prior || tm_rc=$?
+  if [[ "$tm_rc" -eq 2 ]]; then
+    ROLLBACK_REASON="cannot verify probe timer state after write: $TIMER_CHECK_ERROR"
+    exit 1
+  elif [[ "$tm_rc" -ne 0 ]]; then
+    ROLLBACK_REASON="probe timer state changed from inactive $(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE") ($TIMER_CHECK_ERROR)"
     exit 1
   fi
 fi
