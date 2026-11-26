@@ -15,7 +15,8 @@ Neither component starts, stops, signals, or attaches to the trading process.
 | `config-linux.alloy.tmpl` | Per-strategy Loki fragment that reuses the existing central receiver |
 | `config-linux-metrics.alloy.tmpl` | Shared textfile collector for all Linux strategy outputs |
 | `deployment-linux-{robinhood,mainnet,ourbit,popdex,popdex-02,popdex-multi-accounts}.env.example` | Credential-free Trading01 instance examples, including retired lanes. See `scripts/trading-target list` for the current inventory (`popdex` is `popdex-btc`, `popdex-02` is the ETH lane, and `popdex-multi-accounts` is the two-account random-rotation BTC lane on PopDEX). `popdex-02` leaves `TQ_EXECUTABLE` empty until an operator verifies it on the host, so `setup-linux.sh` refuses it as checked in; `popdex-multi-accounts` prefills `TQ_EXECUTABLE` and `TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex` for host verification |
-| `setup-linux.sh` | `add` (one-step install/update), `retire`, render-only, and explicit singleton migration |
+| `setup-linux.sh` | `add` (one-step install/update), `retire`, `account` (per-strategy executor allowlist), render-only, and explicit singleton migration |
+| `account-linux.sh` | Add, remove, or list executors (`TQ_EXECUTOR_MAP` only) on an installed Linux Trading lane (run via `setup-linux.sh account` or `scripts/trading-account`) |
 | `retire-linux.sh` | Per-strategy retirement with an exact rollback record (run via `setup-linux.sh retire`) |
 | `linux-common.sh` | Shared test-root, systemctl and path guards for the Linux scripts |
 | `skyeye-trading-probe@.service.tmpl` | Linux per-strategy read-only oneshot probe |
@@ -237,6 +238,120 @@ current probe, P&L history builder and Trading log scrub, and pinning its Alloy
 1.18.1 with `brew pin`, follows
 [the Mac mini rollout](../../../docs/macmini-m2-alloy-rollout.md). Its first
 run restarts Alloy once, because the host has no env record yet.
+
+### Add or remove an account (executor)
+
+For an already-installed **Linux** Trading lane (installed via `setup-linux.sh`
+under `/etc/skyeye-trading/instances/<strategy>.env`), `skyeye-trading-probe@.service`
+re-reads its `EnvironmentFile=` on every 15-second probe invocation, and Alloy
+templates do not reference `TQ_EXECUTOR_MAP`. Prometheus recording rules and the
+Grafana per-account breakdown table group dynamically by the `executor` label.
+Adding or removing an account therefore only atomically updates
+`TQ_EXECUTOR_MAP` in the instance env — **no repo PR, review, Alloy reload,
+staged host checkout, or `scripts/central-deploy` is needed**.
+
+> **Scope:** Linux Trading lanes installed via `setup-linux.sh` only (for
+> example Trading01). macOS (Mac mini) and Windows lanes are out of scope.
+
+Run one command from a local SkyEye checkout (or run
+`sudo agents/alloy/trading/setup-linux.sh account ...` directly on the host):
+
+~~~bash
+# Read-only: inspect TQ_EXECUTOR_MAP and executors currently emitting .prom series
+scripts/trading-account list --server trading01 --strategy popdex-multi-accounts
+
+# Preview without touching the host
+scripts/trading-account add --server trading01 --strategy popdex-multi-accounts \
+  --executor popdex-rot3 --dry-run
+
+# Add an executor on a single-exchange lane (--exchange is inferred automatically)
+scripts/trading-account add --server trading01 --strategy popdex-multi-accounts \
+  --executor popdex-rot3
+
+# Add an executor with an explicit --exchange (required on multi-exchange lanes)
+scripts/trading-account add --server trading01 --strategy popdex-multi-accounts \
+  --executor popdex-rot3 --exchange popdex
+
+# Remove an executor (refuses removing the last remaining executor)
+scripts/trading-account remove --server trading01 --strategy popdex-multi-accounts \
+  --executor popdex-rot3
+~~~
+
+Transport options on `scripts/trading-account`:
+
+- Default remote mode: uploads only `account-linux.sh`, `linux-common.sh`, and
+  `install-common.sh` to a mode-`0700` temporary directory under `/tmp` owned by
+  the SSH user, executes `sudo <tmp>/.../account-linux.sh` (passing `ssh -t`
+  when local stdin/stdout is an interactive TTY so passworded `sudo` can
+  prompt), and removes the temporary directory on exit (reporting the account
+  result and exact residual path separately if remote cleanup fails). Remote
+  mode runs in that SSH user's private temporary directory under the assumption
+  that the SSH account itself is not compromised.
+- `--ssh-target HOST` (or `SKYEYE_SSH_TARGET`): SSH destination when it differs
+  from `--server`.
+- `--local`: run directly on the local Linux host without SSH.
+
+**Required ordering with `tnauqquant`** (SkyEye never starts, stops, restarts,
+or reads credentials/full configs of `tnauqquant@*`):
+
+1. **Add an account**: run `scripts/trading-account add ...` **first** to add
+   the executor to SkyEye's `TQ_EXECUTOR_MAP` allowlist, **then** add the
+   account in `tnauqquant` config/env and restart the `tnauqquant` lane.
+   (Adding SkyEye first prevents the probe from dropping the new account's
+   volume or cycles once `tnauqquant` starts trading with it. Before
+   `tnauqquant` restarts with the new account, `tnauqquant_current_executor_equity_usdt`
+   stays fail-closed while strategy-level totals keep publishing normally.)
+2. **Remove an account**: remove the account from `tnauqquant` config/env and
+   restart the `tnauqquant` lane **first** so it stops trading on that executor,
+   **then** run `scripts/trading-account remove ...` to drop it from SkyEye's
+   allowlist. (Removing SkyEye first while `tnauqquant` still trades on that
+   executor would drop that executor's volume from merged totals.)
+
+**Built-in safety guards and verification:**
+
+- Refuses mutating commands (`add`/`remove`) during **UTC 18:10–19:30**
+  (checked at preflight, inside the host lock before backup, and again right
+  before the atomic rename; rollback rename remains permitted in the window);
+  read-only `list` remains available anytime.
+- Serializes with `setup-linux.sh` / `retire-linux.sh` via the shared
+  `/run/skyeye-alloy.lock` held from instance read through verification or
+  rollback.
+- Refuses missing instances, non-mode-`0600` or symlinked env files, duplicate
+  or ambiguous `EnvironmentFile=` assignments (including leading whitespace),
+  symlinked/non-regular/oversized (>4 MiB) `.prom` files, unreadable, missing,
+  or `failed` systemd probe timers/services, invalid names, duplicate adds,
+  removing a missing or last executor, ambiguous exchange inference, or
+  `--server` / `TQ_SERVER_ID` mismatch.
+- Never modifies Alloy, Alloy fragments, `/etc/default/alloy`, ACLs, systemd
+  units, or shared `probe.sh`.
+- Backs up the existing env under `/etc/skyeye-trading/account-backup/`, edits
+  only the single `TQ_EXECUTOR_MAP=` line (preserving every other byte and
+  original line endings), and atomically replaces the instance env preserving
+  owner/group and mode `0600`.
+- **Active probe timer**: discards the first advancing post-write `.prom`
+  snapshot (which may come from an in-flight probe started before the write),
+  waits for a second advancing post-write snapshot (default timeout 45s) with
+  advancing `tnauqquant_probe_timestamp_seconds`, and checks executor labels on
+  that second snapshot.
+- **Inactive probe timer (confirmed `ActiveState=inactive`, not `failed`)**:
+  preserves the timer state and verifies env content/mode and timer state only;
+  live probe `.prom` output is not verified.
+- Any verification failure, unexpected error, or interruption (`HUP`/`INT`/`TERM`)
+  ignores subsequent `HUP`/`INT`/`TERM` signals while automatically restoring
+  the backed-up env atomically and verifying the restore with `cmp`; if rollback
+  itself cannot complete (or timer state cannot be verified), it exits `3` with
+  exact manual recovery and verification commands.
+
+**When you still need the full `trading-target` or shared probe workflow:**
+
+- **New strategy or retiring a strategy**: use `scripts/trading-target add|remove`,
+  `setup-linux.sh add|retire`, PR/merge, and `scripts/central-deploy` (see
+  [Add or remove a Trading target](#add-or-remove-a-trading-target)).
+- **Updating shared `probe.sh` or shared systemd unit templates**: stop and
+  disable all `skyeye-trading-probe@*` units first as described in
+  [Probe CPU limits and shared probe rollout](#probe-cpu-limits-and-shared-probe-rollout).
+- **Changing Prometheus rules, dashboards, or alert routing**: PR/merge +
+  `scripts/central-deploy`.
 
 ### Tighten an installed raw log glob
 

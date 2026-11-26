@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Add, remove, or list accounts (executors) in an already-installed Linux
+# Trading monitoring strategy without any repo PR, Alloy reload, or central-deploy.
+#
+# Scope: Linux Trading lanes installed via agents/alloy/trading/setup-linux.sh
+# only (/etc/skyeye-trading/instances/<strategy>.env). macOS (Mac mini) and
+# Windows lanes are out of scope.
+#
+# Remote mode (default): uploads only the three required host helper scripts
+# (account-linux.sh, linux-common.sh, install-common.sh) to a temporary
+# directory as the SSH user, runs sudo <tmp>/.../account-linux.sh (allocating a
+# PTY with -t when attached to an interactive terminal so passworded sudo can
+# prompt), and always removes the temporary directory on exit.
+#
+# Local mode (--local): runs directly on the local Linux host without SSH.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOCAL_ACCOUNT="$REPO_ROOT/agents/alloy/trading/account-linux.sh"
+SSH_BIN="${SKYEYE_SSH_BIN:-ssh}"
+
+SUBCOMMAND=""
+SERVER_ID=""
+STRATEGY=""
+EXECUTOR=""
+EXCHANGE=""
+DRY_RUN=0
+LOCAL_MODE=0
+SSH_TARGET="${SKYEYE_SSH_TARGET:-}"
+SSH_TARGET_EXPLICIT=0
+
+# Minimal allowlist uploaded in remote mode: account-linux.sh plus the two
+# helper libraries it sources. No templates, probe.sh, or untracked files.
+PAYLOAD_FILES=(
+  "agents/alloy/install-common.sh"
+  "agents/alloy/trading/linux-common.sh"
+  "agents/alloy/trading/account-linux.sh"
+)
+
+REMOTE_TMP=""
+ERR_FILE=""
+CLEANUP_ERR_FILE=""
+ACCOUNT_CMD_RAN=0
+ACCOUNT_CMD_RC=""
+
+usage() {
+  printf '%s\n' \
+    'Usage: scripts/trading-account add    --server ID --strategy NAME --executor NAME [--exchange NAME] [--dry-run] [--ssh-target HOST | --local]' \
+    '       scripts/trading-account remove --server ID --strategy NAME --executor NAME [--exchange NAME] [--dry-run] [--ssh-target HOST | --local]' \
+    '       scripts/trading-account list   --server ID --strategy NAME [--ssh-target HOST | --local]' \
+    '' \
+    'Manage executors (TQ_EXECUTOR_MAP) in an already-installed Linux Trading lane' \
+    'without a repo PR, review, Alloy reload, or central-deploy.' \
+    '' \
+    'Scope: Linux Trading lanes installed via agents/alloy/trading/setup-linux.sh' \
+    'only (/etc/skyeye-trading/instances/<strategy>.env). macOS (Mac mini) and' \
+    'Windows lanes are out of scope.' \
+    '' \
+    'Subcommands:' \
+    '  add     Atomically add one executor to TQ_EXECUTOR_MAP under /run/skyeye-alloy.lock.' \
+    '          Omitting --exchange infers the exchange when all current executors' \
+    '          share one exchange; multi-exchange lanes require --exchange.' \
+    '  remove  Atomically remove one executor from TQ_EXECUTOR_MAP (refuses removing' \
+    '          the last executor). Passing --exchange verifies the existing mapping.' \
+    '  list    Read-only: print TQ_EXECUTOR_MAP and executors currently emitting' \
+    '          series in the strategy .prom file.' \
+    '' \
+    'Required / common options:' \
+    '  --server ID         Target server_id (verified against TQ_SERVER_ID on host;' \
+    '                      also used as default SSH target if --ssh-target is unset).' \
+    '  --strategy NAME     Installed strategy slug.' \
+    '  --executor NAME     Executor name (required for add/remove; rejected for list).' \
+    '  --exchange NAME     Exchange label (optional for add/remove; rejected for list).' \
+    '  --dry-run           Validate and print planned change without modifying host' \
+    '                      (add/remove only).' \
+    '  -h, --help          Show this help.' \
+    '' \
+    'Transport options (default: upload helper scripts to a remote temp directory' \
+    'via SSH and run sudo with -t when local stdin/stdout is a TTY, cleaning up on exit):' \
+    '  --ssh-target HOST   SSH destination (default: SKYEYE_SSH_TARGET or --server).' \
+    '  --local             Run directly on the local host without SSH (mutually' \
+    '                      exclusive with --ssh-target).' \
+    '' \
+    'Verification & timer state:' \
+    '  - Never touches Alloy, Alloy fragments, ACLs, systemd units, or shared probe.sh.' \
+    '  - Active timer: waits for the next timer-triggered .prom snapshot (default 45s' \
+    '    timeout) and checks executor labels on that snapshot.' \
+    '  - Inactive timer (disabled or stopped): verifies env content and preserved' \
+    '    timer state only; live probe .prom output is not verified.' \
+    '  - Any failure or interruption atomically restores the pre-change env backup.' \
+    '' \
+    'Required order with tnauqquant (SkyEye never touches tnauqquant@* units/configs/envs):' \
+    '  Add:    1) scripts/trading-account add ... first' \
+    '          2) Add the account in tnauqquant config/env and restart the lane' \
+    '  Remove: 1) Remove the account in tnauqquant config/env and restart the lane first' \
+    '          2) scripts/trading-account remove ...' \
+    '' \
+    'Guards & when to use the full workflow instead:' \
+    '  - Mutating commands (add/remove) are refused during UTC 18:10-19:30.' \
+    '  - Adding/retiring a strategy still requires scripts/trading-target + PR +' \
+    '    scripts/central-deploy; updating shared probe.sh requires stopping all' \
+    '    skyeye-trading-probe@* units first (see agents/alloy/trading/README.md).'
+}
+
+die() {
+  printf 'trading-account: %s\n' "$*" >&2
+  exit 1
+}
+
+valid_label_value() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
+}
+
+valid_ssh_target() {
+  local target="$1"
+  [[ -n "$target" ]] || return 1
+  [[ "$target" != -* ]] || return 1
+  [[ "$target" != *[[:space:]]* ]] || return 1
+  [[ "$target" =~ ^[A-Za-z0-9@._:%+-]+$ ]] || return 1
+  return 0
+}
+
+valid_remote_tmp() {
+  local dir="$1"
+  [[ "$dir" =~ ^/[A-Za-z0-9_./-]+$ ]] || return 1
+  [[ "$dir" == *"skyeye-trading-account."* ]] || return 1
+  case "/$dir/" in
+    */../*) return 1 ;;
+  esac
+  return 0
+}
+
+shell_quote() {
+  local s="$1"
+  printf "'%s'" "${s//\'/\'\\\'\'}"
+}
+
+format_wrapper_cmd() {
+  local cmd="scripts/trading-account $SUBCOMMAND --server $SERVER_ID --strategy $STRATEGY"
+  if [[ -n "$EXECUTOR" ]]; then
+    cmd="$cmd --executor $EXECUTOR"
+  fi
+  if [[ -n "$EXCHANGE" ]]; then
+    cmd="$cmd --exchange $EXCHANGE"
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    cmd="$cmd --dry-run"
+  fi
+  if [[ "$LOCAL_MODE" -eq 1 ]]; then
+    cmd="$cmd --local"
+  elif [[ "$SSH_TARGET_EXPLICIT" -eq 1 || ( -n "$SSH_TARGET" && "$SSH_TARGET" != "$SERVER_ID" ) ]]; then
+    cmd="$cmd --ssh-target $SSH_TARGET"
+  fi
+  printf '%s' "$cmd"
+}
+
+# Invoked via cleanup_remote EXIT trap below.
+# shellcheck disable=SC2329
+format_wrapper_list_cmd() {
+  local cmd="scripts/trading-account list --server $SERVER_ID --strategy $STRATEGY"
+  if [[ "$LOCAL_MODE" -eq 1 ]]; then
+    cmd="$cmd --local"
+  elif [[ "$SSH_TARGET_EXPLICIT" -eq 1 || ( -n "$SSH_TARGET" && "$SSH_TARGET" != "$SERVER_ID" ) ]]; then
+    cmd="$cmd --ssh-target $SSH_TARGET"
+  fi
+  printf '%s' "$cmd"
+}
+
+check_utc_window() {
+  local now_hm hh mm total_min
+  now_hm="$(date -u '+%H:%M')"
+  [[ "$now_hm" =~ ^([0-9]{2}):([0-9]{2})$ ]] || \
+    die "cannot determine current UTC time from 'date -u +%H:%M': $now_hm"
+  hh="${BASH_REMATCH[1]}"
+  mm="${BASH_REMATCH[2]}"
+  total_min=$((10#$hh * 60 + 10#$mm))
+  # Refuse UTC 18:10 (1090) through 19:30 (1170) inclusive.
+  if [[ "$total_min" -ge 1090 && "$total_min" -le 1170 ]]; then
+    printf 'trading-account: refusing to modify trading accounts during the UTC 18:10-19:30 maintenance/restart window (current UTC: %s).\n' \
+      "$now_hm" >&2
+    printf 'Retry after 19:30 UTC: %s\n' "$(format_wrapper_cmd)" >&2
+    exit 1
+  fi
+}
+
+case "${1:-}" in
+  add|remove|list)
+    SUBCOMMAND="$1"
+    shift
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  "")
+    usage >&2
+    exit 2
+    ;;
+  *)
+    die "unknown subcommand: $1 (expected add, remove, or list)"
+    ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --server)
+      [[ $# -ge 2 ]] || die "--server requires a value"
+      SERVER_ID="$2"
+      shift 2
+      ;;
+    --strategy)
+      [[ $# -ge 2 ]] || die "--strategy requires a value"
+      STRATEGY="$2"
+      shift 2
+      ;;
+    --executor)
+      [[ $# -ge 2 ]] || die "--executor requires a value"
+      EXECUTOR="$2"
+      shift 2
+      ;;
+    --exchange)
+      [[ $# -ge 2 ]] || die "--exchange requires a value"
+      EXCHANGE="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --ssh-target)
+      [[ $# -ge 2 ]] || die "--ssh-target requires a host"
+      SSH_TARGET="$2"
+      SSH_TARGET_EXPLICIT=1
+      shift 2
+      ;;
+    --local)
+      LOCAL_MODE=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -n "$SERVER_ID" ]] || die "--server is required"
+valid_label_value "$SERVER_ID" || die "invalid --server: $SERVER_ID"
+[[ -n "$STRATEGY" ]] || die "--strategy is required"
+valid_label_value "$STRATEGY" || die "invalid --strategy: $STRATEGY"
+
+if [[ "$SUBCOMMAND" == "list" ]]; then
+  [[ -z "$EXECUTOR" ]] || die "list does not take --executor"
+  [[ -z "$EXCHANGE" ]] || die "list does not take --exchange"
+  [[ "$DRY_RUN" -eq 0 ]] || die "list does not take --dry-run"
+else
+  [[ -n "$EXECUTOR" ]] || die "--executor is required for $SUBCOMMAND"
+  valid_label_value "$EXECUTOR" || die "invalid --executor: $EXECUTOR"
+  if [[ -n "$EXCHANGE" ]]; then
+    valid_label_value "$EXCHANGE" || die "invalid --exchange: $EXCHANGE"
+  fi
+fi
+
+if [[ "$LOCAL_MODE" -eq 1 ]]; then
+  [[ "$SSH_TARGET_EXPLICIT" -eq 0 ]] || die "--local and --ssh-target are mutually exclusive"
+else
+  if [[ -z "$SSH_TARGET" ]]; then
+    SSH_TARGET="$SERVER_ID"
+  fi
+  valid_ssh_target "$SSH_TARGET" || die "invalid --ssh-target: $SSH_TARGET"
+fi
+
+if [[ "$SUBCOMMAND" == "add" || "$SUBCOMMAND" == "remove" ]]; then
+  check_utc_window
+fi
+
+ACCOUNT_ARGS=("$SUBCOMMAND" --server "$SERVER_ID" --strategy "$STRATEGY")
+if [[ -n "$EXECUTOR" ]]; then
+  ACCOUNT_ARGS+=(--executor "$EXECUTOR")
+fi
+if [[ -n "$EXCHANGE" ]]; then
+  ACCOUNT_ARGS+=(--exchange "$EXCHANGE")
+fi
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  ACCOUNT_ARGS+=(--dry-run)
+fi
+
+if [[ "$LOCAL_MODE" -eq 1 ]]; then
+  [[ -x "$LOCAL_ACCOUNT" ]] || die "missing executable local account script: $LOCAL_ACCOUNT"
+  exec "$LOCAL_ACCOUNT" "${ACCOUNT_ARGS[@]}"
+fi
+
+command -v "$SSH_BIN" >/dev/null 2>&1 || die "missing ssh command: $SSH_BIN"
+for rel_path in "${PAYLOAD_FILES[@]}"; do
+  [[ -f "$REPO_ROOT/$rel_path" ]] || die "missing required payload file: $REPO_ROOT/$rel_path"
+done
+
+quoted_args=""
+plain_args=""
+for arg in "${ACCOUNT_ARGS[@]}"; do
+  quoted_args="$quoted_args $(shell_quote "$arg")"
+  plain_args="$plain_args $arg"
+done
+
+# Invoked via EXIT trap below.
+# shellcheck disable=SC2329
+cleanup_remote() {
+  local rc=$?
+  trap - EXIT
+  trap '' HUP INT TERM
+  local cleanup_rc=0 cleanup_err=""
+  if [[ -n "${REMOTE_TMP:-}" ]]; then
+    local residual_tmp="$REMOTE_TMP"
+    CLEANUP_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/skyeye-trading-account-cleanup.XXXXXX" 2>/dev/null || true)"
+    if [[ -n "$CLEANUP_ERR_FILE" ]]; then
+      "$SSH_BIN" -T -- "$SSH_TARGET" "rm -rf -- $(shell_quote "$residual_tmp")" >/dev/null 2>"$CLEANUP_ERR_FILE" || cleanup_rc=$?
+      if [[ -s "$CLEANUP_ERR_FILE" ]]; then
+        cleanup_err="$(tr '\n' ' ' <"$CLEANUP_ERR_FILE" | sed 's/[[:space:]]*$//')"
+      fi
+      rm -f -- "$CLEANUP_ERR_FILE"
+      CLEANUP_ERR_FILE=""
+    else
+      "$SSH_BIN" -T -- "$SSH_TARGET" "rm -rf -- $(shell_quote "$residual_tmp")" >/dev/null 2>&1 || cleanup_rc=$?
+    fi
+    REMOTE_TMP=""
+    if [[ "$cleanup_rc" -ne 0 ]]; then
+      if [[ "$ACCOUNT_CMD_RAN" -eq 1 ]]; then
+        if [[ "$ACCOUNT_CMD_RC" -eq 0 ]]; then
+          printf 'trading-account: account command result: %s succeeded (rc=0)\n' "$SUBCOMMAND" >&2
+        elif [[ "$ACCOUNT_CMD_RC" -eq 255 ]]; then
+          printf 'trading-account: account command result: UNKNOWN (%s interrupted by SSH transport error, ssh rc=255; remote change may have committed or rolled back)\n' "$SUBCOMMAND" >&2
+          printf 'Verify host state once SSH connectivity returns: %s\n' "$(format_wrapper_list_cmd)" >&2
+        else
+          printf 'trading-account: account command result: %s failed (rc=%s)\n' "$SUBCOMMAND" "$ACCOUNT_CMD_RC" >&2
+        fi
+      else
+        printf 'trading-account: account command result: did not complete (rc=%s)\n' "$rc" >&2
+      fi
+      printf 'trading-account: remote temp cleanup FAILED (rc=%s%s); residual path on %s: %s\n' \
+        "$cleanup_rc" "${cleanup_err:+: $cleanup_err}" "$SSH_TARGET" "$residual_tmp" >&2
+      printf 'Manual cleanup: ssh %s rm -rf -- %s\n' \
+        "$(shell_quote "$SSH_TARGET")" "$(shell_quote "$residual_tmp")" >&2
+      if [[ "$rc" -eq 0 ]]; then
+        rc=4
+      fi
+    elif [[ "$ACCOUNT_CMD_RAN" -eq 1 && "$ACCOUNT_CMD_RC" -eq 255 ]]; then
+      printf 'trading-account: account command result: UNKNOWN (%s interrupted by SSH transport error, ssh rc=255; remote change may have committed or rolled back)\n' "$SUBCOMMAND" >&2
+      printf 'Verify host state once SSH connectivity returns: %s\n' "$(format_wrapper_list_cmd)" >&2
+    fi
+  fi
+  if [[ -n "${ERR_FILE:-}" && -e "$ERR_FILE" ]]; then
+    rm -f -- "$ERR_FILE"
+  fi
+  exit "$rc"
+}
+
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap cleanup_remote EXIT
+
+# Step 1: Upload only the 3 allowlisted helper scripts as the SSH user (no PTY).
+# Create the staging directory explicitly under /tmp so a remote user TMPDIR
+# containing spaces cannot break path validation or leak a directory.
+# POSIX sh compatible so any remote login shell works.
+# Expanded by the remote shell, not locally.
+# shellcheck disable=SC2016
+remote_stage_cmd='set -eu; d=$(mktemp -d /tmp/skyeye-trading-account.XXXXXX); ok=0; trap '\''[ "$ok" = 1 ] || rm -rf -- "$d"'\'' 0; chmod 700 "$d"; tar -xf - -C "$d"; ok=1; printf "__SKYEYE_STAGE__=%s\n" "$d"'
+
+stage_out=""
+stage_rc=0
+stage_out="$(COPYFILE_DISABLE=1 tar --format ustar -C "$REPO_ROOT" -cf - "${PAYLOAD_FILES[@]}" \
+  | "$SSH_BIN" -T -- "$SSH_TARGET" "$remote_stage_cmd")" || stage_rc=$?
+if [[ "$stage_rc" -ne 0 ]]; then
+  die "failed to stage helper scripts on $SSH_TARGET (rc=$stage_rc)"
+fi
+
+staged_dir="$(printf '%s\n' "$stage_out" | sed -n 's/^__SKYEYE_STAGE__=//p' | tail -n 1)"
+valid_remote_tmp "$staged_dir" || \
+  die "remote host returned an invalid staging directory path: ${staged_dir:-empty}"
+REMOTE_TMP="$staged_dir"
+
+# Step 2: Execute account-linux.sh via sudo. Allocate a PTY (-t) when attached
+# to an interactive terminal so passworded sudo can prompt; use -T and sudo -n
+# in non-interactive sessions.
+remote_script_path="$REMOTE_TMP/agents/alloy/trading/account-linux.sh"
+exec_rc=0
+if [[ -t 0 && -t 1 ]]; then
+  remote_exec_cmd="sudo -- $(shell_quote "$remote_script_path")$quoted_args"
+  "$SSH_BIN" -t -- "$SSH_TARGET" "$remote_exec_cmd" || exec_rc=$?
+  ACCOUNT_CMD_RAN=1
+  ACCOUNT_CMD_RC="$exec_rc"
+  if [[ "$exec_rc" -eq 1 ]]; then
+    printf 'Retry after resolving the error above: %s\n' "$(format_wrapper_cmd)" >&2
+  fi
+else
+  ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/skyeye-trading-account-ssh.XXXXXX")"
+  remote_exec_cmd="sudo -n -- $(shell_quote "$remote_script_path")$quoted_args"
+  "$SSH_BIN" -T -- "$SSH_TARGET" "$remote_exec_cmd" 2>"$ERR_FILE" || exec_rc=$?
+  ACCOUNT_CMD_RAN=1
+  ACCOUNT_CMD_RC="$exec_rc"
+  if [[ -s "$ERR_FILE" ]]; then
+    cat "$ERR_FILE" >&2
+  fi
+  if [[ "$exec_rc" -ne 0 ]]; then
+    if grep -qiE 'sudo:.*(password is required|no tty present|a terminal is required|interactive authentication required)' "$ERR_FILE"; then
+      printf '%s\n' \
+        "trading-account: sudo on $SSH_TARGET requires a password and no interactive terminal is attached." \
+        "Next steps:" \
+        "  1) Re-run from an interactive terminal (allocates a PTY with ssh -t for sudo):" \
+        "     $(format_wrapper_cmd)" \
+        "  2) Or SSH interactively into $SSH_TARGET and run on the host:" \
+        "     ssh -t $SSH_TARGET" \
+        "     sudo <HOST_CHECKOUT>/agents/alloy/trading/setup-linux.sh account$plain_args" >&2
+    elif grep -qE '18:10-19:30|skyeye-alloy[.]lock' "$ERR_FILE"; then
+      printf 'Retry command: %s\n' "$(format_wrapper_cmd)" >&2
+    fi
+  fi
+fi
+
+exit "$exec_rc"
