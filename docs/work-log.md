@@ -15,6 +15,17 @@
 ---
 -->
 
+## 2026-11-26 11:35 — popdex-multi-accounts 上線文件的 quant 路徑與 binary 驗收順序（WAN-946）
+
+**改動摘要：** env 範例預填的 `TQ_EXECUTABLE` 補上 `/quant`；上線文件 Step 1 改為只核對路徑（binary 要到第一次啟動才產生，原本的 `test -x` 在新 lane 首次安裝必然失敗），可執行檔與 manifest `.executable` 的核對移到 Step 5c canary，通過才進入 Step 6。
+
+**修改的檔案：**
+- `agents/alloy/trading/deployment-linux-popdex-multi-accounts.env.example` — `TQ_EXECUTABLE=/home/ubuntu/tnauqquant/bin/popdex-multi-accounts/quant`，註解改寫為新驗收順序。
+- `docs/trading01-popdex-multi-accounts-onboarding.md` — Step 1 路徑核對（唯一、絕對路徑、非目錄、非共用 launcher、不與 sibling 重複，印 `QUANT-PATH-OK`）；Step 2 確認 env 的 `TQ_EXECUTABLE` 等於 Step 1 結果；Step 5c 新增 `QUANT-EXECUTABLE-FILE`、`QUANT-EXECUTABLE-MATCH` 並列入驗收條件與紀錄表。
+- `docs/plans/popdex-multi-accounts.md` — 同步現行規格，D4 歷史紀錄下加註 WAN-946 修正。
+
+**原因/備註：** POPDEX-MULTI-DEPLOY 上線時發現（operator 已在主機上更正，manager 以 D48 改用路徑核對）。使用者要求這類小錯誤直接修正。
+
 ## 2026-11-26 08:30 — scripts/trading-account：一個指令增減 Trading 策略帳號（WAN-954）
 
 **改動摘要：** 已安裝的 Linux Trading 策略要新增或移除帳號（executor）時，改用 `scripts/trading-account add|remove|list`，1–2 分鐘完成，不需要 repo PR、review 或 `central-deploy`。做法是在主機鎖內原子替換 instance env 的 `TQ_EXECUTOR_MAP` 一行（probe unit 每次執行都重讀 `EnvironmentFile`），不 reload Alloy、不動任何共用檔，並用 timer 觸發的新快照驗證，失敗或中斷自動還原。
