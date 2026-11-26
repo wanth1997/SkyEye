@@ -445,7 +445,6 @@ class GitHubVariablesClient:
                         "json",
                         f"GitHub API total_count changed mid-pagination ({expected_total} -> {total_count})",
                     )
-            before_count = len(seen_names)
             for entry in page_vars:
                 if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
                     raise PollError("json", "GitHub API variable entry missing string name")
@@ -458,7 +457,7 @@ class GitHubVariablesClient:
                 if not has_next_link(link_header):
                     break
             else:
-                if not page_vars or len(seen_names) == before_count:
+                if not page_vars:
                     break
                 if expected_total is not None:
                     if len(seen_names) >= expected_total:
@@ -467,10 +466,10 @@ class GitHubVariablesClient:
                     break
             page += 1
 
-        if expected_total is not None and len(seen_names) < expected_total:
+        if expected_total is not None and len(seen_names) != expected_total:
             raise PollError(
                 "json",
-                f"GitHub API returned {len(seen_names)} variables, expected total_count={expected_total}",
+                f"GitHub API returned {len(seen_names)} unique variables, expected total_count={expected_total}",
             )
         return collected
 

@@ -38,7 +38,7 @@ stat -c '%a %g' pool-status/secrets   # 必須印出：2750 65534
 
 EXCLUDE_FILE="$(git rev-parse --git-path info/exclude)"
 grep -qxF '/pool-status/secrets/github_token' "$EXCLUDE_FILE" 2>/dev/null || \
-  printf '%s\n' '/pool-status/secrets/github_token' >> "$EXCLUDE_FILE"
+  printf '\n%s\n' '/pool-status/secrets/github_token' >> "$EXCLUDE_FILE"
 ```
 
 ## 寫入 token 的安全方法

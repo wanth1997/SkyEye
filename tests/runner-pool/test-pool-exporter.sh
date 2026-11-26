@@ -236,8 +236,10 @@ class FakeGitHubState:
             self.raw_body = None
             self.redirect_location = None
             self.on_page = None
+            self.switch_to_raw_after_first_ok = None
+            self.default_page = None
 
-    def set_pages(self, pages, links=None, on_page=None):
+    def set_pages(self, pages, links=None, on_page=None, switch_to_raw_after_first_ok=None, default_page=None):
         with self.lock:
             self.mode = "ok"
             self.status_code = 200
@@ -247,6 +249,8 @@ class FakeGitHubState:
             self.raw_body = None
             self.redirect_location = None
             self.on_page = on_page
+            self.switch_to_raw_after_first_ok = switch_to_raw_after_first_ok
+            self.default_page = default_page
 
 
 gh_state = FakeGitHubState()
@@ -273,6 +277,11 @@ class FakeGitHubHandler(BaseHTTPRequestHandler):
             raw_body = gh_state.raw_body
             redirect_location = gh_state.redirect_location
             on_page = gh_state.on_page
+            default_page = gh_state.default_page
+            if mode == "ok" and gh_state.switch_to_raw_after_first_ok is not None:
+                gh_state.mode = "raw"
+                gh_state.raw_body = gh_state.switch_to_raw_after_first_ok
+                gh_state.switch_to_raw_after_first_ok = None
 
         if delay > 0:
             time.sleep(delay)
@@ -313,7 +322,12 @@ class FakeGitHubHandler(BaseHTTPRequestHandler):
 
         if on_page is not None:
             on_page(page)
-        payload = pages.get(page, {"total_count": 0, "variables": []})
+        if page in pages:
+            payload = pages[page]
+        elif default_page is not None:
+            payload = default_page
+        else:
+            payload = {"total_count": 0, "variables": []}
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -602,12 +616,26 @@ try:
         assert_eq(m['pool_status_readable{host="pc"}'], "1", "cached pc preserved on bad JSON")
         assert_eq(m['pool_status_exporter_read_errors_total{reason="json"}'], str(expected_counts["json"]), "json error counted")
 
-    # C3: Short / incomplete listings when total_count is declared must fail as json error
-    # and preserve cached hosts instead of marking them missing.
+    # C3: Mismatched listings (fewer or more unique variables than total_count, or
+    # total_count drift across pages) must fail as json error and preserve cached
+    # hosts, heartbeats, and read_timestamp.
     for case_name, pages_cfg, links_cfg in (
         (
             "empty_variables_with_total_count_2",
             {1: {"total_count": 2, "variables": []}},
+            {},
+        ),
+        (
+            "extra_variables_over_total_count",
+            {
+                1: {
+                    "total_count": 1,
+                    "variables": [
+                        {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
+                        {"name": "OTHER_VAR", "value": "x", "updated_at": UPDATED_AT},
+                    ],
+                }
+            },
             {},
         ),
         (
@@ -638,13 +666,58 @@ try:
         gh_state.reset()
         gh_state.set_pages(pages_cfg, links=links_cfg)
         clock_now[0] += 30.0
-        assert_true(not exp.poll_once(), f"C3 {case_name}: incomplete listing must fail")
+        assert_true(not exp.poll_once(), f"C3 {case_name}: mismatched listing must fail")
         expected_counts["json"] += 1
         m = sample_map(exp.render_metrics())
         assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565200", f"C3 {case_name}: read_timestamp preserved")
+        assert_eq(m['pool_status_updated_timestamp_seconds{host="pc"}'], str(TIMESTAMP), f"C3 {case_name}: pc heartbeat preserved")
+        assert_eq(m['pool_status_updated_timestamp_seconds{host="srv"}'], str(TIMESTAMP), f"C3 {case_name}: srv heartbeat preserved")
         assert_eq(m['pool_status_readable{host="pc"}'], "1", f"C3 {case_name}: cached pc preserved")
         assert_eq(m['pool_status_readable{host="srv"}'], "1", f"C3 {case_name}: cached srv preserved")
         assert_eq(m['pool_status_exporter_read_errors_total{reason="json"}'], str(expected_counts["json"]), f"C3 {case_name}: json counter")
+
+    # C11: Fallback pagination without Link or total_count continues past a full page
+    # of duplicate names (pc, pc, srv, empty) and fails with reason="json" (preserving
+    # cache) when repeated full pages exceed MAX_PAGES.
+    exp_p1 = mod.PoolStatusExporter(
+        hosts_raw="pc,srv",
+        repo_raw="wanwanlabs/self-hosted-runner",
+        token_file=str(token_path),
+        api_base=gh_base,
+        poll_interval=30.0,
+        http_timeout=1.0,
+        per_page=1,
+        clock=lambda: clock_now[0],
+    )
+    gh_state.reset()
+    gh_state.set_pages({
+        1: {"variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+        2: {"variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+        3: {"variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+        4: {"variables": []},
+    })
+    clock_now[0] = 1795565250.0
+    assert_true(exp_p1.poll_once(), "C11 fallback pagination (pc, pc, srv, empty) must succeed")
+    assert_eq(len(gh_state.requests), 4, "C11 fallback pagination must fetch all 4 pages")
+    m_p1 = sample_map(exp_p1.render_metrics())
+    assert_eq(m_p1["pool_status_exporter_read_timestamp_seconds"], "1795565250", "C11 read_timestamp updated")
+    assert_eq(m_p1['pool_status_readable{host="pc"}'], "1", "C11 pc readable")
+    assert_eq(m_p1['pool_status_readable{host="srv"}'], "1", "C11 srv readable")
+
+    # Exceeding MAX_PAGES on endless full duplicate pages -> json error, cache preserved
+    gh_state.reset()
+    gh_state.set_pages(
+        pages={},
+        default_page={"variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+    )
+    clock_now[0] = 1795565280.0
+    assert_true(not exp_p1.poll_once(), "C11 exceeding MAX_PAGES must fail")
+    assert_eq(len(gh_state.requests), mod.MAX_PAGES, "C11 must stop at MAX_PAGES requests")
+    m_p1_after = sample_map(exp_p1.render_metrics())
+    assert_eq(m_p1_after["pool_status_exporter_read_timestamp_seconds"], "1795565250", "C11 MAX_PAGES preserves read_timestamp")
+    assert_eq(m_p1_after['pool_status_readable{host="pc"}'], "1", "C11 MAX_PAGES preserves cached pc")
+    assert_eq(m_p1_after['pool_status_readable{host="srv"}'], "1", "C11 MAX_PAGES preserves cached srv")
+    assert_eq(m_p1_after['pool_status_exporter_read_errors_total{reason="json"}'], "1", "C11 MAX_PAGES increments json counter")
 
     # C2: Deeply nested host status document (RecursionError) keeps host heartbeat with
     # readable=0 while the other host stays readable, and recovers on the next valid poll.
@@ -852,16 +925,21 @@ try:
     assert_eq(proc.returncode, 0, f"exporter should exit 0 on SIGTERM (stderr={stderr_txt})")
     assert_true(FAKE_TOKEN_1 not in stdout_txt and FAKE_TOKEN_1 not in stderr_txt, "token leaked into logs!")
 
-    # C2 subprocess test: deeply nested API JSON (RecursionError) does not kill the
-    # polling thread, preserves cached metrics, and auto-recovers on next valid poll.
+    # C2/C12 subprocess test: fake API atomically switches all subsequent responses to
+    # deeply nested JSON (RecursionError) when serving the first valid response, so the
+    # baseline read_timestamp is deterministically the last success before failure; the
+    # polling thread must stay alive, preserve cached metrics, and auto-recover.
     pc_next_doc = json.loads(pc_json)
     pc_next_doc["seq"] = 1235
     pc_next_json = json.dumps(pc_next_doc)
     gh_state.reset()
-    gh_state.set_pages({1: {"total_count": 2, "variables": [
-        {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
-        {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
-    ]}})
+    gh_state.set_pages(
+        pages={1: {"total_count": 2, "variables": [
+            {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
+            {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+        ]}},
+        switch_to_raw_after_first_ok=deep_nested_json,
+    )
     p_port = free_port()
     env = {
         "PATH": os.environ.get("PATH", ""),
@@ -888,17 +966,17 @@ try:
             return None
 
         b1 = wait_until(wait_initial_seq)
-        ts1 = sample_map(b1)["pool_status_exporter_read_timestamp_seconds"]
+        m1 = sample_map(b1)
+        ts1 = m1["pool_status_exporter_read_timestamp_seconds"]
+        json_err_1 = int(m1['pool_status_exporter_read_errors_total{reason="json"}'])
         assert_true(int(ts1) > 0, "C2 subprocess baseline read_timestamp > 0")
 
-        # Serve deeply nested JSON triggering RecursionError in API list decode
-        with gh_state.lock:
-            gh_state.mode = "raw"
-            gh_state.raw_body = deep_nested_json
+        # Wait for at least one failing RecursionError poll after observing baseline ts1
+        target_json_err = max(1, json_err_1 + 1)
 
         def wait_json_err():
             text = fetch_metrics(p_port)
-            if int(sample_map(text)['pool_status_exporter_read_errors_total{reason="json"}']) >= 1:
+            if int(sample_map(text)['pool_status_exporter_read_errors_total{reason="json"}']) >= target_json_err:
                 return text
             return None
 
