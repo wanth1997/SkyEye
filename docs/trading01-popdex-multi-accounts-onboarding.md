@@ -23,14 +23,14 @@
 | run-state | `/home/ubuntu/tnauqquant/run-state/popdex-multi-accounts/` |
 | raw log | `/home/ubuntu/tnauqquant/logs/live-runs/<YYYYMMDD_HHMMSS>_popdex_multi_accounts_config.raw.log`（嚴格 contract glob） |
 | textfile | `tnauqquant-popdex-multi-accounts.prom` |
-| 預填 `TQ_EXECUTABLE` | `/home/ubuntu/tnauqquant/bin/popdex-multi-accounts`（Step 1 **必須**依主機 `manager.env` 核對實際路徑） |
+| 預填 `TQ_EXECUTABLE` | `/home/ubuntu/tnauqquant/bin/popdex-multi-accounts/quant`（Step 1 **必須**依主機 `manager.env` 核對實際路徑） |
 | 安裝時狀態 | `TQ_STRATEGY_DISABLED=1`：lane 安裝後保持停用，等 Step 5a 停用 `popdex-btc` 並完成 Step 5b–5c canary 驗收後，於 Step 6 Stage 1 切換前才改為 `0` |
 
 **operator 必須在 Trading01 唯讀核對的值：**
 
 | 值 | 怎麼核對 | 填錯的後果 |
 |---|---|---|
-| `TQ_EXECUTABLE` | 唯讀查 `/etc/tnauqquant/instances/popdex-multi-accounts/manager.env` 的 `TNAUQ_EXPECTED_BIN` 一行，確認是**可執行一般檔案**（`test -f && test -x`，非目錄、非共用 launcher `/usr/local/sbin/tnauqquant-service`）。可能是 `/home/ubuntu/tnauqquant/bin/popdex-multi-accounts` 或 `/home/ubuntu/tnauqquant/bin/popdex-multi-accounts/quant`，以主機 `TNAUQ_EXPECTED_BIN` 與 Step 5 manifest `.executable` 為準。 | 填成目錄或錯路徑：`process_count 0`、測試 cycle 不會出現 `TradingUnexpectedProcess`、出現 `TradingRunBindingInvalid`。填成共用 launcher：`setup-linux.sh` 不重複檢查直接拒絕。 |
+| `TQ_EXECUTABLE` | 預期為 `/home/ubuntu/tnauqquant/bin/popdex-multi-accounts/quant`，以主機 `TNAUQ_EXPECTED_BIN` 與 Step 5 manifest `.executable` 為準。Step 1 只核對路徑，首次安裝時 binary 可能尚未產生。第一次啟動後，Step 5c 必須確認該路徑是可執行的一般檔案。 | 填成目錄或錯路徑可能導致 `process_count 0`、測試 cycle 未出現 `TradingUnexpectedProcess`，或出現 `TradingRunBindingInvalid`。共用 launcher 路徑不得使用。 |
 | `TQ_EXECUTOR_MAP` | 預填 `popdex-main=popdex,popdex-rot2=popdex`。Step 1 唯讀核對 `popdex_multi_accounts_config.yaml` 中 `routing.accounts[].name` 剛好為這兩支且 `routing.mode: random`；Step 5 用 raw log 的 `equity_usdt_by_executor`、`volume_usd_by_executor`、`cycle_executor` 核對。 | 未在 `TQ_EXECUTOR_MAP` allowlist 內的 executor 會被 probe 丟棄：合併成交額漏計，且 per-executor 餘額／損益／週期分項不輸出或漏計。 |
 | `TQ_INSTANCE_ID` | 預填 `popdex-multi-accounts`，Step 1 核對 config 的 `instance_id:`（與其他 lane 不重複），Step 5 核對 manifest `.instance_id`。 | `strategy_identity_ok 0`；出現 `TradingRunBindingInvalid`。 |
 
@@ -115,14 +115,26 @@ ls -ld /home/ubuntu/tnauqquant/run-state/popdex-multi-accounts 2>&1 | tee "$WORK
 grep -nE '^[[:space:]]*instance_id:' "$CFG" | tee "$WORK/config-instance-id"
 grep -nE '^[[:space:]]*(mode:|-[[:space:]]*name:)' "$CFG" | tee "$WORK/config-routing-names"
 systemctl show -p ExecStart --value tnauqquant@popdex-multi-accounts.service | tee "$WORK/execstart"
-grep -c '^TNAUQ_EXPECTED_BIN=' "$LANE_ENV"                                       # 1
+EXPECTED_BIN_COUNT="$(grep -c '^TNAUQ_EXPECTED_BIN=' "$LANE_ENV")"
+printf 'TNAUQ_EXPECTED_BIN count=%s\n' "$EXPECTED_BIN_COUNT"                     # 1
 grep '^TNAUQ_EXPECTED_BIN=' "$LANE_ENV" | tee "$WORK/expected-bin"               # 只取這一行，不開其他 env
 QUANT="$(sed -n 's/^TNAUQ_EXPECTED_BIN=//p' "$WORK/expected-bin" | tr -d "\"'")"; echo "$QUANT"
-test -f "$QUANT" && test -x "$QUANT" && echo QUANT-EXECUTABLE-FILE
 grep -HE '^TQ_(EXECUTABLE|INSTANCE_ID)=' /etc/skyeye-trading/instances/*.env | tee "$WORK/sibling-identities"
+sibling_status=("${PIPESTATUS[@]}")
+
+if [[ "${sibling_status[*]}" != "0 0" ]]; then
+  echo "STOP: could not record sibling identities"
+elif [[ "$EXPECTED_BIN_COUNT" != 1 || "$QUANT" != /* || -d "$QUANT" ||
+      "$QUANT" == /usr/local/sbin/tnauqquant-service ]] ||
+   sed -n 's/^[^:]*:TQ_EXECUTABLE=//p' "$WORK/sibling-identities" |
+     tr -d "\"'" | grep -qxF -- "$QUANT"; then
+  echo "STOP: invalid or duplicate TNAUQ_EXPECTED_BIN"
+else
+  echo QUANT-PATH-OK
+fi
 ```
 
-- `QUANT-EXECUTABLE-FILE` 必須印出（確認是一般可執行檔，不是目錄也不是 `/usr/local/sbin/tnauqquant-service`），且不可與 `sibling-identities` 任一 `TQ_EXECUTABLE` 重複。
+- 必須看到 `QUANT-PATH-OK`，並確認 `sibling-identities` 完整讀取。路徑須為絕對路徑、排除目錄與共用 launcher，且不可與任一 sibling 的 `TQ_EXECUTABLE` 重複。若檔案已存在，可順便確認為可執行的一般檔案。新 lane 第一次啟動前允許檔案尚未產生。
 - `config-instance-id` 須剛好一行、等於 `popdex-multi-accounts` 且不與其他 lane 重複。
 - `config-routing-names` 須確認 `mode: "random"` 與兩支 account `popdex-main`、`popdex-rot2`。任一不符即調整 env（不改 config）或 STOP 回報 tnauqquant manager。
 
@@ -134,10 +146,14 @@ install -m 600 "$STAGE/agents/alloy/trading/deployment-linux-popdex-multi-accoun
 # 若主機 $QUANT 與預填值不同，更新 TQ_EXECUTABLE=$QUANT。
 # 若 config 的 instance_id 或兩支 executor 名稱與預填值不同，對齊調整（不要改 config）。
 diff "$STAGE/agents/alloy/trading/deployment-linux-popdex-multi-accounts.env.example" "$WORK/popdex-multi-accounts.env" || true
+grep -c '^TQ_EXECUTABLE=' "$WORK/popdex-multi-accounts.env"                     # 1
+grep -xF "TQ_EXECUTABLE=$QUANT" "$WORK/popdex-multi-accounts.env"                # 印出相符的設定
 grep -c '^TQ_STRATEGY_DISABLED=1$' "$WORK/popdex-multi-accounts.env"              # 1
 "$SETUP" --render-only "$WORK/render" --env-file "$WORK/popdex-multi-accounts.env" </dev/null || echo "STOP: render"
 grep -c 'strategy *= *"popdex-multi-accounts"' "$WORK/render/trading-popdex-multi-accounts.alloy"   # >= 1
 ```
+
+`TQ_EXECUTABLE` 必須唯一且等於 Step 1 取出的 `TNAUQ_EXPECTED_BIN`，否則 STOP。
 
 ### monitoring-prod（ubuntu）：安裝前基準
 
@@ -377,7 +393,7 @@ printf 'window_start=%s prev_run_id=%s\n' "$(cat "$WORK/canary-window-start")" "
 
 ### 5c. Canary 終態與指標唯讀核對 `[READ-ONLY]`
 
-Canary 結束後、正式切換前，在 Trading01（root，`. "$WORK/vars"`）核對本次執行的歸屬、終態與指標：
+Canary 結束後、Step 6 正式啟用前，在 Trading01（root，`. "$WORK/vars"`）核對本次執行的 binary、歸屬、終態與指標。此時 binary 必須已產生且為可執行的一般檔案：
 
 ```bash
 ENVF=/etc/skyeye-trading/instances/popdex-multi-accounts.env
@@ -386,10 +402,16 @@ DONE=/home/ubuntu/tnauqquant/run-state/popdex-multi-accounts/current.done.json
 PROM=/var/lib/skyeye-trading/textfile/tnauqquant-popdex-multi-accounts.prom
 WINDOW_START="$(cat "$WORK/canary-window-start")"
 PREV_RUN_ID="$(cat "$WORK/canary-prev-run-id")"
+QUANT="$(sed -n 's/^TNAUQ_EXPECTED_BIN=//p' "$WORK/expected-bin" | tr -d "\"'")"
 
+test -f "$QUANT" && test -x "$QUANT" && echo QUANT-EXECUTABLE-FILE
 test -f "$MAN" && echo MANIFEST-PRESENT
 jq -r '.executable, .instance_id, .strategy, .log_path, .process_started_at' "$MAN"
 grep -E '^TQ_(EXECUTABLE|INSTANCE_ID|STRATEGY|EXECUTOR_MAP|RAW_LOG_GLOB)=' "$ENVF"
+[[ "$(grep -c '^TQ_EXECUTABLE=' "$ENVF")" == 1 ]] &&
+  grep -qxF "TQ_EXECUTABLE=$QUANT" "$ENVF" &&
+  jq -e --arg quant "$QUANT" '.executable == $quant' "$MAN" &&
+  echo QUANT-EXECUTABLE-MATCH
 
 RUN_ID="$(jq -r '.run_id // ""' "$MAN")"
 STARTED_AT="$(jq -r '.process_started_at // ""' "$MAN")"
@@ -426,7 +448,7 @@ jq -e --arg rid "$RUN_ID" '
 ' "$DONE" && echo CANARY-TERMINAL-OK
 ```
 
-`NEW-CANARY-RUN`、`LOG-MATCHES-GLOB`、`PROBE-RUN-INFO-MATCHES` 與 `CANARY-TERMINAL-OK` 全部通過後，核對 raw log 合併值、依 `cycle_executor` 去重加總的各帳號損益／週期數（含 0 週期帳號）與 `.prom` 四個完整分項指標：
+`QUANT-EXECUTABLE-FILE`、`QUANT-EXECUTABLE-MATCH`、`NEW-CANARY-RUN`、`LOG-MATCHES-GLOB`、`PROBE-RUN-INFO-MATCHES` 與 `CANARY-TERMINAL-OK` 全部通過後，核對 raw log 合併值、依 `cycle_executor` 去重加總的各帳號損益／週期數（含 0 週期帳號）與 `.prom` 四個完整分項指標。任一項失敗即 STOP 並通知 Wan：
 
 ```bash
 grep -E 'msg=initial_equity_recorded' "$LOG" | tail -n 1 | grep -oE '(equity_usdt|equity_usdt_by_executor)=[^[:space:]]+'
@@ -489,6 +511,7 @@ grep -E '^tnauqquant_(current_run_info|process_count|run_expected|risk_stopped|d
 
 驗收條件（**全部通過才可進入 Step 6；任一項失敗立刻 STOP 並把結果交回 Wan**）：
 1. **Canary 歸屬與成功終態**：
+   - `QUANT-EXECUTABLE-FILE` 與 `QUANT-EXECUTABLE-MATCH` 都必須印出。Step 1 記錄的 `TNAUQ_EXPECTED_BIN`、已安裝的 `TQ_EXECUTABLE` 與本次 manifest `.executable` 須一致，且指向可執行的一般檔案。
    - `NEW-CANARY-RUN`、`LOG-MATCHES-GLOB`、`PROBE-RUN-INFO-MATCHES`、`DONE-MARKER-PRESENT` 與 `CANARY-TERMINAL-OK` 全部印出（確認 manifest、`current.done.json`、bound raw log 與 probe 的 `tnauqquant_current_run_info` 全屬本次視窗內的新 `run_id`，`reason="max_cycles_complete"` 且已平倉）；
    - `.prom` 顯示 `tnauqquant_done_marker{...,reason="max_cycles_complete"} 1`、`tnauqquant_process_count 0`、`tnauqquant_risk_stopped 0`；
    - 五個 binding 值（`process_identity_ok`、`strategy_identity_ok`、`config_snapshot_match`、`log_binding_ok`、`marker_binding_ok`）皆為 `1`；
@@ -680,6 +703,6 @@ grep -E '^tnauqquant_(current_run_info|process_count|run_expected|risk_stopped|d
 | Step 3 中央檢查 | | `siblings_same`、`all_fresh`、`popdex_multi` |
 | Step 4 central-deploy | | applied SHA、`TARGETS-OK`、Grafana 載入結果 |
 | Step 5a 帳號交接前置 | | Wan 停用 `popdex-btc`、唯讀核對程序與 timer、`popdex-btc` `TQ_STRATEGY_DISABLED=1` |
-| Step 5b–5c canary 核對 | | `CANARY-TERMINAL-OK`、`CANARY_RUN_ID`、五項 binding、合併與四項 per-executor `.prom` 對帳、Loki／Grafana |
+| Step 5b–5c canary 核對 | | `QUANT-EXECUTABLE-FILE`、`QUANT-EXECUTABLE-MATCH`、`CANARY-TERMINAL-OK`、`CANARY_RUN_ID`、五項 binding、合併與四項 per-executor `.prom` 對帳、Loki／Grafana |
 | Step 6 Stage 1 啟用與簽收 | | `popdex-multi-accounts` `TQ_STRATEGY_DISABLED=0`、新 `NEW_RUN_ID != CANARY_RUN_ID`、新 lane `process_count=1/run_expected=1`、舊 lane `process_count=0` |
 | Step 6 Stage 2 退場（S3） | | `trading-target remove` PR、`central-deploy`、`retire` record |
