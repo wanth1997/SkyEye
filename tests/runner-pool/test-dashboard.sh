@@ -92,17 +92,29 @@ check(not bad_ds, "every panel and target uses a pinned datasource UID" + ("" if
 check(any(expr == 'ALERTS{product="runner-pool"}' for _, _, _, expr in pool_targets),
       'dashboard includes an alert panel filtering ALERTS{product="runner-pool"} (including shadow)')
 
-# C8: Panel 10 status-age red threshold must be strictly > 120 (Grafana steps are >=).
-age_red_steps = []
+# C8: Panel 10 status-age uses ceil(...) and turns red starting at 121 (strictly > 120s).
+age_steps = None
 for ov in (pool_by_id[10].get("fieldConfig") or {}).get("overrides") or []:
     if (ov.get("matcher") or {}).get("options") == "狀態年齡":
         for prop in ov.get("properties") or []:
             if prop.get("id") == "thresholds":
-                for step in (prop.get("value") or {}).get("steps") or []:
-                    if step.get("color") == "red":
-                        age_red_steps.append(step.get("value"))
-check(len(age_red_steps) == 1 and isinstance(age_red_steps[0], (int, float)) and 120 < age_red_steps[0] < 121,
-      f"panel 10 status-age red threshold is strictly > 120 (got {age_red_steps!r})")
+                age_steps = (prop.get("value") or {}).get("steps") or []
+
+def grafana_threshold_color(steps, val):
+    color = None
+    for step in steps:
+        bound = step.get("value")
+        if bound is None or val >= bound:
+            color = step.get("color")
+    return color
+
+check(age_steps is not None
+      and any(s.get("color") == "red" and s.get("value") == 121 for s in age_steps)
+      and grafana_threshold_color(age_steps, 89) == "green"
+      and grafana_threshold_color(age_steps, 90) == "yellow"
+      and grafana_threshold_color(age_steps, 120) == "yellow"
+      and grafana_threshold_color(age_steps, 121) == "red",
+      f"panel 10 status-age threshold colors 120 as yellow and 121 (ceil of 120.001s) as red (steps={age_steps!r})")
 
 # 2. Recording rules file to syntax-check ALL hosts-runner-pool.json PromQL queries
 rules_lines = ["groups:", "  - name: hosts_runner_pool_syntax", "    rules:"]
@@ -185,6 +197,25 @@ tests:
         exp_samples:
           - labels: '{{job="pool-status",instance="pool-status:9101"}}'
             value: 0
+
+  - name: hosts-runner-pool status-age ceil maps exactly 120s to 120 (yellow) and 120.001s to 121 (red)
+    interval: 1m
+    input_series:
+      # At eval_time=3m (time=180s):
+      #   exact120 updated at 60.000 -> age = 120.000s -> ceil = 120 (yellow, < 121)
+      #   ms120    updated at 59.999 -> age = 120.001s -> ceil = 121 (red, >= 121)
+      - series: 'pool_status_updated_timestamp_seconds{{job="pool-status",instance="pool-status:9101",host="exact120"}}'
+        values: '60x5'
+      - series: 'pool_status_updated_timestamp_seconds{{job="pool-status",instance="pool-status:9101",host="ms120"}}'
+        values: '59.999x5'
+    promql_expr_test:
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "B"))}
+        eval_time: 3m
+        exp_samples:
+          - labels: '{{host="exact120"}}'
+            value: 120
+          - labels: '{{host="ms120"}}'
+            value: 121
 
   - name: hosts-runner-pool Windows-layer panels distinguish fresh up=1, fresh up=0, stale sample and missing
     interval: 1m
