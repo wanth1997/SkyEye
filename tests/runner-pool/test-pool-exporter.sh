@@ -202,6 +202,22 @@ for bad_hosts in (None, "", "   ", "pc,", ",srv", "pc,,srv", "PC", "pc2", "srv0"
     hosts_val, err = mod.parse_hosts(bad_hosts)
     assert_true(hosts_val is None and err is not None, f"POOL_HOSTS={bad_hosts!r} must be rejected")
 
+# 1i. C9: _positive_float_env accepts only finite positive numbers
+def test_c9_positive_float_env_rejects_non_finite():
+    key = "_SKYEYE_TEST_FLOAT_ENV"
+    try:
+        for bad_val in ("NaN", "nan", "inf", "+inf", "-inf", "Infinity", "-Infinity", "0", "-1.5", "abc"):
+            os.environ[key] = bad_val
+            assert_eq(mod._positive_float_env(key, 30.0), 30.0, f"bad float env {bad_val!r} must fall back")
+        os.environ[key] = "0.25"
+        assert_eq(mod._positive_float_env(key, 30.0), 0.25, "finite positive float accepted")
+        os.environ[key] = "30"
+        assert_eq(mod._positive_float_env(key, 10.0), 30.0, "integer string float accepted")
+    finally:
+        os.environ.pop(key, None)
+
+test_c9_positive_float_env_rejects_non_finite()
+
 
 # ── Fake GitHub HTTP server ─────────────────────────────────────────────────
 class FakeGitHubState:
@@ -219,8 +235,9 @@ class FakeGitHubState:
             self.links = {}
             self.raw_body = None
             self.redirect_location = None
+            self.on_page = None
 
-    def set_pages(self, pages, links=None):
+    def set_pages(self, pages, links=None, on_page=None):
         with self.lock:
             self.mode = "ok"
             self.status_code = 200
@@ -229,6 +246,7 @@ class FakeGitHubState:
             self.links = dict(links or {})
             self.raw_body = None
             self.redirect_location = None
+            self.on_page = on_page
 
 
 gh_state = FakeGitHubState()
@@ -254,6 +272,7 @@ class FakeGitHubHandler(BaseHTTPRequestHandler):
             links = dict(gh_state.links)
             raw_body = gh_state.raw_body
             redirect_location = gh_state.redirect_location
+            on_page = gh_state.on_page
 
         if delay > 0:
             time.sleep(delay)
@@ -292,6 +311,8 @@ class FakeGitHubHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if on_page is not None:
+            on_page(page)
         payload = pages.get(page, {"total_count": 0, "variables": []})
         body = json.dumps(payload).encode("utf-8")
         self.send_response(200)
@@ -531,14 +552,29 @@ try:
         assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565200", f"read_timestamp unchanged on {code}")
         assert_eq(m[f'pool_status_exporter_read_errors_total{{reason="{reason}"}}'], str(expected_counts[reason]), f"{reason} count")
 
-    # Redirect refused (never follows to another host)
-    gh_state.reset()
-    gh_state.mode = "redirect"
-    gh_state.redirect_location = "http://127.0.0.1:1/should-never-be-called"
-    assert_true(not exp.poll_once(), "redirect must fail")
-    expected_counts["http_5xx"] += 1
-    m = sample_map(exp.render_metrics())
-    assert_eq(m['pool_status_exporter_read_errors_total{reason="http_5xx"}'], str(expected_counts["http_5xx"]), "redirect counted")
+    # C7: Uncontracted HTTP statuses (302 redirect refused, 429 rate limit) fail the
+    # poll, preserve cache and read_timestamp, keep http_5xx and all 8 counters
+    # unchanged, and never add new reason labels.
+    for uncontracted_mode, uncontracted_code in (("redirect", 302), ("error", 429)):
+        gh_state.reset()
+        gh_state.mode = uncontracted_mode
+        gh_state.status_code = uncontracted_code
+        gh_state.redirect_location = "http://127.0.0.1:1/should-never-be-called"
+        clock_now[0] += 30.0
+        assert_true(not exp.poll_once(), f"HTTP {uncontracted_code} must fail poll")
+        rendered_uncontracted = exp.render_metrics()
+        m = sample_map(rendered_uncontracted)
+        assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565200", f"read_timestamp unchanged on {uncontracted_code}")
+        assert_eq(m['pool_status_readable{host="pc"}'], "1", f"cached pc preserved on {uncontracted_code}")
+        assert_eq(m['pool_status_readable{host="srv"}'], "1", f"cached srv preserved on {uncontracted_code}")
+        for reason in mod.ERROR_REASONS:
+            assert_eq(
+                m[f'pool_status_exporter_read_errors_total{{reason="{reason}"}}'],
+                str(expected_counts[reason]),
+                f"{reason} counter must stay unchanged on HTTP {uncontracted_code}",
+            )
+        exported_reasons = re.findall(r'^pool_status_exporter_read_errors_total\{reason="([^"]+)"\}', rendered_uncontracted, re.M)
+        assert_eq(tuple(exported_reasons), mod.ERROR_REASONS, "reason label set must stay strictly the 8 contracted values")
 
     # Timeout
     gh_state.reset()
@@ -548,11 +584,13 @@ try:
     m = sample_map(exp.render_metrics())
     assert_eq(m['pool_status_exporter_read_errors_total{reason="timeout"}'], str(expected_counts["timeout"]), "timeout counted")
 
-    # Bad JSON envelopes: invalid syntax, missing variables list, non-string updated_at
+    # Bad JSON envelopes: invalid syntax, missing variables list, non-string updated_at, RecursionError
+    deep_nested_json = "[" * 2500 + "]" * 2500
     for bad_body in (
         "<html>bad gateway</html>",
         json.dumps({"total_count": 1}),
         json.dumps({"total_count": 1, "variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": "no-tz"}]}),
+        deep_nested_json,
     ):
         gh_state.reset()
         gh_state.mode = "raw"
@@ -560,7 +598,159 @@ try:
         assert_true(not exp.poll_once(), f"bad API JSON must fail: {bad_body[:30]}")
         expected_counts["json"] += 1
         m = sample_map(exp.render_metrics())
+        assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565200", "read_timestamp preserved on bad JSON")
+        assert_eq(m['pool_status_readable{host="pc"}'], "1", "cached pc preserved on bad JSON")
         assert_eq(m['pool_status_exporter_read_errors_total{reason="json"}'], str(expected_counts["json"]), "json error counted")
+
+    # C3: Short / incomplete listings when total_count is declared must fail as json error
+    # and preserve cached hosts instead of marking them missing.
+    for case_name, pages_cfg, links_cfg in (
+        (
+            "empty_variables_with_total_count_2",
+            {1: {"total_count": 2, "variables": []}},
+            {},
+        ),
+        (
+            "truncated_link_missing_rel_next",
+            {1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]}},
+            {1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=1>; rel="first"'},
+        ),
+        (
+            "short_page2_under_total_count",
+            {
+                1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+                2: {"total_count": 32, "variables": [{"name": "ONLY_ONE", "value": "y", "updated_at": UPDATED_AT}]},
+            },
+            {
+                1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next"',
+                2: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=1>; rel="prev"',
+            },
+        ),
+        (
+            "total_count_changed_mid_pagination",
+            {
+                1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+                2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+            },
+            {1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next"'},
+        ),
+    ):
+        gh_state.reset()
+        gh_state.set_pages(pages_cfg, links=links_cfg)
+        clock_now[0] += 30.0
+        assert_true(not exp.poll_once(), f"C3 {case_name}: incomplete listing must fail")
+        expected_counts["json"] += 1
+        m = sample_map(exp.render_metrics())
+        assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565200", f"C3 {case_name}: read_timestamp preserved")
+        assert_eq(m['pool_status_readable{host="pc"}'], "1", f"C3 {case_name}: cached pc preserved")
+        assert_eq(m['pool_status_readable{host="srv"}'], "1", f"C3 {case_name}: cached srv preserved")
+        assert_eq(m['pool_status_exporter_read_errors_total{reason="json"}'], str(expected_counts["json"]), f"C3 {case_name}: json counter")
+
+    # C2: Deeply nested host status document (RecursionError) keeps host heartbeat with
+    # readable=0 while the other host stays readable, and recovers on the next valid poll.
+    gh_state.reset()
+    gh_state.set_pages({
+        1: {
+            "total_count": 2,
+            "variables": [
+                {"name": "POOL_STATUS_PC", "value": deep_nested_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+            ],
+        }
+    })
+    clock_now[0] = 1795565300.0
+    assert_true(exp.poll_once(), "C2 host RecursionError poll must still succeed")
+    m = sample_map(exp.render_metrics())
+    assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565300", "C2 host RecursionError updates read_timestamp")
+    assert_eq(m['pool_status_updated_timestamp_seconds{host="pc"}'], str(TIMESTAMP), "C2 host RecursionError keeps pc heartbeat")
+    assert_eq(m['pool_status_readable{host="pc"}'], "0", "C2 host RecursionError marks pc unreadable")
+    assert_eq(m['pool_status_readable{host="srv"}'], "1", "C2 host RecursionError keeps srv readable")
+
+    # Next poll with valid pc recovers pc to readable=1
+    gh_state.reset()
+    gh_state.set_pages({
+        1: {
+            "total_count": 2,
+            "variables": [
+                {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+            ],
+        }
+    })
+    clock_now[0] = 1795565330.0
+    assert_true(exp.poll_once(), "C2 recovery after host RecursionError must succeed")
+    m = sample_map(exp.render_metrics())
+    assert_eq(m['pool_status_readable{host="pc"}'], "1", "C2 pc recovered to readable=1")
+
+    # C1: Re-read token before every HTTP page request:
+    # (a) token rotated between page 1 and page 2 -> page 2 uses new token
+    token_path.write_text(FAKE_TOKEN_1, encoding="utf-8")
+    def rotate_after_page1(page_num):
+        if page_num == 1:
+            tmp_rot = work_dir / "github_token.rot"
+            tmp_rot.write_text(FAKE_TOKEN_2, encoding="utf-8")
+            os.replace(tmp_rot, token_path)
+
+    gh_state.reset()
+    gh_state.set_pages(
+        pages={
+            1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+            2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+        },
+        links={1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next"'},
+        on_page=rotate_after_page1,
+    )
+    clock_now[0] = 1795565360.0
+    assert_true(exp.poll_once(), "C1 mid-pagination token rotation must succeed")
+    assert_eq(len(gh_state.requests), 2, "C1 rotation fetched both pages")
+    assert_eq(gh_state.requests[0]["auth"], f"Bearer {FAKE_TOKEN_1}", "C1 page 1 used token 1")
+    assert_eq(gh_state.requests[1]["auth"], f"Bearer {FAKE_TOKEN_2}", "C1 page 2 re-read token 2")
+
+    # (b) token removed or emptied between page 1 and page 2 -> stops before page 2,
+    #     records reason="token", preserves previous read_timestamp and cached snapshot
+    for mid_action in ("remove", "empty"):
+        token_path.write_text(FAKE_TOKEN_1, encoding="utf-8")
+        def break_token_after_page1(page_num, action=mid_action):
+            if page_num == 1:
+                if action == "remove":
+                    token_path.unlink()
+                else:
+                    token_path.write_text("", encoding="utf-8")
+
+        gh_state.reset()
+        gh_state.set_pages(
+            pages={
+                1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+                2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+            },
+            links={1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next"'},
+            on_page=break_token_after_page1,
+        )
+        clock_now[0] += 30.0
+        assert_true(not exp.poll_once(), f"C1 mid-pagination token {mid_action} must fail poll")
+        assert_eq(len(gh_state.requests), 1, f"C1 token {mid_action} must stop before requesting page 2")
+        expected_counts["token"] += 1
+        m = sample_map(exp.render_metrics())
+        assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565360", f"C1 token {mid_action} preserves read_timestamp")
+        assert_eq(m['pool_status_readable{host="srv"}'], "1", f"C1 token {mid_action} preserves cached srv")
+        assert_eq(m['pool_status_exporter_read_errors_total{reason="token"}'], str(expected_counts["token"]), f"C1 token {mid_action} increments token counter")
+
+    # C2: Polling thread loop survives an unexpected exception on one cycle and continues
+    loop_calls = []
+    loop_stop = threading.Event()
+    class FlakyExporter:
+        def poll_once(self):
+            loop_calls.append(len(loop_calls) + 1)
+            if len(loop_calls) == 1:
+                raise RuntimeError("simulated unexpected failure")
+            loop_stop.set()
+            return True
+
+    loop_thread = threading.Thread(target=mod._run_poll_loop, args=(FlakyExporter(), loop_stop, 0.02), daemon=True)
+    loop_thread.start()
+    loop_thread.join(timeout=2.0)
+    assert_true(not loop_thread.is_alive(), "C2 poller loop should exit cleanly once stop_event is set")
+    assert_eq(loop_calls, [1, 2], "C2 poller loop must survive cycle 1 RuntimeError and run cycle 2")
 
     # 2i. Token hot-reload without restart (atomic replace)
     tmp_tok = work_dir / "github_token.tmp"
@@ -661,6 +851,81 @@ try:
         stdout_txt, stderr_txt = proc.communicate(timeout=5)
     assert_eq(proc.returncode, 0, f"exporter should exit 0 on SIGTERM (stderr={stderr_txt})")
     assert_true(FAKE_TOKEN_1 not in stdout_txt and FAKE_TOKEN_1 not in stderr_txt, "token leaked into logs!")
+
+    # C2 subprocess test: deeply nested API JSON (RecursionError) does not kill the
+    # polling thread, preserves cached metrics, and auto-recovers on next valid poll.
+    pc_next_doc = json.loads(pc_json)
+    pc_next_doc["seq"] = 1235
+    pc_next_json = json.dumps(pc_next_doc)
+    gh_state.reset()
+    gh_state.set_pages({1: {"total_count": 2, "variables": [
+        {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
+        {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+    ]}})
+    p_port = free_port()
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "POOL_HOSTS": "pc,srv",
+        "POOL_TOKEN_FILE": str(missing_tok),
+        "POOL_API_BASE": gh_base,
+        "POOL_POLL_INTERVAL_SECONDS": "0.15",
+        "POOL_HTTP_TIMEOUT_SECONDS": "1",
+        "POOL_LISTEN_HOST": "127.0.0.1",
+        "POOL_LISTEN_PORT": str(p_port),
+    }
+    proc = subprocess.Popen(
+        [sys.executable, "-B", "-u", str(exporter_path)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        def wait_initial_seq():
+            text = fetch_metrics(p_port)
+            if sample_map(text).get('pool_status_seq{host="pc"}') == "1234":
+                return text
+            return None
+
+        b1 = wait_until(wait_initial_seq)
+        ts1 = sample_map(b1)["pool_status_exporter_read_timestamp_seconds"]
+        assert_true(int(ts1) > 0, "C2 subprocess baseline read_timestamp > 0")
+
+        # Serve deeply nested JSON triggering RecursionError in API list decode
+        with gh_state.lock:
+            gh_state.mode = "raw"
+            gh_state.raw_body = deep_nested_json
+
+        def wait_json_err():
+            text = fetch_metrics(p_port)
+            if int(sample_map(text)['pool_status_exporter_read_errors_total{reason="json"}']) >= 1:
+                return text
+            return None
+
+        b2 = wait_until(wait_json_err)
+        m2 = sample_map(b2)
+        assert_eq(m2["pool_status_exporter_read_timestamp_seconds"], ts1, "C2 subprocess read_timestamp preserved on RecursionError")
+        assert_eq(m2['pool_status_seq{host="pc"}'], "1234", "C2 subprocess cached pc preserved on RecursionError")
+
+        # Switch back to valid updated payload -> poller thread must still be alive and recover
+        gh_state.set_pages({1: {"total_count": 2, "variables": [
+            {"name": "POOL_STATUS_PC", "value": pc_next_json, "updated_at": UPDATED_AT},
+            {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+        ]}})
+
+        def wait_recovered_seq():
+            text = fetch_metrics(p_port)
+            if sample_map(text).get('pool_status_seq{host="pc"}') == "1235":
+                return text
+            return None
+
+        b3 = wait_until(wait_recovered_seq)
+        assert_eq(sample_map(b3)['pool_status_seq{host="pc"}'], "1235", "C2 subprocess recovered after RecursionError")
+    finally:
+        proc.terminate()
+        stdout_txt, stderr_txt = proc.communicate(timeout=5)
+    assert_eq(proc.returncode, 0, f"C2 subprocess exporter should exit 0 on SIGTERM (stderr={stderr_txt})")
+    assert_true(FAKE_TOKEN_1 not in stdout_txt and FAKE_TOKEN_1 not in stderr_txt, "token leaked in C2 subprocess logs!")
 
     # Bad POOL_HOSTS -> HTTP 200, reason="config", read_timestamp=0, zero host metrics, 0 GitHub calls
     for bad_hosts_env in (None, "", "pc,invalid_host", "pc,pc"):
@@ -824,13 +1089,25 @@ assert r_ok.returncode == 0, "uid/gid 65534 must read 0640 group 65534 github_to
 r_no = subprocess.run(["test", "-r", "/run/secrets/pool-status/unreadable_0600"])
 assert r_no.returncode != 0, "uid/gid 65534 must NOT read 0600 owner 1000 file"
 
-# Confirm read-only root filesystem
+# Confirm read-only root filesystem (C10):
+# /tmp is world-writable (01777) for uid 65534, so EROFS proves --read-only is
+# genuinely enforced (unlike / where uid 65534 gets EACCES even when writable).
+tmp_mode = os.stat("/tmp").st_mode & 0o777
+assert tmp_mode == 0o777, f"expected /tmp to be world-writable (0777), got {oct(tmp_mode)}"
 try:
-    with open("/ro-probe", "w", encoding="utf-8") as handle:
+    with open("/tmp/ro-probe", "w", encoding="utf-8") as handle:
         handle.write("x")
-    raise AssertionError("expected EROFS on read-only rootfs")
+    raise AssertionError("expected EROFS when writing /tmp/ro-probe on read-only rootfs")
 except OSError as exc:
-    assert exc.errno in (errno.EROFS, errno.EACCES), f"unexpected errno: {exc}"
+    assert exc.errno == errno.EROFS, f"expected EROFS on /tmp/ro-probe, got {exc}"
+
+with open("/proc/mounts", encoding="utf-8") as mounts:
+    root_opts = [
+        line.split()[3].split(",")
+        for line in mounts
+        if len(line.split()) >= 4 and line.split()[1] == "/"
+    ]
+assert root_opts and "ro" in root_opts[-1], f"expected ro mount option on /, got {root_opts!r}"
 
 # Run local fake GitHub server + real exporter.py inside the hardened container
 seen_auth = []

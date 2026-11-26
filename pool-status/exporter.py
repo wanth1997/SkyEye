@@ -15,6 +15,7 @@ import datetime as dt
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import os
 import re
 import signal
@@ -211,11 +212,14 @@ def read_status(text: str, host: str | None = None) -> tuple[dict | None, list[s
     """Parse and validate one status document using pool-pick reader rules."""
     try:
         value = json.loads(text, parse_constant=_reject_json_constant)
-    except (json.JSONDecodeError, ValueError) as exc:
+    except Exception as exc:
         return None, [f"$: not valid JSON ({type(exc).__name__})"]
-    errors = schema_errors(value, READER_SCHEMA)
-    if not errors and host is not None and value["host"] != host:
-        errors = [f"$.host: {value['host']!r} does not match expected host {host!r}"]
+    try:
+        errors = schema_errors(value, READER_SCHEMA)
+        if not errors and host is not None and value["host"] != host:
+            errors = [f"$.host: {value['host']!r} does not match expected host {host!r}"]
+    except Exception as exc:
+        return None, [f"$: validation failed ({type(exc).__name__})"]
     return (None if errors else value), errors
 
 
@@ -332,9 +336,14 @@ def format_host_metrics(
 
 
 class PollError(Exception):
-    """Classified failure during a GitHub variables poll."""
+    """Classified failure during a GitHub variables poll.
 
-    def __init__(self, reason: str, detail: str) -> None:
+    reason is one of ERROR_REASONS when mapped to a contracted error counter,
+    or None for uncontracted HTTP statuses (e.g. 3xx, 429) that are logged and
+    preserve cached state without inventing new metric label values.
+    """
+
+    def __init__(self, reason: str | None, detail: str) -> None:
         super().__init__(detail)
         self.reason = reason
         self.detail = detail
@@ -386,7 +395,9 @@ class GitHubVariablesClient:
                 raise PollError("http_403", "GitHub API returned HTTP 403") from None
             if code == 404:
                 raise PollError("http_404", "GitHub API returned HTTP 404") from None
-            raise PollError("http_5xx", f"GitHub API returned HTTP {code}") from None
+            if 500 <= code <= 599:
+                raise PollError("http_5xx", f"GitHub API returned HTTP {code}") from None
+            raise PollError(None, f"GitHub API returned HTTP {code}") from None
         except (
             TimeoutError,
             socket.timeout,
@@ -400,7 +411,7 @@ class GitHubVariablesClient:
             raise PollError("json", "GitHub API response exceeded size limit")
         try:
             payload = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        except Exception as exc:
             raise PollError("json", f"GitHub API response is not valid JSON ({type(exc).__name__})") from None
         if not isinstance(payload, dict) or not isinstance(payload.get("variables"), list):
             raise PollError("json", "GitHub API response missing variables array")
@@ -409,21 +420,37 @@ class GitHubVariablesClient:
             raise PollError("json", "GitHub API response has invalid total_count")
         return payload, link_header
 
-    def fetch_pool_variables(self, repo: str, token: str) -> dict[str, dict]:
-        """Fetch all pages and return only POOL_STATUS_* variables keyed by name."""
+    def fetch_pool_variables(self, repo: str, token_loader) -> dict[str, dict]:
+        """Fetch all pages and return only POOL_STATUS_* variables keyed by name.
+
+        token_loader is called before every page HTTP request so mid-poll token
+        rotation or removal takes effect immediately.
+        """
         collected: dict[str, dict] = {}
-        seen_total = 0
+        seen_names: set[str] = set()
+        expected_total: int | None = None
         page = 1
         while True:
             if page > MAX_PAGES:
                 raise PollError("json", f"GitHub API pagination exceeded {MAX_PAGES} pages")
+            token = token_loader()
             payload, link_header = self._fetch_page(repo, token, page)
             page_vars = payload["variables"]
-            seen_total += len(page_vars)
+            total_count = payload.get("total_count")
+            if total_count is not None:
+                if expected_total is None:
+                    expected_total = total_count
+                elif total_count != expected_total:
+                    raise PollError(
+                        "json",
+                        f"GitHub API total_count changed mid-pagination ({expected_total} -> {total_count})",
+                    )
+            before_count = len(seen_names)
             for entry in page_vars:
                 if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
                     raise PollError("json", "GitHub API variable entry missing string name")
                 name = entry["name"]
+                seen_names.add(name)
                 if name.startswith("POOL_STATUS_"):
                     collected[name] = entry
 
@@ -431,15 +458,20 @@ class GitHubVariablesClient:
                 if not has_next_link(link_header):
                     break
             else:
-                total_count = payload.get("total_count")
-                if not page_vars:
+                if not page_vars or len(seen_names) == before_count:
                     break
-                if total_count is not None:
-                    if seen_total >= total_count:
+                if expected_total is not None:
+                    if len(seen_names) >= expected_total:
                         break
                 elif len(page_vars) < self.per_page:
                     break
             page += 1
+
+        if expected_total is not None and len(seen_names) < expected_total:
+            raise PollError(
+                "json",
+                f"GitHub API returned {len(seen_names)} variables, expected total_count={expected_total}",
+            )
         return collected
 
 
@@ -482,10 +514,19 @@ class PoolStatusExporter:
         self._read_errors: dict[str, int] = {reason: 0 for reason in ERROR_REASONS}
         self._snapshots: dict[str, tuple[int | float, dict | None] | None] = {}
 
-    def _record_error(self, reason: str, detail: str) -> None:
-        with self._lock:
-            self._read_errors[reason] += 1
-        log(f"poll failed (reason={reason}): {detail}")
+    def _record_error(self, reason: str | None, detail: str) -> None:
+        if reason is not None:
+            with self._lock:
+                self._read_errors[reason] += 1
+            log(f"poll failed (reason={reason}): {detail}")
+        else:
+            log(f"poll failed (unclassified): {detail}")
+
+    def _load_token(self) -> str:
+        token, token_err = read_token_file(self.token_file)
+        if token_err is not None or token is None:
+            raise PollError("token", token_err or "token unavailable")
+        return token
 
     def poll_once(self) -> bool:
         """Execute one poll cycle without holding the metrics lock during I/O."""
@@ -493,13 +534,8 @@ class PoolStatusExporter:
             self._record_error("config", self.config_error or "invalid configuration")
             return False
 
-        token, token_err = read_token_file(self.token_file)
-        if token_err is not None or token is None:
-            self._record_error("token", token_err or "token unavailable")
-            return False
-
         try:
-            variables = self.client.fetch_pool_variables(self.repo, token)
+            variables = self.client.fetch_pool_variables(self.repo, self._load_token)
             parsed: dict[str, tuple[int | float, dict | None] | None] = {}
             for host in self.hosts:
                 var_name = f"POOL_STATUS_{host.upper()}"
@@ -614,8 +650,8 @@ def _positive_float_env(name: str, default: float) -> float:
     except ValueError:
         log(f"invalid {name}={raw!r}; falling back to {default}")
         return default
-    if value <= 0:
-        log(f"non-positive {name}={raw!r}; falling back to {default}")
+    if not math.isfinite(value) or value <= 0:
+        log(f"non-finite or non-positive {name}={raw!r}; falling back to {default}")
         return default
     return value
 
@@ -633,6 +669,21 @@ def _positive_int_env(name: str, default: int) -> int:
         log(f"non-positive {name}={raw!r}; falling back to {default}")
         return default
     return value
+
+
+def _run_poll_loop(
+    exporter: PoolStatusExporter,
+    stop_event: threading.Event,
+    poll_interval: float,
+) -> None:
+    """Poll repeatedly until stop_event is set; never exit on a single-cycle error."""
+    while not stop_event.is_set():
+        try:
+            exporter.poll_once()
+        except Exception as exc:
+            log(f"unexpected poll error ({type(exc).__name__}); continuing next cycle")
+        if stop_event.wait(poll_interval):
+            break
 
 
 def run_forever() -> int:
@@ -659,12 +710,6 @@ def run_forever() -> int:
     server = create_server(exporter, listen_host, listen_port)
     stop_event = threading.Event()
 
-    def _poller() -> None:
-        while not stop_event.is_set():
-            exporter.poll_once()
-            if stop_event.wait(poll_interval):
-                break
-
     def _handle_signal(signum: int, _frame) -> None:
         log(f"received signal {signum}, shutting down")
         stop_event.set()
@@ -680,7 +725,12 @@ def run_forever() -> int:
         f"repo={exporter.repo or '<invalid>'}, poll={poll_interval}s, token_file={token_file})"
     )
 
-    poller = threading.Thread(target=_poller, name="pool-status-poller", daemon=True)
+    poller = threading.Thread(
+        target=_run_poll_loop,
+        args=(exporter, stop_event, poll_interval),
+        name="pool-status-poller",
+        daemon=True,
+    )
     poller.start()
     try:
         server.serve_forever()

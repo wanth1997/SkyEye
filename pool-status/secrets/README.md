@@ -2,7 +2,7 @@
 
 這個目錄內容**不進 git**（被此目錄的 `.gitignore` 排除，僅保留受 git 追蹤的 `README.md` 與 `.gitignore`）。
 
-`pool-status` exporter 每次輪詢 GitHub API 時從這裡重新讀取憑證檔案，換檔不需要重啟 container。
+`pool-status` exporter 每次對 GitHub API 發送 HTTP 請求前都會從這裡重新讀取憑證檔案，換檔不需要重啟 container。
 
 ## 需要放的檔案
 
@@ -25,7 +25,9 @@
 
 ### 一次性初始化（全新 clone 或首次部署）
 
-`ubuntu` 不是群組 `65534`（`nogroup`）的成員，直接以 `ubuntu` 執行 `chmod 2750` 雖會回傳 0，但 Linux 會靜默丟掉 setgid 位元；因此目錄權限必須先 `sudo chgrp 65534`，再用 `sudo chmod 2750`，並用 `stat` 確認輸出：
+`ubuntu` 不是群組 `65534`（`nogroup`）的成員，直接以 `ubuntu` 執行 `chmod 2750` 雖會回傳 0，但 Linux 會靜默丟掉 setgid 位元；因此目錄權限必須先 `sudo chgrp 65534`，再用 `sudo chmod 2750`，並用 `stat` 確認輸出。
+
+同時把 token 檔案的精確路徑加進本機 checkout 的 `.git/info/exclude`：日後若透過 revert PR 回退 `pool-status`、`pool-status/secrets/.gitignore` 一併被移除時，留在磁碟上的 `github_token` 仍會被 Git 忽略，避免誤加入未追蹤檔案：
 
 ```bash
 cd /home/ubuntu/SkyEye
@@ -33,19 +35,25 @@ cd /home/ubuntu/SkyEye
 sudo chgrp 65534 pool-status/secrets
 sudo chmod 2750 pool-status/secrets
 stat -c '%a %g' pool-status/secrets   # 必須印出：2750 65534
+
+EXCLUDE_FILE="$(git rev-parse --git-path info/exclude)"
+grep -qxF '/pool-status/secrets/github_token' "$EXCLUDE_FILE" 2>/dev/null || \
+  printf '%s\n' '/pool-status/secrets/github_token' >> "$EXCLUDE_FILE"
 ```
 
 ## 寫入 token 的安全方法
 
-絕對不要用 `echo "TOKEN" > github_token`（會留在 shell history 且暴露在命令列）。先完成上方一次性初始化，再改用：
+絕對不要用 `echo "TOKEN" > github_token`（會留在 shell history 且暴露在命令列）。先完成上方一次性初始化，再在 subshell 內先 `unset` 專用變數名，用 `read -rs` 讀入並以 shell builtin `printf` 寫入（不影響操作者既有的 `GH_TOKEN`，也不會把憑證 export 給子程序或出現在外部指令的命令列）：
 
 ```bash
-# 讀入時不回顯、不留歷史
-read -rs GH_TOKEN
-# 貼上 token 後按 Enter（看不到字）
-
-printf '%s' "$GH_TOKEN" > /home/ubuntu/SkyEye/pool-status/secrets/github_token
-unset GH_TOKEN
+# 在 subshell 內讀入並寫檔（不回顯、不留歷史、不動既有 GH_TOKEN）
+(
+  umask 027
+  unset SKYEYE_POOL_TOKEN
+  read -rs SKYEYE_POOL_TOKEN
+  # 貼上 token 後按 Enter（看不到字）
+  builtin printf '%s' "$SKYEYE_POOL_TOKEN" > /home/ubuntu/SkyEye/pool-status/secrets/github_token
+)
 sudo chgrp 65534 /home/ubuntu/SkyEye/pool-status/secrets/github_token
 chmod 640 /home/ubuntu/SkyEye/pool-status/secrets/github_token
 
