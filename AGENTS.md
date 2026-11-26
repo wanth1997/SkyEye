@@ -6,7 +6,7 @@ SkyEye 是 wanbrain 各產品共用的自架監控平台。它集中接收遠端
 
 ## 架構速覽
 
-- 中央端以 Docker Compose 執行 Prometheus、Loki、Grafana、Alertmanager、Blackbox Exporter、Node Exporter（`monitoring-host` job）與 Cloudflare Tunnel。
+- 中央端以 Docker Compose 執行 Prometheus、Loki、Grafana、Alertmanager、Blackbox Exporter、Node Exporter（`monitoring-host` job）、Pool Status Exporter（`pool-status` job）與 Cloudflare Tunnel。
 - 被監控主機執行 Grafana Alloy，透過 Cloudflare Access Service Token 將 metrics remote-write 到 Prometheus、將 logs push 到 Loki。
 - Windows 主機用 `agents/alloy/windows/` 的 PowerShell 安裝器，每台有自己專屬的 Access token（檔案在 `C:\ProgramData\SkyEye\secrets\`），series 是 `job="integrations/windows"`。流程見 `runbooks/windows-host-onboarding.md`。
 - Prometheus rules 位於 `prometheus/rules/`；Loki ruler 目前使用單一 tenant directory `/loki/rules/fake/`。

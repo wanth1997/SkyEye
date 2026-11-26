@@ -49,6 +49,13 @@ scrape_configs:
       - target_label: instance
         replacement: monitoring-prod
 
+  # Runner pool host status exporter (compose internal network only).
+  # No target labels so exporter metrics keep their own labels without collisions;
+  # alerts add product="runner-pool" and server_id.
+  - job_name: pool-status
+    static_configs:
+      - targets: ['pool-status:9120']
+
   # External dependency HTTP probes. The blackbox exporter itself lives
   # locally; each `target` below is the URL we want probed.
   # Trick: relabel so `target` (the probed URL) becomes a label, and
