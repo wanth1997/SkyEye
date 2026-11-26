@@ -23,6 +23,7 @@ usage() {
   printf '%s\n' \
     'Usage: setup-linux.sh add --env-file PATH [--restart-alloy] [--no-start | --enable-probe] [--migrate-singleton]' \
     '       setup-linux.sh retire --strategy NAME [--restart-alloy]' \
+    '       setup-linux.sh account add|remove|list --strategy NAME [--executor NAME] [--exchange NAME] [--server ID] [--dry-run]' \
     '       setup-linux.sh --env-file PATH [--render-only DIR] [--no-start] [--migrate-singleton]' \
     '' \
     'add      validate, install, reload Alloy and enable this strategy probe in one step.' \
@@ -34,6 +35,10 @@ usage() {
     '         --no-start stages files only.' \
     'retire   disable this strategy probe, archive its env, fragment and metrics' \
     '         under /etc/skyeye-trading/retired/, and reload Alloy (see retire-linux.sh).' \
+    'account  add, remove or list executors (TQ_EXECUTOR_MAP only) on an already-' \
+    '         installed Linux Trading lane by atomically updating its instance env' \
+    '         without reloading Alloy or changing central config (see account-linux.sh).' \
+    '         Linux Trading lanes only; macOS (Mac mini) and Windows lanes are out of scope.' \
     '' \
     'Without a subcommand the original installer behaviour is unchanged: it restarts' \
     'Alloy unless --no-start is given. The base configuration must define' \
@@ -155,6 +160,10 @@ case "${1:-}" in
   retire)
     shift
     exec "$SCRIPT_DIR/retire-linux.sh" "$@"
+    ;;
+  account)
+    shift
+    exec "$SCRIPT_DIR/account-linux.sh" "$@"
     ;;
 esac
 
