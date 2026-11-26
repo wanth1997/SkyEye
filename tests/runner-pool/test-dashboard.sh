@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Validates grafana/dashboards/Hosts/hosts-runner-pool.json and verifies that
+# the new job="pool-status" (which carries no `product` or `server_id` target
+# label) does not skew `up` counts on overview-all.json or
+# skyeye-stack-health.json.
+#
+# Runs against the pinned Prometheus image with --pull never --network none.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+for tool in docker python3 jq awk; do
+  command -v "$tool" >/dev/null 2>&1 || fail "$tool is required; this suite must not pass by failing to run"
+done
+
+PROM_IMAGE="$(awk '$1 == "image:" && index($2, "prom/prometheus:") == 1 { print $2; exit }' "$REPO_ROOT/docker-compose.yml")"
+[[ -n "$PROM_IMAGE" ]] || fail "cannot find prom/prometheus image in docker-compose.yml"
+
+docker image inspect "$PROM_IMAGE" >/dev/null 2>&1 || \
+  fail "$PROM_IMAGE is not on this machine; run docker pull $PROM_IMAGE (this suite never pulls)"
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-pool-dash.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
+FAILED=0
+
+python3 -I - "$REPO_ROOT" "$WORK" <<'PY' || FAILED=1
+import json
+import os
+import re
+import sys
+
+repo_root, work = sys.argv[1:3]
+pool_dash_path = os.path.join(repo_root, "grafana/dashboards/Hosts/hosts-runner-pool.json")
+overview_path = os.path.join(repo_root, "grafana/dashboards/Overview/overview-all.json")
+stack_path = os.path.join(repo_root, "grafana/dashboards/SkyEye/skyeye-stack-health.json")
+
+pool_dash = json.load(open(pool_dash_path, encoding="utf-8"))
+overview = json.load(open(overview_path, encoding="utf-8"))
+stack = json.load(open(stack_path, encoding="utf-8"))
+
+failed = False
+def check(ok, msg):
+    global failed
+    print(("ok      " if ok else "not ok  ") + msg)
+    failed = failed or not ok
+
+# 1. Conventions checks on hosts-runner-pool.json
+check(pool_dash.get("uid") == "hosts-runner-pool",
+      f'uid is "hosts-runner-pool" (got {pool_dash.get("uid")!r})')
+check(pool_dash.get("title") == "主機 — Runner 池",
+      f'title matches convention (got {pool_dash.get("title")!r})')
+check(pool_dash.get("refresh") == "30s",
+      f'refresh is "30s" (got {pool_dash.get("refresh")!r})')
+check(set(["layer:host", "product:runner-pool", "provisioned"]).issubset(set(pool_dash.get("tags") or [])),
+      "tags include layer:host, product:runner-pool, provisioned")
+
+# Walk panels and targets, validate pinned datasource UIDs
+pool_targets = []
+pool_by_id = {}
+bad_ds = []
+
+def walk(panels):
+    for p in panels or []:
+        if not isinstance(p, dict):
+            continue
+        pid = p.get("id")
+        if pid is not None:
+            pool_by_id[pid] = p
+        ds = p.get("datasource")
+        if ds is not None and (ds.get("uid") not in ("prometheus", "loki", "alertmanager")):
+            bad_ds.append(f"panel {pid}: {ds}")
+        for t in p.get("targets") or []:
+            if isinstance(t, dict):
+                tds = t.get("datasource")
+                if tds is None or tds.get("uid") not in ("prometheus", "loki", "alertmanager"):
+                    bad_ds.append(f"panel {pid}/{t.get('refId')}: {tds}")
+                if "expr" in t:
+                    pool_targets.append((pid, p.get("title", ""), t.get("refId", ""), t["expr"]))
+        walk(p.get("panels"))
+
+walk(pool_dash.get("panels"))
+check(len(pool_targets) > 0, f"discovered {len(pool_targets)} PromQL targets in hosts-runner-pool.json")
+check(not bad_ds, "every panel and target uses a pinned datasource UID" + ("" if not bad_ds else f" ({bad_ds[0]})"))
+check(any(expr == 'ALERTS{product="runner-pool"}' for _, _, _, expr in pool_targets),
+      'dashboard includes an alert panel filtering ALERTS{product="runner-pool"} (including shadow)')
+
+# 2. Recording rules file to syntax-check ALL hosts-runner-pool.json PromQL queries
+rules_lines = ["groups:", "  - name: hosts_runner_pool_syntax", "    rules:"]
+for idx, (pid, _, _, expr) in enumerate(pool_targets):
+    rules_lines.append(f"      - record: test_pool_panel_{pid}_{idx}")
+    rules_lines.append(f"        expr: {json.dumps(' '.join(expr.split()))}")
+open(os.path.join(work, "syntax-rules.yml"), "w", encoding="utf-8").write("\n".join(rules_lines) + "\n")
+
+# 3. Behavior test: key hosts-runner-pool queries + Overview / Stack health `up` regression with job="pool-status"
+def get_expr(panels_by_id, pid, ref="A"):
+    for t in panels_by_id[pid]["targets"]:
+        if t.get("refId") == ref:
+            return t["expr"]
+    raise KeyError((pid, ref))
+
+def yaml_expr(expr):
+    return json.dumps(" ".join(expr.split()))
+
+overview_by_id = {p["id"]: p for p in overview["panels"] if "id" in p}
+stack_by_id = {p["id"]: p for p in stack["panels"] if "id" in p}
+
+behavior_yml = f"""evaluation_interval: 1m
+tests:
+  - name: hosts-runner-pool table queries return one row per host and attach wans-windows up to pc
+    interval: 1m
+    input_series:
+      - series: 'pool_status_expected{{job="pool-status",instance="pool-status:9101",host="pc"}}'
+        values: '1x5'
+      - series: 'pool_status_expected{{job="pool-status",instance="pool-status:9101",host="srv"}}'
+        values: '1x5'
+      - series: 'pool_status_updated_timestamp_seconds{{job="pool-status",instance="pool-status:9101",host="pc"}}'
+        values: '0 35 95 155 215'
+      - series: 'pool_status_updated_timestamp_seconds{{job="pool-status",instance="pool-status:9101",host="srv"}}'
+        values: '0 35 95 155 215'
+      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="pc",state="accepting"}}'
+        values: '1x5'
+      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="pc",state="paused"}}'
+        values: '0x5'
+      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="srv",state="draining"}}'
+        values: '1x5'
+      - series: 'pool_guard_state{{job="pool-status",instance="pool-status:9101",host="pc",state="ok"}}'
+        values: '1x5'
+      - series: 'pool_guard_state{{job="pool-status",instance="pool-status:9101",host="srv",state="none"}}'
+        values: '1x5'
+      - series: 'pool_guard_avail_bytes{{job="pool-status",instance="pool-status:9101",host="pc"}}'
+        values: '9542041600x5'
+      - series: 'up{{job="integrations/windows",instance="WIN-PC",product="github-runner",server_id="wans-windows"}}'
+        values: '1x5'
+      - series: 'pool_status_exporter_read_timestamp_seconds{{job="pool-status",instance="pool-status:9101"}}'
+        values: '0 60 120 180 240'
+    promql_expr_test:
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "B"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{host="pc"}}'
+            value: 25
+          - labels: '{{host="srv"}}'
+            value: 25
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "C"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{host="pc"}}'
+            value: 1
+          - labels: '{{host="srv"}}'
+            value: 4
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "D"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{host="pc"}}'
+            value: 1
+          - labels: '{{host="srv"}}'
+            value: 2
+      - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{host="pc"}}'
+            value: 1
+      - expr: {yaml_expr(get_expr(pool_by_id, 41, "A"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{job="pool-status",instance="pool-status:9101"}}'
+            value: 0
+
+  - name: Overview and Stack health up panels handle new job="pool-status" (no product/server_id label) cleanly
+    interval: 1m
+    input_series:
+      # Product targets
+      - series: 'up{{job="ppclub-backend",instance="localhost:8000",product="ppclub",server_id="PROD02"}}'
+        values: '1x5'
+      - series: 'up{{job="integrations/windows",instance="WIN-PC",product="github-runner",server_id="wans-windows"}}'
+        values: '1x5'
+      # Shared services host (excluded from product counts)
+      - series: 'up{{job="integrations/unix",instance="PROD02",product="services",server_id="PROD02"}}'
+        values: '1x5'
+      # Existing stack job without product label
+      - series: 'up{{job="prometheus",instance="localhost:9090"}}'
+        values: '1x5'
+      # New pool-status job without product/server_id label: up=1 at t=2m, down=0 at t=4m
+      - series: 'up{{job="pool-status",instance="pool-status:9101"}}'
+        values: '1x3 0x2'
+    promql_expr_test:
+      # Overview panel 10 (被監測產品數): only ppclub and github-runner = 2 (pool-status NOT counted)
+      - expr: {yaml_expr(get_expr(overview_by_id, 10, "A"))}
+        eval_time: 2m
+        exp_samples:
+          - labels: '{{}}'
+            value: 2
+      # Overview panel 11 (離線產品數): stays 0 even when pool-status is down (up==0) at t=4m
+      - expr: {yaml_expr(get_expr(overview_by_id, 11, "A"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{}}'
+            value: 0
+      # Stack health panel 11 (上線目標數): 5 up at t=2m, 4 up at t=4m when pool-status goes down
+      - expr: {yaml_expr(get_expr(stack_by_id, 11, "A"))}
+        eval_time: 2m
+        exp_samples:
+          - labels: '{{}}'
+            value: 5
+      - expr: {yaml_expr(get_expr(stack_by_id, 11, "A"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{}}'
+            value: 4
+      # Stack health panel 12 (離線目標數): 0 down at t=2m, 1 down at t=4m when pool-status goes down
+      - expr: {yaml_expr(get_expr(stack_by_id, 12, "A"))}
+        eval_time: 2m
+        exp_samples:
+          - labels: '{{}}'
+            value: 0
+      - expr: {yaml_expr(get_expr(stack_by_id, 12, "A"))}
+        eval_time: 4m
+        exp_samples:
+          - labels: '{{}}'
+            value: 1
+"""
+
+open(os.path.join(work, "behavior.test.yml"), "w", encoding="utf-8").write(behavior_yml)
+sys.exit(1 if failed else 0)
+PY
+
+if docker run --rm --pull never --network none -i --entrypoint sh "$PROM_IMAGE" \
+  -c 'cat > /tmp/syntax-rules.yml && promtool check rules /tmp/syntax-rules.yml >/dev/null' \
+  <"$WORK/syntax-rules.yml"; then
+  printf 'ok      promtool check rules parsed all hosts-runner-pool.json panel queries\n'
+else
+  printf 'not ok  promtool check rules failed on hosts-runner-pool.json panel queries\n'
+  FAILED=1
+fi
+
+if docker run --rm --pull never --network none -i --entrypoint sh "$PROM_IMAGE" \
+  -c 'cat > /tmp/behavior.test.yml && promtool test rules /tmp/behavior.test.yml' \
+  <"$WORK/behavior.test.yml"; then
+  printf 'ok      promtool behavior tests passed for hosts-runner-pool, overview-all and skyeye-stack-health\n'
+else
+  printf 'not ok  promtool behavior tests failed\n'
+  FAILED=1
+fi
+
+if [[ "$FAILED" -ne 0 ]]; then
+  printf 'FAIL: runner-pool dashboard checks failed\n'
+  exit 1
+fi
+printf 'PASS: runner-pool dashboard queries and Overview/Stack health up-isolation passed\n'
