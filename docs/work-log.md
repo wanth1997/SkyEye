@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-26 20:30 — runner 池監控：pool-status exporter、shadow 告警與 dashboard（WAN-980、WAN-981）
+
+**改動摘要：** 新增 `pool-status` exporter，讀 `wanwanlabs/self-hosted-runner` 的 `POOL_STATUS_*` repo variables，把兩台池主機（`pc`、`srv`）的心跳與狀態轉成 Prometheus 指標；另外新增 runner 池 shadow 告警、Alertmanager 路由、`Hosts/runner-pool` dashboard 與 runbook。這次只改 repo，還沒部署。
+
+**修改的檔案：**
+- `pool-status/exporter.py`、`docker-compose.yml`、`prometheus/prometheus.yml`：stdlib Python exporter，每 30 秒分頁讀 GitHub API，`/metrics` 回傳快取值。container 以 `65534:65534` 執行、`read_only`、不 publish port。另加 `job_name: pool-status`。
+- `pool-status/secrets/README.md`、`pool-status/secrets/.gitignore`：token 檔的首次初始化與安全寫入步驟：subshell、`SKYEYE_POOL_TOKEN`、`read -rs`、builtin `printf`，並把 token 路徑寫進 `.git/info/exclude`。
+- `prometheus/rules/runner-pool.yml`、`alertmanager/alertmanager.yml`：runner 池告警，全部走 shadow 路由。
+- `grafana/dashboards/Hosts/hosts-runner-pool.json`、`runbooks/runner-pool-offline.md`、`runbooks/README.md`、`docs/grafana-conventions.md`：dashboard 與值班 runbook。
+- `docs/operations.md`、`AGENTS.md`：pool-status 部署短註與 PAT 輪替步驟；輪替要等換檔後兩次遞增的成功讀取，失敗或逾時就還原舊 PAT。AGENTS.md 的 service 清單也補上 `pool-status`。
+- `tests/runner-pool/`、`prometheus/rules/tests/runner-pool.test.yml`：新增 exporter、規則、路由與 dashboard 的測試 suite。
+
+**原因/備註：**
+- 這是 ai-workflow 計畫 pool-alerting 的 S3 與 S4。S5 由使用者建 PAT；S6 部署需要使用者核准，token 由使用者親自放；S7 是 shadow 觀察後才升級。
+- 與計畫的差異：`PoolHostBriefOffline` 改用 `ALERTS[32m]`，計畫寫的是 30m。代價是 `PoolHostOffline` firing 後約 32 分鐘內，第二次短暫中斷不會另外通知。S6 的 token 寫入步驟以 SkyEye `pool-status/secrets/README.md` 為準，ai-workflow 計畫的 S6 仍寫 `GH_TOKEN`。
+
 ## 2026-11-26 11:35 — popdex-multi-accounts 上線文件的 quant 路徑與 binary 驗收順序（WAN-946）
 
 **改動摘要：** env 範例預填的 `TQ_EXECUTABLE` 補上 `/quant`；上線文件 Step 1 改為只核對路徑（binary 要到第一次啟動才產生，原本的 `test -x` 在新 lane 首次安裝必然失敗），可執行檔與 manifest `.executable` 的核對移到 Step 5c canary，通過才進入 Step 6。

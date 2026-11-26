@@ -28,6 +28,7 @@ Each file here matches one Prometheus alert rule. The rule's `runbook_url` annot
 | `SkyEyeWatchdog` / `AlertmanagerDown` | [skyeye-watchdog.md](./skyeye-watchdog.md) | None (external dead man's switch) / High |
 | `AllRemoteAgentsSilent` | [all-remote-agents-silent.md](./all-remote-agents-silent.md) | High (shadow) |
 | `WindowsHostStale` / `WindowsDiskLow` / `WindowsDiskCritical` / `WindowsClockSkew` / `AlloyAgentPushFailing` | [windows-host-onboarding.md](./windows-host-onboarding.md#7-告警處理) | Medium / Medium / High / Medium / Medium (all shadow) |
+| `PoolHostOffline` / `PoolHostStatusMissing` / `PoolHostUnreadable` / `PoolHostHeld` / `PoolHostPausedLong` / `PoolGuardMemoryLow` / `PoolQueueStuck` / `PoolCacheTokenHits` / `PoolStatusUnreadable` / `PoolStatusExporterDown` / `PoolHostBriefOffline` | [runner-pool-offline.md](./runner-pool-offline.md) | High / High / Medium / Medium / Low / Medium / Medium / Medium / Medium / Medium / Medium (all shadow) |
 
 Add a row + a runbook here every time you add a rule with `severity: High` or `Medium`.
 

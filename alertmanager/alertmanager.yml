@@ -38,6 +38,23 @@ route:
       group_wait: 0s
       repeat_interval: 30m
       continue: true
+    # Runner pool High alerts (PoolHostOffline, PoolHostStatusMissing) repeat
+    # every 4h instead of 30m so an overnight outage does not spam Telegram,
+    # and group per server_id so each host notifies and resolves independently.
+    # Placed after shadow (shadow alerts stay suppressed) and email-high
+    # (promoted page alerts still reach email first), before general High.
+    - matchers: [product="runner-pool", severity="High"]
+      receiver: telegram-high
+      group_by: [alertname, product, server_id, severity]
+      group_wait: 0s
+      repeat_interval: 4h
+      continue: false
+    # PoolHostBriefOffline clears after ~30m. Under the general Medium route's
+    # work-hours window, an overnight reboot that resolves before 09:00 would
+    # never be delivered; this route delivers silently 24/7 via telegram-medium.
+    - matchers: [product="runner-pool", alertname="PoolHostBriefOffline"]
+      receiver: telegram-medium
+      continue: false
     - matchers: [severity="High"]
       receiver: telegram-high
       group_wait: 0s

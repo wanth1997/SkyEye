@@ -146,6 +146,39 @@ services:
     volumes:
       - /:/host:ro,rslave
 
+  # Runner pool status exporter: polls GitHub Actions variables (POOL_STATUS_*)
+  # every 30s and serves cached Prometheus metrics on the compose network.
+  # No published port; token is read from a mounted file on every poll.
+  pool-status:
+    image: python:3.13.17-slim-trixie@sha256:d98cc29d3266e535dd9da1099688d9cb3ca4753813571e071763d17725460962
+    restart: unless-stopped
+    logging: *default-logging
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - python3
+      - -B
+      - -u
+      - /app/exporter.py
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - POOL_HOSTS=pc,srv
+      - POOL_REPO=wanwanlabs/self-hosted-runner
+      - POOL_TOKEN_FILE=/run/secrets/pool-status/github_token
+      - POOL_POLL_INTERVAL_SECONDS=30
+      - POOL_LISTEN_HOST=0.0.0.0
+      - POOL_LISTEN_PORT=9120
+    volumes:
+      - ./pool-status/exporter.py:/app/exporter.py:ro
+      # Mount whole directory so secret rotation (overwrite or atomic rename)
+      # propagates into the container without restart.
+      - ./pool-status/secrets:/run/secrets/pool-status:ro
+
   cloudflared:
     image: cloudflare/cloudflared:2026.10.3
     restart: unless-stopped

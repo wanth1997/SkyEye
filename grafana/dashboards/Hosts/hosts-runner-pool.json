@@ -1,0 +1,831 @@
+{
+  "uid": "hosts-runner-pool",
+  "title": "主機 — Runner 池",
+  "description": "Runner 池監控（固定對應 product=\"runner-pool\"）：透過中央 pool-status exporter 讀取 canary repo 的 POOL_STATUS_<HOST> 變數，並對照 Windows PC 的 wans-windows 存活狀態。告警規則目前全部為 shadow。排查與 silence 指令見 runbooks/runner-pool-offline.md。",
+  "tags": [
+    "layer:host",
+    "product:runner-pool",
+    "provisioned"
+  ],
+  "schemaVersion": 39,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "timepicker": {},
+  "fiscalYearStartMonth": 0,
+  "weekStart": "",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "datasource",
+          "uid": "grafana"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "links": [
+    {
+      "icon": "doc",
+      "tags": [],
+      "targetBlank": true,
+      "title": "Runbook：Runner 池告警",
+      "type": "link",
+      "url": "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "池主機現況",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "各主機狀態總覽（每台一列）",
+      "description": "每台預期池主機一列：狀態年齡（嚴格 > 120s 標紅）、state、guard.state、heavy/light 的 busy/slots/queued、可用記憶體（< 2,500 MiB 標紅）、24h 拒絕數、可讀性，以及 pc 對應的 Windows 層 wans-windows 新鮮度與 up 狀態。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 1, "w": 20, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_status_expected)",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (ceil(time() - pool_status_updated_timestamp_seconds))",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (1 * (pool_status_state{state=\"accepting\"} == 1) or 2 * (pool_status_state{state=\"paused\"} == 1) or 3 * (pool_status_state{state=\"held\"} == 1) or 4 * (pool_status_state{state=\"draining\"} == 1))",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "D",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (1 * (pool_guard_state{state=\"ok\"} == 1) or 2 * (pool_guard_state{state=\"none\"} == 1) or 3 * (pool_guard_state{state=\"paused\"} == 1) or 4 * (pool_guard_state{state=\"killing\"} == 1) or 5 * (pool_guard_state{state=\"held\"} == 1))",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "E",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_class_busy{class=\"heavy\"})",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "F",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_class_slots{class=\"heavy\"})",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "G",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_class_queued{class=\"heavy\"})",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "H",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_class_busy{class=\"light\"})",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "I",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_class_slots{class=\"light\"})",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "J",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_class_queued{class=\"light\"})",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "K",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_guard_avail_bytes)",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "L",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_refused_24h)",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "M",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (pool_status_readable)",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "N",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max by (host) (label_replace(((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 1) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 0) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) > 120) * 0 + 2), \"host\", \"pc\", \"\", \"\"))",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": { "byField": "host", "mode": "outer" }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true,
+              "Time 3": true,
+              "Time 4": true,
+              "Time 5": true,
+              "Time 6": true,
+              "Time 7": true,
+              "Time 8": true,
+              "Time 9": true,
+              "Time 10": true,
+              "Time 11": true,
+              "Time 12": true,
+              "Time 13": true,
+              "Time 14": true,
+              "Value #A": true
+            },
+            "indexByName": {
+              "host": 0,
+              "Value #B": 1,
+              "Value #C": 2,
+              "Value #D": 3,
+              "Value #E": 4,
+              "Value #F": 5,
+              "Value #G": 6,
+              "Value #H": 7,
+              "Value #I": 8,
+              "Value #J": 9,
+              "Value #K": 10,
+              "Value #L": 11,
+              "Value #M": 12,
+              "Value #N": 13
+            },
+            "renameByName": {
+              "host": "主機",
+              "Value #B": "狀態年齡",
+              "Value #C": "狀態",
+              "Value #D": "Guard",
+              "Value #E": "Heavy Busy",
+              "Value #F": "Heavy Slots",
+              "Value #G": "Heavy Queued",
+              "Value #H": "Light Busy",
+              "Value #I": "Light Slots",
+              "Value #J": "Light Queued",
+              "Value #K": "可用記憶體",
+              "Value #L": "24h 拒絕",
+              "Value #M": "可讀",
+              "Value #N": "Windows 層 (wans-windows)"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": { "show": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center" },
+          "noValue": "—"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "狀態年齡" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "decimals", "value": 0 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 90 },
+                    { "color": "red", "value": 121 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "狀態" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": { "text": "accepting", "color": "green", "index": 0 },
+                      "2": { "text": "paused", "color": "yellow", "index": 1 },
+                      "3": { "text": "held", "color": "red", "index": 2 },
+                      "4": { "text": "draining", "color": "orange", "index": 3 }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Guard" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": { "text": "ok", "color": "green", "index": 0 },
+                      "2": { "text": "none", "color": "blue", "index": 1 },
+                      "3": { "text": "paused", "color": "yellow", "index": 2 },
+                      "4": { "text": "killing", "color": "red", "index": 3 },
+                      "5": { "text": "held", "color": "red", "index": 4 }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "可用記憶體" },
+            "properties": [
+              { "id": "unit", "value": "bytes" },
+              { "id": "decimals", "value": 2 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "red", "value": null },
+                    { "color": "green", "value": 2621440000 }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "可讀" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": { "text": "OK", "color": "green", "index": 0 },
+                      "0": { "text": "讀不懂", "color": "red", "index": 1 }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Windows 層 (wans-windows)" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "1": { "text": "UP (新鮮)", "color": "green", "index": 0 },
+                      "0": { "text": "Exporter 失敗", "color": "red", "index": 1 },
+                      "2": { "text": "陳舊 (>120s)", "color": "red", "index": 2 }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Windows 層 (wans-windows)",
+      "description": "依樣本新鮮度（time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120s）區分新鮮的 1（Windows 與 Alloy 正常推送）、新鮮的 0（Windows 端 exporter 失敗）、陳舊（>120s，remote_write 停送但尚在 5m lookback 內）或缺樣（無資料）。調查已恢復事件時請對照中斷當時的歷史資料與開機時間，不可只看現在值。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "max(((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 1) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 0) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) > 120) * 0 + 2))",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": { "text": "UP (新鮮)", "color": "green", "index": 0 },
+                "0": { "text": "Exporter 失敗", "color": "red", "index": 1 },
+                "2": { "text": "陳舊 (>120s)", "color": "red", "index": 2 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "red", "value": 2 }
+            ]
+          },
+          "noValue": "缺樣 / 無資料"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "row",
+      "title": "告警（product=\"runner-pool\"，含 shadow）",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 1 }
+    },
+    {
+      "id": 20,
+      "type": "table",
+      "title": "Runner 池告警清單（含 shadow，pending 與 firing）",
+      "description": "列出所有 product=\"runner-pool\" 的 pending／firing 告警（包含 notification_mode=\"shadow\"），供 S7 shadow 觀察與日常檢視。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 9, "w": 24, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ALERTS{product=\"runner-pool\"}",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "product": true,
+              "job": true,
+              "instance": true,
+              "host": true
+            },
+            "renameByName": {
+              "alertname": "告警",
+              "server_id": "主機 (server_id)",
+              "alertstate": "狀態",
+              "severity": "嚴重度",
+              "notification_mode": "通知模式",
+              "class": "類別",
+              "state": "主機狀態"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": { "show": false }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "left" },
+          "noValue": "目前沒有告警"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "嚴重度" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "High": { "color": "red", "index": 0 },
+                      "Medium": { "color": "yellow", "index": 1 },
+                      "Low": { "color": "blue", "index": 2 }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "狀態" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "basic" } },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "firing": { "color": "red", "index": 0 },
+                      "pending": { "color": "orange", "index": 1 }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "type": "row",
+      "title": "趨勢（心跳、記憶體、Slot 與寫入）",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": { "x": 0, "y": 15, "w": 24, "h": 1 }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "各主機狀態年齡（秒）",
+      "description": "time() - pool_status_updated_timestamp_seconds。紅線為 120 秒（離線定義）。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "time() - pool_status_updated_timestamp_seconds",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 120 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "各主機可用記憶體（參考線：2,500 MiB）",
+      "description": "pool_guard_avail_bytes（guard.avail_mb × 1048576）。虛線為 2,500 MiB（2,621,440,000 bytes）參考門檻。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "pool_guard_avail_bytes",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "thresholdsStyle": { "mode": "dashed" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 2621440000 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Slot 使用與排隊（heavy / light）",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 23, "w": 12, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "pool_class_busy",
+          "legendFormat": "{{host}} {{class}} busy"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "pool_class_slots",
+          "legendFormat": "{{host}} {{class}} slots"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "pool_class_queued",
+          "legendFormat": "{{host}} {{class}} queued"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "狀態寫入頻率（每 5 分鐘 seq 變化次數）",
+      "description": "changes(pool_status_seq[5m])。每 30 秒寫入一次時正常約為 9–10 次；降到 0 表示 exporter 未觀察到 seq 變化，請先看下方「最後成功讀取距今」排除 exporter 讀取失敗，再判斷主機是否停止寫入。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 23, "w": 12, "h": 7 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "changes(pool_status_seq[5m])",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "pool-status Exporter 健康度",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 }
+    },
+    {
+      "id": 40,
+      "type": "stat",
+      "title": "Exporter 存活",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 0, "y": 31, "w": 4, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "up{job=\"pool-status\"}",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": { "text": "UP", "color": "green", "index": 0 },
+                "0": { "text": "DOWN", "color": "red", "index": 1 }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "noValue": "無資料"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 41,
+      "type": "stat",
+      "title": "最後成功讀取距今",
+      "description": "time() - (pool_status_exporter_read_timestamp_seconds > 0)。啟動後尚未讀成功時（0）顯示「尚未讀成功」。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 4, "y": 31, "w": 4, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "time() - (pool_status_exporter_read_timestamp_seconds > 0)",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 120 },
+              { "color": "red", "value": 600 }
+            ]
+          },
+          "noValue": "尚未讀成功"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "最後成功讀取時間",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 8, "y": 31, "w": 4, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "(pool_status_exporter_read_timestamp_seconds > 0) * 1000",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null }
+            ]
+          },
+          "noValue": "尚未讀成功"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 43,
+      "type": "timeseries",
+      "title": "Exporter 讀取錯誤數（過去 1 小時，依 reason）",
+      "description": "increase(pool_status_exporter_read_errors_total[1h])，依 reason（token / config / http_401 / http_403 / http_404 / http_5xx / timeout / json）分列。",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "x": 12, "y": 31, "w": 12, "h": 6 },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "increase(pool_status_exporter_read_errors_total[1h])",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}
