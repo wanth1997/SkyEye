@@ -1,0 +1,237 @@
+groups:
+  # Runner pool monitoring (WAN-981 / pool-alerting §3).
+  # Metrics come from the central pool-status exporter (job="pool-status"), which
+  # polls POOL_STATUS_<HOST> repository variables per ai-workflow's
+  # pool/docs/status.md contract.
+  #
+  # Every rule starts in shadow (notification_mode: shadow -> shadow-null).
+  # Promotion follows runbooks/trading-alert-promotion.md and pool-alerting S7.
+  - name: runner-pool
+    interval: 1m
+    rules:
+      # Per-host available memory thresholds (bytes). Both pc and srv start at
+      # 2,500 MiB (2500 * 1048576 = 2621440000, matching status.md's avail_mb *
+      # 1048576 conversion). S7 shadow review will record each host's real
+      # minimum under load and tune host="srv" independently here if needed.
+      - record: pool_guard_memory_low_threshold_bytes
+        labels:
+          host: pc
+        expr: "2500 * 1048576"
+
+      - record: pool_guard_memory_low_threshold_bytes
+        labels:
+          host: srv
+        expr: "2500 * 1048576"
+
+      # ── Host availability ──────────────────────────────────────────────────
+
+      # Condition E (exporter fresh): time() - pool_status_exporter_read_timestamp_seconds <= 120.
+      # Condition H (host fresh):     time() - pool_status_updated_timestamp_seconds <= 120.
+      # Summary intentionally omits `state`: an offline host's last state is
+      # stale, and an unreadable host has no pool_status_state series, so
+      # joining on state would hide offline alerts for unreadable hosts.
+      - alert: PoolHostOffline
+        expr: |
+          (time() - pool_status_updated_timestamp_seconds > 120)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 10m
+        labels:
+          severity: High
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} status has not updated for {{ $value | humanizeDuration }}"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      - alert: PoolHostStatusMissing
+        expr: |
+          (pool_status_expected == 1 unless on(host) pool_status_updated_timestamp_seconds)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 10m
+        labels:
+          severity: High
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} status variable is missing from GitHub"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      - alert: PoolHostUnreadable
+        expr: |
+          (pool_status_readable == 0)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 10m
+        labels:
+          severity: Medium
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} status document is unreadable"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      # ── Host state & capacity (gated by H and E) ───────────────────────────
+
+      - alert: PoolHostHeld
+        expr: |
+          (pool_status_state{state="held"} == 1)
+          and on(host) (time() - pool_status_updated_timestamp_seconds <= 120)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 5m
+        labels:
+          severity: Medium
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} is in held state and needs operator intervention"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      - alert: PoolHostPausedLong
+        expr: |
+          (pool_status_state{state=~"paused|draining"} == 1)
+          and on(host) (time() - pool_status_updated_timestamp_seconds <= 120)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 2h
+        labels:
+          severity: Low
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} has been {{ $labels.state }} for over 2h"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      # Uses per-host pool_guard_memory_low_threshold_bytes when defined, with a
+      # 2,500 MiB default fallback for newly added hosts (e.g. srv2).
+      - alert: PoolGuardMemoryLow
+        expr: |
+          (
+            (pool_guard_avail_bytes < on(host) group_left() pool_guard_memory_low_threshold_bytes)
+            or
+            (
+              (pool_guard_avail_bytes unless on(host) pool_guard_memory_low_threshold_bytes)
+              < 2500 * 1048576
+            )
+          )
+          and on(host) (time() - pool_status_updated_timestamp_seconds <= 120)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 10m
+        labels:
+          severity: Medium
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} available memory is low ({{ $value | humanize1024 }}B)"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      # Queued jobs with free slots while accepting indicates a spawn failure or
+      # pending pod. Paused / held / draining hosts queueing jobs is expected.
+      - alert: PoolQueueStuck
+        expr: |
+          (pool_class_queued > 0)
+          and on(host, class) (pool_class_busy < on(host, class) pool_class_slots)
+          and on(host) (pool_status_state{state="accepting"} == 1)
+          and on(host) (time() - pool_status_updated_timestamp_seconds <= 120)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 15m
+        labels:
+          severity: Medium
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} {{ $labels.class }} queue has {{ $value }} job(s) waiting with free slots"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      - alert: PoolCacheTokenHits
+        expr: |
+          (pool_cache_token_hits > 0)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 0m
+        labels:
+          severity: Medium
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} cache scan found {{ $value }} token-like string(s)"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      # ── Exporter health (mutually exclusive via up) ────────────────────────
+
+      # Exporter starts with read_timestamp_seconds = 0, so never succeeding
+      # also triggers this rule after `for: 5m`.
+      - alert: PoolStatusUnreadable
+        expr: |
+          (time() - pool_status_exporter_read_timestamp_seconds > 600)
+          and on() (up{job="pool-status"} == 1)
+        for: 5m
+        labels:
+          severity: Medium
+          product: runner-pool
+          server_id: monitoring-prod
+          notification_mode: shadow
+        annotations:
+          summary: "pool-status exporter cannot read GitHub variables (not a pool host outage); check pool_status_exporter_read_errors_total"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      - alert: PoolStatusExporterDown
+        expr: |
+          (max by (job) (up{job="pool-status"}) == 0)
+          or
+          absent(up{job="pool-status"})
+        for: 10m
+        labels:
+          severity: Medium
+          product: runner-pool
+          server_id: monitoring-prod
+          notification_mode: shadow
+        annotations:
+          summary: "pool-status exporter is down or not being scraped by Prometheus (not a pool host outage)"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
+
+      # ── Brief offline / probable reboot (must stay after PoolHostOffline) ──
+
+      # Uses age-at-read-time A = (read_timestamp > 0) - updated_timestamp, NOT
+      # `time() - updated_timestamp`. The old `time() - updated_timestamp` form
+      # false-positives when the exporter fails to read GitHub or its container
+      # stops: `updated_timestamp` freezes so `time() - updated_timestamp`
+      # exceeds 120s before E turns false (or across the gap), `max_over_time`
+      # remembers that spike, and BriefOffline falsely fires once the exporter
+      # recovers. With A, both timestamps freeze or vanish together so their
+      # difference never grows (regression-tested in runner-pool.test.yml).
+      #
+      # The `ALERTS` suppression uses [32m] rather than [30m] (2m margin over
+      # the 1m rule evaluation interval + jitter) so a final high-A sample
+      # recorded up to 1m after PoolHostOffline's last firing sample cannot
+      # trigger a spurious 1-minute BriefOffline ~30m after recovery.
+      # Trade-off: PoolHostOffline firing 後約 32 分鐘內的第二次短暫中斷不會另外通知。
+      - alert: PoolHostBriefOffline
+        expr: |
+          (
+            (
+              max_over_time(
+                (
+                  (pool_status_exporter_read_timestamp_seconds > 0)
+                  - on() group_right()
+                  pool_status_updated_timestamp_seconds
+                )[30m:30s]
+              ) > 120
+            )
+            unless on(host) max_over_time(ALERTS{alertname="PoolHostOffline", alertstate="firing"}[32m])
+          )
+          and on(host) (time() - pool_status_updated_timestamp_seconds <= 120)
+          and on() (time() - pool_status_exporter_read_timestamp_seconds <= 120)
+        for: 0m
+        labels:
+          severity: Medium
+          product: runner-pool
+          server_id: "pool-{{ $labels.host }}"
+          notification_mode: shadow
+        annotations:
+          summary: "Runner pool host pool-{{ $labels.host }} was offline for {{ $value | humanizeDuration }} and recovered (possible reboot); this alert auto-resolves after ~30m"
+          runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
