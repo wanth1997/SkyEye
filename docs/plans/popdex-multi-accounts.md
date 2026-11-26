@@ -232,10 +232,10 @@ TQ_EXECUTOR_MAP=popdex-main=popdex,popdex-rot2=popdex
   kind: deploy（等 tnauqquant manager 通知切換時間後另派 operator）
   狀態: 未開始
 
-- [ ] S3 `POPDEX-BTC-RETIRE` WAN-928 — 新 lane 穩定觀察後，依先中央後 host 順序移除 `popdex-btc` inventory 與 retire host probe
+- [x] S3 `POPDEX-BTC-RETIRE` WAN-928 — 新 lane 穩定觀察後，依先中央後 host 順序移除 `popdex-btc` inventory 與 retire host probe
   after: S2 (accepted)
   kind: deploy（確認不回退後由 operator 執行）
-  狀態: 未開始
+  狀態: repo 步驟完成，待 central-deploy 與 host retire
 
 ## 已定的決策
 
@@ -280,5 +280,5 @@ scripts/trading-target check
 
 - S2 上線使用 WAN-946 修正後的 onboarding 文件與 env example。Step 1 核對路徑，Step 5c 驗證 binary 後才進入 Step 6。
 - 現況：S1 已於 `feat/WAN-928-popdex-multi` 實作並完成 Review R1／R2 全部接受項修正與 commit（含 probe、setup-linux、env example、target inventory、recording rules、Grafana 分項面板、回歸測試與 `docs/trading01-popdex-multi-accounts-onboarding.md`）。非 Docker 套件（`test-probe.sh`、`test-probe-safety.sh`、`test-probe-equivalence.sh` 69/69、`test-linux-setup.sh`、`test-linux-env-examples.sh`、`test-trading-target.sh` 非 promtool 段、`test-central-config.sh` 非 promtool 段、`bash -n`、`shellcheck -x`、`jq empty`、`scripts/trading-target check`）全數通過；Docker／promtool 檢查（`promtool test rules`、`test-central-config.sh` promtool 段、`test-dashboard-semantics.sh`、`test-trading-target.sh` derived promtool 子檢查）因本機無 Docker 標記為 PENDING。
-- 下一步：本機 Docker 恢復後補跑 PENDING 的 promtool／dashboard-semantics 檢查；通過與 review／publish 後，等 tnauqquant manager 通知切換時窗再派 operator 執行 S2（`docs/trading01-popdex-multi-accounts-onboarding.md`），穩定觀察後執行 S3 退場 `popdex-btc`。
+- S3 repo 步驟完成，待 review 與 merge。之後由 operator 先執行 `central-deploy`，再到 Trading01 執行 `popdex-btc` 的 host retire。
 - 即時狀態：有 manager 時看 `hm.py goals popdex-multi-accounts`；沒有 manager 時看各步驟的勾選與 `狀態:` 行，以及標頭的 Linear 卡 WAN-928。
