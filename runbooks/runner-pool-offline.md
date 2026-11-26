@@ -42,7 +42,7 @@ curl -fsS --get http://127.0.0.1:9090/api/v1/query \
   - `http_404`：目標 repo（`wanwanlabs/self-hosted-runner`）或 API 路徑不存在，或 PAT 未授權該 repo（private repo 無權限時 GitHub 常回 404）；檢查 PAT scope 與 exporter 設定。
   - `http_5xx`（僅 HTTP 500–599）/ `timeout`：GitHub API 異常或 `monitoring-prod` 外連逾時。
   - `json`：GitHub API 回傳非預期或損壞的 JSON，查 exporter log 確認回應異常。
-  - **以上 `increase(...[15m])` 皆無增加但 `read_timestamp` 停住**：代表收到 401/403/404/500–599 以外的未定義 HTTP 狀態碼（如 429 rate limit 或其他 4xx；exporter 不計入任何 reason，只讓成功時間停住），查 `sudo docker compose logs --tail=50 pool-status` 中的 HTTP 狀態碼。
+  - **以上 `increase(...[15m])` 皆無增加但 `read_timestamp` 停住**：可能原因為未分類的 HTTP 回應（401/403/404/500–599 以外的狀態碼，如 429 或其他 4xx）或 poll 例外（exporter 不為此遞增 `read_errors_total`，只讓成功時間停住）；查 `sudo docker compose logs --tail=50 pool-status`，同時檢查 log 中的 HTTP 狀態碼與 poll 例外。
 
 ### 2. Windows PC（`server_id="pool-pc"`）
 

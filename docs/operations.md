@@ -597,15 +597,22 @@ Fine-grained PAT used by the `pool-status` exporter to read `POOL_STATUS_*` repo
 - **Scope:** Resource owner `wanwanlabs`, repository **`self-hosted-runner` only**, Repository permissions: **Variables: Read-only** (`Metadata: Read-only` is added automatically). Approve the pending org request as org owner.
 - **Cadence:** 1-year expiry (or org maximum); rotate 2 weeks before expiry. If forgotten, `PoolStatusUnreadable` alerts within ~15 minutes (`reason="http_401"`).
 
-On `monitoring-prod`, rotate the token file inside a subshell using a dedicated variable name (`POOL_STATUS_PAT`, never touching the operator's `GH_TOKEN`), `read -rs`, and Bash's builtin `printf` (no echo, shell history, or subprocess argv exposure). The directory is initialized with `2750` group `65534` (`nogroup`), so `>` preserves group `65534` on the existing file; if creating the file fresh after a rebuild, first run `sudo chgrp 65534` on the directory (`2750`) and file (`0640`).
+This procedure rotates an **existing** `pool-status/secrets/github_token` on `monitoring-prod`; if the file does not exist yet (first-time setup or after a rebuild), stop and follow `pool-status/secrets/README.md` for initial directory and token setup first.
 
-No container restart is needed: `pool-status` rereads the file on every request. The block below aborts without modifying the live file if reading fails or input is empty, records the write timestamp (`ROTATED_AT`), waits until `pool_status_exporter_read_timestamp_seconds` strictly exceeds `ROTATED_AT` (proving a GitHub read succeeded with the new PAT), and restores the previous credential automatically if the readability check fails or verification times out:
+Run the rotation inside a subshell (`set +a`, `unset POOL_STATUS_PAT`, `read -rs`, Bash `builtin printf`, never touching the operator's `GH_TOKEN`). The directory is already initialized with `2750` group `65534` (`nogroup`), so `>` preserves group `65534` on the existing file. No container restart is needed: `pool-status` rereads the file on every request. The block below refuses to run if the existing token file is missing, aborts without modifying it if reading fails or input is empty, records the write time (`ROTATED_AT`), waits for **two distinct, strictly increasing** `pool_status_exporter_read_timestamp_seconds` values after `ROTATED_AT` (the second poll starts only after the first finishes, ruling out an in-flight request issued with the old PAT), caps every `curl` call with `--max-time` to the remaining deadline (re-checking the deadline after each response), and restores the previous credential automatically on failure or timeout:
 
 ```bash
 (
   set -euo pipefail
+  set +a
+  unset POOL_STATUS_PAT
   cd /home/ubuntu/SkyEye
   TARGET=/home/ubuntu/SkyEye/pool-status/secrets/github_token
+
+  if [ ! -f "$TARGET" ]; then
+    echo "aborted: $TARGET does not exist; follow pool-status/secrets/README.md for initial setup" >&2
+    exit 1
+  fi
 
   IFS= read -rs POOL_STATUS_PAT < /dev/tty || { echo "aborted: failed to read PAT; existing token kept" >&2; exit 1; }
   if [ -z "${POOL_STATUS_PAT//[[:space:]]/}" ]; then
@@ -625,46 +632,63 @@ No container restart is needed: `pool-status` rereads the file on every request.
   }
   trap cleanup EXIT
   trap 'exit 130' INT TERM
-  if [ -f "$TARGET" ]; then
-    BACKUP=$(umask 077 && mktemp)
-    cat "$TARGET" > "$BACKUP"
-  fi
+  BACKUP=$(umask 077 && mktemp)
+  cat "$TARGET" > "$BACKUP"
 
   # builtin printf keeps the token out of subprocess argv; > preserves group 65534.
   RESTORE_ON_EXIT=1
   builtin printf '%s' "$POOL_STATUS_PAT" > "$TARGET"
   unset POOL_STATUS_PAT
   chmod 640 "$TARGET"
+  ROTATED_AT=$(date +%s)
   stat -c '%a %U %g' "$TARGET"   # must print: 640 ubuntu 65534
   wc -c < "$TARGET"              # length only, never print the token
 
-  ROTATED_AT=$(date +%s)
   if ! sudo docker compose exec -T pool-status test -r /run/secrets/pool-status/github_token; then
     echo "error: container cannot read token" >&2
     exit 1
   fi
 
-  # Wait up to 120s for a fresh successful GitHub read strictly after ROTATED_AT + 15s
-  # (margin > HTTP timeout ensures an in-flight old-PAT request cannot pass verification).
+  # Wait up to 120s for two distinct, strictly increasing read timestamps after ROTATED_AT.
+  # The second poll starts after the first completes, proving the new PAT was read and accepted.
   DEADLINE=$((ROTATED_AT + 120))
-  while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-    READ_TS=$(curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+  FIRST_TS=""
+  while :; do
+    REM=$((DEADLINE - $(date +%s)))
+    [ "$REM" -gt 0 ] || break
+    MAX_T=$((REM < 10 ? REM : 10))
+    READ_TS=$(curl -fsS --max-time "$MAX_T" --get http://127.0.0.1:9090/api/v1/query \
       --data-urlencode 'query=pool_status_exporter_read_timestamp_seconds' \
       | jq -r '.data.result[0].value[1] // 0' 2>/dev/null || echo 0)
-    if awk -v ts="$READ_TS" -v cut="$ROTATED_AT" 'BEGIN { exit !(ts > cut + 15) }'; then
+    [ "$(date +%s)" -lt "$DEADLINE" ] || break
+    if [ -z "$FIRST_TS" ]; then
+      # (cut + 1) rules out a same-second float timestamp written just before ROTATED_AT.
+      if awk -v ts="$READ_TS" -v cut="$ROTATED_AT" 'BEGIN { exit !(ts ~ /^[0-9]+(\.[0-9]+)?$/ && (ts + 0) >= (cut + 1)) }'; then
+        FIRST_TS="$READ_TS"
+      fi
+    elif awk -v ts="$READ_TS" -v prev="$FIRST_TS" 'BEGIN { exit !(ts ~ /^[0-9]+(\.[0-9]+)?$/ && (ts + 0) > (prev + 0)) }'; then
       RESTORE_ON_EXIT=0
-      echo "OK: exporter read succeeded after rotation (read_ts=$READ_TS > rotated_at=$ROTATED_AT); safe to revoke old PAT"
+      echo "OK: two increasing reads after rotation (first_ts=$FIRST_TS, second_ts=$READ_TS > rotated_at=$ROTATED_AT)"
       exit 0
     fi
-    sleep 5
+    REM=$((DEADLINE - $(date +%s)))
+    [ "$REM" -gt 0 ] || break
+    sleep $((REM < 5 ? REM : 5))
   done
 
-  echo "error: timed out waiting for a successful read after rotation; check exporter logs and PAT scope/approval" >&2
+  echo "error: timed out waiting for two increasing reads after rotation; check exporter logs and PAT scope/approval" >&2
   exit 1
 )
 ```
 
-Only after the script prints `OK: exporter read succeeded after rotation ...` (and `increase(pool_status_exporter_read_errors_total{reason=~"token|http_401|http_403"}[15m])` stays empty), revoke the old PAT in GitHub, save the new token in the password manager, and set a reminder 2 weeks before the new expiry date.
+Before revoking the old PAT in GitHub, confirm the script printed `OK: two increasing reads after rotation ...` AND verify no read errors increased over the last 15 minutes (must return `[]`, confirming every `reason` counter had `0` increase; if rotating to recover from an already-expired PAT, check `[2m]` after the two successful reads instead):
+
+```bash
+curl -fsS --max-time 10 --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=increase(pool_status_exporter_read_errors_total[15m]) > 0' | jq -c '.data.result'
+```
+
+Once both checks pass, revoke the old PAT in GitHub, save the new token in the password manager, and set a reminder 2 weeks before the new expiry date.
 
 ---
 
