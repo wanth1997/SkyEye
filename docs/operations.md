@@ -48,6 +48,7 @@ If all three are fine, you're done. Total: under 2 minutes.
 1. **SSL cert on ppclub.tw** — ACME auto-renew via Caddy; 14-day alert gives 16-day buffer. If alert ever fires, the renew path is broken.
 2. **Service Token refresh** — create a new CF Access Service Token, re-run agent setup on each host, delete old token after confirming all agents swapped.
 3. **Review `monitoring-plan-v2.md`** — revisit assumptions (traffic, retention, budget).
+4. **Runner pool GitHub PAT** — rotate `pool-status/secrets/github_token` two weeks before its 1-year expiry (see [Runner pool GitHub PAT](#runner-pool-github-pat-pool-statussecretsgithub_token) below).
 
 ---
 
@@ -588,6 +589,38 @@ OR openssl rand -base64 48 | tr -d '+/=' | head -c 32
 Update `.env` on monitoring-prod, `docker compose up -d --force-recreate grafana`. Save to 1Password.
 
 Note: browsers sign in through Cloudflare Access (see [Grafana sign-in](#grafana-sign-in-cloudflare-access-jwt)); the admin password is only for the emergency steps there. Grafana reads `GF_ADMIN_PW` only when it creates its database, so changing `.env` alone does not change an existing password; `grafana cli admin reset-admin-password --password-from-stdin` does, as in those steps.
+
+### Runner pool GitHub PAT (`pool-status/secrets/github_token`)
+
+Fine-grained PAT used by the `pool-status` exporter to read `POOL_STATUS_*` repository variables. Keep it separate from `POOL_PICK_TOKEN` so it can be revoked and rotated independently.
+
+- **Scope:** Resource owner `wanwanlabs`, repository **`self-hosted-runner` only**, Repository permissions: **Variables: Read-only** (`Metadata: Read-only` is added automatically). Approve the pending org request as org owner.
+- **Cadence:** 1-year expiry (or org maximum); rotate 2 weeks before expiry. If forgotten, `PoolStatusUnreadable` alerts within ~15 minutes (`reason="http_401"`).
+
+On `monitoring-prod`, overwrite the token file without echoing or placing it in shell history or command arguments. The directory is initialized with `2750` group `65534` (`nogroup`), so `>` preserves group `65534` on the existing file; if creating the file fresh after a rebuild, also run `sudo chgrp 65534` on the directory (`2750`) and file (`0640`):
+
+```bash
+cd /home/ubuntu/SkyEye
+read -rs GH_TOKEN < /dev/tty
+printf '%s' "$GH_TOKEN" > /home/ubuntu/SkyEye/pool-status/secrets/github_token
+unset GH_TOKEN
+chmod 640 /home/ubuntu/SkyEye/pool-status/secrets/github_token
+stat -c '%a %U %g' /home/ubuntu/SkyEye/pool-status/secrets/github_token   # must print: 640 ubuntu 65534
+wc -c < /home/ubuntu/SkyEye/pool-status/secrets/github_token             # length only, never print the token
+```
+
+No container restart is needed: `pool-status` rereads the file on every request. Verify readability inside the container and confirm reads succeed before revoking the old PAT on GitHub:
+
+```bash
+sudo docker compose exec -T pool-status test -r /run/secrets/pool-status/github_token && echo readable
+# Wait >= 35s for the next poll, then verify read timestamp advances and error counters stay flat:
+curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=time() - pool_status_exporter_read_timestamp_seconds' | jq -c '.data.result'
+curl -fsS --get http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=pool_status_exporter_read_errors_total{reason=~"token|http_401|http_403"}' | jq -c '.data.result'
+```
+
+Revoke the old PAT in GitHub, save the new token in the password manager, and set a reminder 2 weeks before the new expiry date.
 
 ---
 
