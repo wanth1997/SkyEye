@@ -15,6 +15,18 @@
 ---
 -->
 
+## 2026-11-27 02:10 — 從 Trading inventory 移除 Trading01 popdex-btc（WAN-928）
+
+**改動摘要：** 用 `scripts/trading-target remove --server trading01 --strategy popdex-btc` 刪掉 `popdex-btc` 的 `trading_target_info`，Trading inventory 剩 4 個 target。這是 popdex-multi-accounts 計畫的 S3 repo 步驟，接下來要跑 `central-deploy`，再到 Trading01 retire host probe。
+
+**修改的檔案：**
+- `prometheus/rules/trading-targets.yml`：腳本刪掉的 `popdex-btc` row。
+- `docs/plans/popdex-multi-accounts.md`：S3 狀態與「接續」段。
+
+**原因/備註：**
+- 新 lane `popdex-multi-accounts` 從 11-26 06:02Z 起運作穩定。使用者決定 D124 B（tnauqquant，11-26 17:57Z），不會退回 `popdex-btc`。
+- 順序照 README：先改中央，避免 `TradingTelemetryMissing` 觸發。`tnauqquant@popdex-btc` 維持 disabled，SkyEye 不碰它。
+
 ## 2026-11-26 20:30 — runner 池監控：pool-status exporter、shadow 告警與 dashboard（WAN-980、WAN-981）
 
 **改動摘要：** 新增 `pool-status` exporter，讀 `wanwanlabs/self-hosted-runner` 的 `POOL_STATUS_*` repo variables，把兩台池主機（`pc`、`srv`）的心跳與狀態轉成 Prometheus 指標；另外新增 runner 池 shadow 告警、Alertmanager 路由、`Hosts/runner-pool` dashboard 與 runbook。這次只改 repo，還沒部署。
