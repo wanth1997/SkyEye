@@ -2,29 +2,20 @@
 set -euo pipefail
 
 # Manage accounts (executors) in an already-installed Linux Trading monitoring
-# instance (/etc/skyeye-trading/instances/<strategy>.env) by updating only
-# TQ_EXECUTOR_MAP.
+# instance (/etc/skyeye-trading/instances/<strategy>.env) by atomically
+# updating only the TQ_EXECUTOR_MAP line.
 #
 # Scope: Linux Trading lanes installed via agents/alloy/trading/setup-linux.sh
 # only. macOS (Mac mini) and Windows lanes are out of scope.
 #
-# Invoked directly or through:
-#   agents/alloy/trading/setup-linux.sh account add|remove|list ...
+# Because skyeye-trading-probe@.service uses EnvironmentFile= and re-reads the
+# env on every 15-second probe invocation (and Alloy templates do not reference
+# TQ_EXECUTOR_MAP), account changes never reload or restart Alloy and never
+# modify Alloy fragments, ACLs, systemd units, or shared probe.sh.
 #
-# Safety invariants:
-# - Never touches tnauqquant@* systemd units, configs, or credential files.
-# - Never overwrites shared probe.sh or other shared artifacts (refuses even if
-#   every probe timer is stopped).
-# - Never restarts Alloy (reload only).
-# - Preserves each instance's probe timer enabled/active state.
-# - Refuses mutating subcommands during UTC 18:10-19:30.
-# - Automatically restores the pre-change env backup if apply or post-apply
-#   verification fails.
+# Invoked directly, through setup-linux.sh account, or via scripts/trading-account.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SETUP_SCRIPT="$SCRIPT_DIR/setup-linux.sh"
-SERVICE_TEMPLATE="$SCRIPT_DIR/skyeye-trading-probe@.service.tmpl"
-TIMER_TEMPLATE="$SCRIPT_DIR/skyeye-trading-probe@.timer.tmpl"
 COMMON_LIB="$SCRIPT_DIR/linux-common.sh"
 INSTALL_COMMON="$SCRIPT_DIR/../install-common.sh"
 
@@ -35,9 +26,29 @@ EXECUTOR=""
 EXCHANGE=""
 DRY_RUN=0
 
-WAIT_SECONDS="${SKYEYE_ACCOUNT_WAIT_SECONDS:-16}"
-VERIFY_TIMEOUT="${SKYEYE_ACCOUNT_VERIFY_TIMEOUT:-35}"
+WAIT_SECONDS="${SKYEYE_ACCOUNT_WAIT_SECONDS:-0}"
+VERIFY_TIMEOUT="${SKYEYE_ACCOUNT_VERIFY_TIMEOUT:-45}"
 POLL_INTERVAL="${SKYEYE_ACCOUNT_POLL_INTERVAL:-2}"
+
+# Transaction state shared with signal/exit traps.
+WORK_DIR=""
+STAGED_ENV_TEMP=""
+BACKUP_DIR=""
+BACKUP_ENV=""
+INSTALL_ENV=""
+INSTALL_ENV_ROOT=""
+INSTANCE_TIMER=""
+INSTANCE_SERVICE=""
+PRIOR_TIMER_ENABLED=0
+PRIOR_TIMER_ACTIVE=0
+ORIG_ENV_OWNER=""
+TX_STARTED=0
+TX_COMMITTED=0
+ROLLBACK_DONE=0
+ROLLBACK_FAILED=0
+ROLLBACK_REASON=""
+SLEEP_PID=""
+PROM_ERR_TMP=""
 
 usage() {
   printf '%s\n' \
@@ -50,12 +61,11 @@ usage() {
     'and Windows lanes are out of scope.' \
     '' \
     'Subcommands:' \
-    '  add     Add one executor to TQ_EXECUTOR_MAP, reload Alloy, preserve timer state,' \
-    '          and wait one probe cycle to confirm .prom updates cleanly.' \
+    '  add     Atomically add one executor to TQ_EXECUTOR_MAP under /run/skyeye-alloy.lock.' \
     '          If --exchange is omitted and all current executors share one exchange,' \
     '          that exchange is inferred; multi-exchange lanes require --exchange.' \
-    '  remove  Remove one executor from TQ_EXECUTOR_MAP (refuses removing the last one).' \
-    '          If --exchange is given, verifies the existing mapping matches it.' \
+    '  remove  Atomically remove one executor from TQ_EXECUTOR_MAP (refuses removing' \
+    '          the last one). If --exchange is given, verifies it matches.' \
     '  list    Read-only: display TQ_EXECUTOR_MAP and executors currently emitting' \
     '          series in the strategy .prom file.' \
     '' \
@@ -68,15 +78,24 @@ usage() {
     '  --dry-run         Validate and print the planned change without modifying the host.' \
     '  -h, --help        Show this help.' \
     '' \
+    'Verification & timer state:' \
+    '  - Never touches Alloy, Alloy fragments, ACLs, systemd units, or shared probe.sh.' \
+    '  - Preserves probe timer enabled/active state.' \
+    '  - Active timer: waits for the next timer-triggered .prom snapshot (timestamp' \
+    '    advancing after the write) and verifies executor labels in that snapshot.' \
+    '  - Inactive timer (disabled or stopped): verifies env content and preserved' \
+    '    timer state only; live probe .prom output is not verified.' \
+    '  - Any verification failure or interruption (HUP/INT/TERM) atomically restores' \
+    '    the backed-up env.' \
+    '' \
     'Ordering with tnauqquant (SkyEye never touches tnauqquant@* units/configs/envs):' \
     '  Add:    1) Run SkyEye account add first; 2) Add the account in tnauqquant and restart.' \
     '  Remove: 1) Remove the account in tnauqquant and restart first; 2) Run SkyEye account remove.' \
     '' \
     'Guards:' \
-    '  - Mutating commands (add/remove) are refused during UTC 18:10-19:30.' \
-    '  - Refuses if shared probe.sh or shared unit/metrics files differ from the host.' \
-    '  - Never restarts Alloy (reload only) and preserves probe timer enabled/active state.' \
-    '  - Automatically restores the backed-up env on apply or verification failure.' \
+    '  - Mutating commands (add/remove) are refused during UTC 18:10-19:30' \
+    '    (checked both at preflight and again inside the lock before writing).' \
+    '  - Serialized with setup-linux.sh / retire-linux.sh via /run/skyeye-alloy.lock.' \
     '  - New strategies, strategy retirement, and shared probe.sh updates still require' \
     '    the full workflow in agents/alloy/trading/README.md.'
 }
@@ -93,31 +112,34 @@ source "$COMMON_LIB"
 # shellcheck source=agents/alloy/install-common.sh
 source "$INSTALL_COMMON"
 
-escape_sed_replacement() {
-  printf '%s' "$1" | sed 's/[&|]/\\&/g'
+# Prints a host-side retry command preserving every flag (including --dry-run)
+# ONLY when invoked from a persistent host checkout (setup-linux.sh beside us).
+# When invoked from a wrapper-uploaded temp dir, the wrapper owns retry hints.
+format_host_retry_cmd() {
+  [[ -x "$SCRIPT_DIR/setup-linux.sh" ]] || return 0
+  local cmd="sudo $SCRIPT_DIR/setup-linux.sh account $SUBCOMMAND"
+  if [[ -n "$SERVER_ID" ]]; then
+    cmd="$cmd --server $SERVER_ID"
+  fi
+  cmd="$cmd --strategy $STRATEGY"
+  if [[ -n "$EXECUTOR" ]]; then
+    cmd="$cmd --executor $EXECUTOR"
+  fi
+  if [[ -n "$EXCHANGE" ]]; then
+    cmd="$cmd --exchange $EXCHANGE"
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    cmd="$cmd --dry-run"
+  fi
+  printf '%s' "$cmd"
 }
 
-render_unit_for_installed() {
-  local template="$1"
-  local target="$2"
-  local env_root="$3"
-  local probe_path="$4"
-  local access_path="$5"
-  local probe_user="$6"
-  local probe_group="$7"
-  local env_escaped probe_escaped access_escaped user_escaped group_escaped
-  env_escaped="$(escape_sed_replacement "$env_root")"
-  probe_escaped="$(escape_sed_replacement "$probe_path")"
-  access_escaped="$(escape_sed_replacement "$access_path")"
-  user_escaped="$(escape_sed_replacement "$probe_user")"
-  group_escaped="$(escape_sed_replacement "$probe_group")"
-  sed \
-    -e "s|@@ENV_ROOT@@|$env_escaped|g" \
-    -e "s|@@PROBE_PATH@@|$probe_escaped|g" \
-    -e "s|@@ACCESS_PATH@@|$access_escaped|g" \
-    -e "s|@@PROBE_USER@@|$user_escaped|g" \
-    -e "s|@@PROBE_GROUP@@|$group_escaped|g" \
-    "$template" >"$target"
+print_host_retry_hint() {
+  local label="$1" retry_cmd
+  retry_cmd="$(format_host_retry_cmd)"
+  if [[ -n "$retry_cmd" ]]; then
+    printf '%s: %s\n' "$label" "$retry_cmd" >&2
+  fi
 }
 
 check_utc_window() {
@@ -130,88 +152,78 @@ check_utc_window() {
   total_min=$((10#$hh * 60 + 10#$mm))
   # Refuse UTC 18:10 (1090) through 19:30 (1170) inclusive.
   if [[ "$total_min" -ge 1090 && "$total_min" -le 1170 ]]; then
-    die "refusing to modify trading accounts during the UTC 18:10-19:30 maintenance/restart window (current UTC: $now_hm). Retry after 19:30 UTC."
+    printf 'SkyEye trading account: refusing to modify trading accounts during the UTC 18:10-19:30 maintenance/restart window (current UTC: %s). Retry after 19:30 UTC.\n' \
+      "$now_hm" >&2
+    print_host_retry_hint "Retry after 19:30 UTC"
+    exit 1
   fi
 }
 
-take_account_lock() {
-  local lock_path="$1" old_umask rc=0
-  if [[ -L "$lock_path" ]]; then
-    die "lock file $lock_path is a symlink; remove it and re-run"
-  fi
-  mkdir -p "$(dirname "$lock_path")"
-  old_umask="$(umask)"
-  umask 077
-  if ! exec 8>>"$lock_path"; then
-    umask "$old_umask"
-    die "cannot open lock file $lock_path"
-  fi
-  umask "$old_umask"
-  perl -MFcntl=:flock -e \
-    'open(my $fh, ">>&=", 8) or exit 2; exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1)' || rc=$?
-  case "$rc" in
-    0) return 0 ;;
-    1)
-      exec 8>&-
-      die "another SkyEye trading-account run holds $lock_path. Nothing was changed; re-run after it finishes"
-      ;;
-    *)
-      exec 8>&-
-      die "could not lock $lock_path (perl exited $rc). Nothing was changed"
-      ;;
-  esac
-}
-
-check_alloy_lock_free() {
-  local lock_path="$1" rc=0
-  if [[ -L "$lock_path" ]]; then
-    die "lock file $lock_path is a symlink; remove it and re-run"
-  fi
-  [[ -e "$lock_path" ]] || return 0
-  (
-    exec 7>>"$lock_path"
-    perl -MFcntl=:flock -e \
-      'open(my $fh, ">>&=", 7) or exit 2; exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1)'
-  ) || rc=$?
-  case "$rc" in
-    0) return 0 ;;
-    1) die "another SkyEye Alloy install, retire or uninstall holds $lock_path. Nothing was changed; re-run after it finishes" ;;
-    *) die "could not inspect lock $lock_path (perl exited $rc). Nothing was changed" ;;
-  esac
-}
-
-format_rerun_cmd() {
-  local base="$1"
-  local cmd="$base $SUBCOMMAND"
-  if [[ -n "$SERVER_ID" ]]; then
-    cmd="$cmd --server $SERVER_ID"
-  elif [[ -n "${ENV_SERVER_ID:-}" ]]; then
-    cmd="$cmd --server $ENV_SERVER_ID"
-  fi
-  cmd="$cmd --strategy $STRATEGY --executor $EXECUTOR"
-  if [[ -n "$EXCHANGE" ]]; then
-    cmd="$cmd --exchange $EXCHANGE"
-  fi
-  printf '%s' "$cmd"
-}
-
-die_shared_mismatch() {
-  local artifact="$1"
-  local rerun_wrapper
-  rerun_wrapper="$(format_rerun_cmd "scripts/trading-account")"
-  printf '%s\n' \
-    "SkyEye trading account: shared artifact differs from installed host copy ($artifact); trading-account never overwrites shared probe.sh or shared unit/metrics files." \
-    "Next steps:" \
-    "  1) If the host has a staged checkout matching the installed probe.sh, re-run with --remote-dir:" \
-    "     $rerun_wrapper --remote-dir /home/ubuntu/skyeye-staging/<MATCHING_CHECKOUT>" \
-    "  2) Or if you intend to upgrade shared probe.sh/units on this host, stop and disable all skyeye-trading-probe@* units first following 'Probe CPU limits and shared probe rollout' in agents/alloy/trading/README.md." >&2
-  exit 1
-}
-
-prom_probe_timestamp() {
+# Atomically opens a .prom file without following symlinks (O_NOFOLLOW | O_NONBLOCK),
+# verifies fstat(fd) is a regular file, and reads its complete contents from that
+# single descriptor into PROM_SNAPSHOT. Shared by list and post-write verification.
+# Return codes:
+#   0  = regular file read into PROM_SNAPSHOT
+#   10 = ENOENT (file does not exist)
+#   11 = ELOOP (symlink refused)
+#   13 = non-regular file (FIFO, directory, etc. refused)
+#   12 = other open/read error
+PROM_SNAPSHOT=""
+PROM_READ_ERROR=""
+read_prom_snapshot() {
   local prom_path="$1"
+  local parent_dir="${prom_path%/*}"
+  PROM_SNAPSHOT=""
+  PROM_READ_ERROR=""
+  if [[ -L "$parent_dir" ]]; then
+    PROM_READ_ERROR="refusing symlink textfile directory: $parent_dir"
+    return 11
+  fi
+  local rc=0
+  PROM_ERR_TMP="$(mktemp "${TMPDIR:-/tmp}/skyeye-prom-err.XXXXXX")"
+  PROM_SNAPSHOT="$(perl -MFcntl=O_RDONLY,O_NOFOLLOW,O_NONBLOCK -e '
+    use strict;
+    use warnings;
+    my ($path) = @ARGV;
+    my $fh;
+    if (!sysopen($fh, $path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)) {
+      if ($!{ENOENT}) { exit 10; }
+      if ($!{ELOOP})  { print STDERR "refusing symlink prom file: $path\n"; exit 11; }
+      print STDERR "cannot open prom file $path: $!\n";
+      exit 12;
+    }
+    if (! -f $fh) {
+      close($fh);
+      print STDERR "refusing non-regular prom file: $path\n";
+      exit 13;
+    }
+    my $data = "";
+    while (1) {
+      my $buf = "";
+      my $n = sysread($fh, $buf, 65536);
+      if (!defined($n)) {
+        print STDERR "cannot read prom file $path: $!\n";
+        close($fh);
+        exit 12;
+      }
+      last if $n == 0;
+      $data .= $buf;
+    }
+    close($fh);
+    print $data;
+  ' "$prom_path" 2>"$PROM_ERR_TMP")" || rc=$?
+  if [[ -s "$PROM_ERR_TMP" ]]; then
+    PROM_READ_ERROR="$(cat "$PROM_ERR_TMP")"
+  fi
+  rm -f -- "$PROM_ERR_TMP"
+  PROM_ERR_TMP=""
+  return "$rc"
+}
+
+snapshot_probe_timestamp() {
+  local snapshot="$1"
   local strategy="$2"
-  [[ -f "$prom_path" ]] || return 0
+  [[ -n "$snapshot" ]] || return 0
   LC_ALL=C awk -v want="strategy=\"$strategy\"" '
     index($0, "tnauqquant_probe_timestamp_seconds{") == 1 && index($0, want) > 0 {
       val = $NF
@@ -221,13 +233,13 @@ prom_probe_timestamp() {
         exit
       }
     }
-  ' "$prom_path"
+  ' <<<"$snapshot"
 }
 
-# Lists executors present in .prom series as: <executor>\t<exchange>\t<metrics>
-prom_list_executors() {
-  local prom_path="$1"
-  [[ -f "$prom_path" ]] || return 0
+# Lists executors present in a .prom snapshot as: <executor>\t<exchange>\t<metrics>
+snapshot_list_executors() {
+  local snapshot="$1"
+  [[ -n "$snapshot" ]] || return 0
   LC_ALL=C awk '
     /^#/ || /^[[:space:]]*$/ { next }
     /^tnauqquant_[A-Za-z0-9_]+\{/ {
@@ -277,16 +289,16 @@ prom_list_executors() {
         printf "%s\t%s\t%s\n", ex, ex_exchange[ex], ex_tags[ex]
       }
     }
-  ' "$prom_path"
+  ' <<<"$snapshot"
 }
 
-# Prints any executor=<name> series in .prom that violates allowed_map.
+# Prints any executor=<name> series in a .prom snapshot that violates allowed_map.
 # When allowed_map has no shared exchange (single-account or distinct exchanges),
 # probe.sh must not emit any executor="..." series at all.
-prom_unexpected_executors() {
-  local prom_path="$1"
+snapshot_unexpected_executors() {
+  local snapshot="$1"
   local allowed_map="$2"
-  [[ -f "$prom_path" ]] || return 0
+  [[ -n "$snapshot" ]] || return 0
   LC_ALL=C awk -v mapping="$allowed_map" '
     BEGIN {
       has_shared = 0
@@ -327,46 +339,275 @@ prom_unexpected_executors() {
         }
       }
     }
-  ' "$prom_path"
+  ' <<<"$snapshot"
 }
 
-# Verifies new_file differs from old_file on exactly one TQ_EXECUTOR_MAP= line.
-verify_single_line_env_diff() {
-  local old_file="$1"
-  local new_file="$2"
-  local expected_line="$3"
-  LC_ALL=C awk -v want="$expected_line" '
-    NR == FNR {
-      old[FNR] = $0
-      old_n = FNR
-      next
+# Replaces ONLY the single TQ_EXECUTOR_MAP= line in raw byte mode, preserving
+# every other byte and original line endings (including missing final newline).
+rewrite_executor_map_exact() {
+  local src="$1" dst="$2" new_val="$3"
+  perl -e '
+    use strict;
+    use warnings;
+    my ($src, $dst, $new_val) = @ARGV;
+    open(my $in, "<:raw", $src) or die "cannot open $src: $!\n";
+    local $/;
+    my $raw = <$in>;
+    close($in);
+    defined($raw) or $raw = "";
+
+    my @lines = split(/(?<=\n)/, $raw, -1);
+    pop @lines if @lines && $lines[-1] eq "";
+
+    my @matches = grep { $lines[$_] =~ /^TQ_EXECUTOR_MAP=/ } 0..$#lines;
+    die "expected exactly 1 TQ_EXECUTOR_MAP= line, found " . scalar(@matches) . "\n"
+      unless @matches == 1;
+
+    my $idx = $matches[0];
+    my $ending = ($lines[$idx] =~ /(\r?\n)\z/) ? $1 : "";
+    $lines[$idx] = "TQ_EXECUTOR_MAP=" . $new_val . $ending;
+
+    open(my $out, ">:raw", $dst) or die "cannot open $dst: $!\n";
+    print $out join("", @lines) or die "cannot write $dst: $!\n";
+    close($out) or die "cannot close $dst: $!\n";
+  ' "$src" "$dst" "$new_val"
+}
+
+# Byte-for-byte check that new_file equals old_file everywhere except the single
+# TQ_EXECUTOR_MAP= line, whose original line ending is also preserved.
+verify_single_line_env_diff_exact() {
+  local old_file="$1" new_file="$2" expected_val="$3"
+  perl -e '
+    use strict;
+    use warnings;
+    my ($old_p, $new_p, $want_val) = @ARGV;
+    sub slurp {
+      open(my $fh, "<:raw", $_[0]) or die "open $_[0]: $!\n";
+      local $/;
+      my $d = <$fh>;
+      close($fh);
+      return defined($d) ? $d : "";
     }
-    {
-      new[FNR] = $0
-      new_n = FNR
+    sub split_lines {
+      my @l = split(/(?<=\n)/, $_[0], -1);
+      pop @l if @l && $l[-1] eq "";
+      return @l;
     }
-    END {
-      if (old_n != new_n) {
-        print "line count changed: old=" old_n " new=" new_n > "/dev/stderr"
-        exit 1
-      }
-      diffs = 0
-      for (i = 1; i <= old_n; i++) {
-        if (old[i] != new[i]) {
-          diffs++
-          if (index(old[i], "TQ_EXECUTOR_MAP=") != 1 || new[i] != want) {
-            print "unexpected line diff at line " i > "/dev/stderr"
-            exit 1
-          }
+    my @old = split_lines(slurp($old_p));
+    my @new = split_lines(slurp($new_p));
+    if (scalar(@old) != scalar(@new)) {
+      print STDERR "line count changed: old=" . scalar(@old) . " new=" . scalar(@new) . "\n";
+      exit 1;
+    }
+    my $diffs = 0;
+    for my $i (0..$#old) {
+      if ($old[$i] ne $new[$i]) {
+        $diffs++;
+        my $ending = ($old[$i] =~ /(\r?\n)\z/) ? $1 : "";
+        my $expected = "TQ_EXECUTOR_MAP=" . $want_val . $ending;
+        if ($old[$i] !~ /^TQ_EXECUTOR_MAP=/ || $new[$i] ne $expected) {
+          print STDERR "unexpected byte diff at line " . ($i + 1) . "\n";
+          exit 1;
         }
       }
-      if (diffs != 1) {
-        print "expected exactly 1 changed line, found " diffs > "/dev/stderr"
-        exit 1
-      }
     }
-  ' "$old_file" "$new_file"
+    if ($diffs != 1) {
+      print STDERR "expected exactly 1 changed line, found $diffs\n";
+      exit 1;
+    }
+  ' "$old_file" "$new_file" "$expected_val"
 }
+
+file_owner_uid_gid() {
+  perl -e '
+    use strict;
+    use warnings;
+    my @s = lstat($ARGV[0]) or exit 1;
+    print "$s[4]:$s[5]\n";
+  ' "$1"
+}
+
+# Atomically writes src_file into target_env using a temp file in target_env's
+# directory, preserving owner/group (when root / non-test) and mode 0600.
+atomic_replace_env() {
+  local src_file="$1" target_env="$2" owner_uid_gid="$3"
+  local target_dir target_base tmp_path old_umask
+  target_dir="$(dirname "$target_env")"
+  target_base="$(basename "$target_env")"
+
+  old_umask="$(umask)"
+  umask 077
+  tmp_path="$(mktemp "$target_dir/.$target_base.tmp.XXXXXX")" || {
+    umask "$old_umask"
+    return 1
+  }
+  umask "$old_umask"
+  STAGED_ENV_TEMP="$tmp_path"
+
+  cp -- "$src_file" "$tmp_path" || return 1
+  chmod 600 "$tmp_path" || return 1
+  if [[ -z "$TEST_SYSTEM_ROOT" && -n "$owner_uid_gid" ]]; then
+    chown "$owner_uid_gid" "$tmp_path" || return 1
+  fi
+  cmp -s "$src_file" "$tmp_path" || return 1
+  mv -f -- "$tmp_path" "$target_env" || return 1
+  STAGED_ENV_TEMP=""
+  cmp -s "$src_file" "$target_env" || return 1
+  [[ "$(file_mode "$target_env")" == "600" ]] || return 1
+  return 0
+}
+
+timer_label() {
+  case "${1}${2}" in
+    11) printf 'enabled/active' ;;
+    10) printf 'enabled/inactive' ;;
+    01) printf 'disabled/active' ;;
+    *)  printf 'disabled/inactive' ;;
+  esac
+}
+
+timer_matches_prior() {
+  local cur_e=0 cur_a=0
+  "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && cur_e=1
+  "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && cur_a=1
+  [[ "$cur_e" -eq "$PRIOR_TIMER_ENABLED" && "$cur_a" -eq "$PRIOR_TIMER_ACTIVE" ]]
+}
+
+interruptible_sleep() {
+  sleep "$1" &
+  SLEEP_PID=$!
+  wait "$SLEEP_PID" 2>/dev/null || true
+  SLEEP_PID=""
+}
+
+kill_pending_sleep() {
+  if [[ -n "${SLEEP_PID:-}" ]]; then
+    kill "$SLEEP_PID" 2>/dev/null || true
+    wait "$SLEEP_PID" 2>/dev/null || true
+    SLEEP_PID=""
+  fi
+}
+
+# Idempotent transactional rollback shared by verification failures, set -e
+# aborts, and HUP/INT/TERM signals. Returns 0 when completely restored, 1 when
+# rollback is incomplete (causing exit code 3).
+perform_rollback() {
+  local reason="$1"
+  if [[ "$ROLLBACK_DONE" -eq 1 ]]; then
+    return "$ROLLBACK_FAILED"
+  fi
+  ROLLBACK_DONE=1
+
+  set +e
+  kill_pending_sleep
+  printf 'SkyEye trading account: %s; restoring backup from %s\n' "$reason" "$BACKUP_ENV" >&2
+
+  local env_restored=0 timer_preserved=0
+  if [[ -f "$BACKUP_ENV" ]]; then
+    if cmp -s "$BACKUP_ENV" "$INSTALL_ENV" && [[ "$(file_mode "$INSTALL_ENV")" == "600" ]]; then
+      env_restored=1
+    elif atomic_replace_env "$BACKUP_ENV" "$INSTALL_ENV" "$ORIG_ENV_OWNER" 2>/dev/null; then
+      if cmp -s "$BACKUP_ENV" "$INSTALL_ENV" && [[ "$(file_mode "$INSTALL_ENV")" == "600" ]]; then
+        env_restored=1
+      fi
+    else
+      # Remove any half-staged temp file left by a failed atomic_replace_env.
+      if [[ -n "${STAGED_ENV_TEMP:-}" && -e "$STAGED_ENV_TEMP" ]]; then
+        rm -f -- "$STAGED_ENV_TEMP"
+        STAGED_ENV_TEMP=""
+      fi
+    fi
+  fi
+
+  if timer_matches_prior; then
+    timer_preserved=1
+  fi
+
+  if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
+    {
+      printf 'rollback_reason=%s\n' "$reason"
+      printf 'rollback_env_restored=%s\n' "$env_restored"
+      printf 'rollback_timer_preserved=%s\n' "$timer_preserved"
+    } >>"$BACKUP_DIR/account.meta"
+  fi
+
+  if [[ "$env_restored" -eq 1 && "$timer_preserved" -eq 1 ]]; then
+    if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
+      printf 'status=rolled_back\n' >>"$BACKUP_DIR/account.meta"
+    fi
+    printf 'SkyEye trading account: verified original env restored to %s (matches %s) and timer state preserved (%s).\n' \
+      "$INSTALL_ENV" "$BACKUP_ENV" "$(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE")" >&2
+    printf 'Backup record: %s\n' "$BACKUP_DIR" >&2
+    ROLLBACK_FAILED=0
+    return 0
+  fi
+
+  if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
+    printf 'status=rollback_incomplete\n' >>"$BACKUP_DIR/account.meta"
+  fi
+
+  printf 'CRITICAL: rollback_incomplete (env_restored=%s timer_preserved=%s)\n' \
+    "$env_restored" "$timer_preserved" >&2
+  if [[ "$env_restored" -ne 1 ]]; then
+    printf '%s\n' \
+      "Env restore FAILED: $INSTALL_ENV could not be restored to match $BACKUP_ENV." \
+      "Manual env recovery and verification:" \
+      "  sudo install -m 600 $BACKUP_ENV $INSTALL_ENV" \
+      "  sudo cmp -s $BACKUP_ENV $INSTALL_ENV && echo ENV-RESTORED-OK" >&2
+  else
+    printf 'Env restore OK: %s verified byte-identical to %s (mode 600).\n' \
+      "$INSTALL_ENV" "$BACKUP_ENV" >&2
+  fi
+  if [[ "$timer_preserved" -ne 1 ]]; then
+    printf '%s\n' \
+      "Timer state check FAILED: $INSTANCE_TIMER no longer matches prior state ($(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE"))." \
+      "Inspect timer state with:" \
+      "  sudo systemctl is-enabled $INSTANCE_TIMER; sudo systemctl is-active $INSTANCE_TIMER" >&2
+  fi
+  printf 'Backup record: %s\n' "$BACKUP_DIR" >&2
+  ROLLBACK_FAILED=1
+  return 1
+}
+
+# Invoked via signal traps below.
+# shellcheck disable=SC2329
+on_signal() {
+  local sig="$1" sig_code="$2"
+  trap '' HUP INT TERM
+  kill_pending_sleep
+  if [[ -z "$ROLLBACK_REASON" ]]; then
+    ROLLBACK_REASON="interrupted by SIG$sig"
+  fi
+  exit "$sig_code"
+}
+
+# Invoked via EXIT trap below.
+# shellcheck disable=SC2329
+on_exit() {
+  local status=$?
+  trap - EXIT HUP INT TERM
+  kill_pending_sleep
+  if [[ "$TX_STARTED" -eq 1 && "$TX_COMMITTED" -eq 0 ]]; then
+    local reason="${ROLLBACK_REASON:-unexpected exit (rc=$status)}"
+    if ! perform_rollback "$reason"; then
+      status=3
+    elif [[ "$status" -eq 0 ]]; then
+      status=1
+    fi
+  fi
+  if [[ -n "${PROM_ERR_TMP:-}" && -e "$PROM_ERR_TMP" ]]; then
+    rm -f -- "$PROM_ERR_TMP"
+  fi
+  if [[ -n "${STAGED_ENV_TEMP:-}" && -e "$STAGED_ENV_TEMP" ]]; then
+    rm -f -- "$STAGED_ENV_TEMP"
+  fi
+  if [[ -n "${WORK_DIR:-}" && -d "$WORK_DIR" ]]; then
+    rm -rf -- "$WORK_DIR"
+  fi
+  exit "$status"
+}
+
+# ---- CLI parsing ----
 
 case "${1:-}" in
   add|remove|list)
@@ -444,87 +685,99 @@ else
     die "SKYEYE_ACCOUNT_POLL_INTERVAL must be a positive integer, got: $POLL_INTERVAL"
 fi
 
-if [[ "$SUBCOMMAND" == "add" || "$SUBCOMMAND" == "remove" ]]; then
-  check_utc_window
-fi
+# Helper: safely read & validate installed env (must be called INSIDE host lock for mutations).
+load_installed_instance() {
+  INSTALL_ENV_DIR="$(system_path /etc/skyeye-trading)"
+  INSTALL_ENV_ROOT="$INSTALL_ENV_DIR/instances"
+  INSTALL_ENV="$INSTALL_ENV_ROOT/$STRATEGY.env"
 
-init_system_root
+  [[ ! -L "$INSTALL_ENV" ]] || die "installed env must not be a symlink: $INSTALL_ENV"
+  [[ -f "$INSTALL_ENV" ]] || \
+    die "installed strategy instance not found: $INSTALL_ENV (to onboard a new strategy, follow 'Add or remove a Trading target' in agents/alloy/trading/README.md)"
 
-INSTALL_ENV_DIR="$(system_path /etc/skyeye-trading)"
-INSTALL_ENV_ROOT="$INSTALL_ENV_DIR/instances"
-INSTALL_ENV="$INSTALL_ENV_ROOT/$STRATEGY.env"
+  local env_mode map_line_count
+  env_mode="$(file_mode "$INSTALL_ENV")"
+  [[ "$env_mode" == "600" ]] || die "installed env must have mode 600, found $env_mode: $INSTALL_ENV"
 
-[[ ! -L "$INSTALL_ENV" ]] || die "installed env must not be a symlink: $INSTALL_ENV"
-[[ -f "$INSTALL_ENV" ]] || \
-  die "installed strategy instance not found: $INSTALL_ENV (to onboard a new strategy, follow 'Add or remove a Trading target' in agents/alloy/trading/README.md)"
+  map_line_count="$(grep -c '^TQ_EXECUTOR_MAP=' "$INSTALL_ENV" || true)"
+  [[ "$map_line_count" == "1" ]] || \
+    die "expected exactly one literal TQ_EXECUTOR_MAP= line in $INSTALL_ENV, found $map_line_count"
 
-env_mode="$(file_mode "$INSTALL_ENV")"
-[[ "$env_mode" == "600" ]] || die "installed env must have mode 600, found $env_mode: $INSTALL_ENV"
+  ENV_STRATEGY="$(installed_env_value TQ_STRATEGY "$INSTALL_ENV")" || \
+    die "TQ_STRATEGY in $INSTALL_ENV cannot be read safely"
+  [[ "$ENV_STRATEGY" == "$STRATEGY" ]] || \
+    die "installed env TQ_STRATEGY ($ENV_STRATEGY) does not match --strategy ($STRATEGY)"
 
-map_line_count="$(grep -c '^TQ_EXECUTOR_MAP=' "$INSTALL_ENV" || true)"
-[[ "$map_line_count" == "1" ]] || \
-  die "expected exactly one literal TQ_EXECUTOR_MAP= line in $INSTALL_ENV, found $map_line_count"
+  ENV_SERVER_ID="$(installed_env_value TQ_SERVER_ID "$INSTALL_ENV")" || \
+    die "TQ_SERVER_ID in $INSTALL_ENV cannot be read safely"
+  [[ -n "$ENV_SERVER_ID" ]] || die "TQ_SERVER_ID is missing in $INSTALL_ENV"
+  if [[ -n "$SERVER_ID" && "$ENV_SERVER_ID" != "$SERVER_ID" ]]; then
+    die "server_id mismatch: --server is '$SERVER_ID' but $INSTALL_ENV has TQ_SERVER_ID='$ENV_SERVER_ID'"
+  fi
 
-ENV_STRATEGY="$(installed_env_value TQ_STRATEGY "$INSTALL_ENV")" || \
-  die "TQ_STRATEGY in $INSTALL_ENV cannot be read safely"
-[[ "$ENV_STRATEGY" == "$STRATEGY" ]] || \
-  die "installed env TQ_STRATEGY ($ENV_STRATEGY) does not match --strategy ($STRATEGY)"
+  ENV_EXECUTOR_MAP="$(installed_env_value TQ_EXECUTOR_MAP "$INSTALL_ENV")" || \
+    die "TQ_EXECUTOR_MAP in $INSTALL_ENV cannot be read safely"
+  valid_executor_map "$ENV_EXECUTOR_MAP" || \
+    die "existing TQ_EXECUTOR_MAP in $INSTALL_ENV is invalid: $ENV_EXECUTOR_MAP"
 
-ENV_SERVER_ID="$(installed_env_value TQ_SERVER_ID "$INSTALL_ENV")" || \
-  die "TQ_SERVER_ID in $INSTALL_ENV cannot be read safely"
-[[ -n "$ENV_SERVER_ID" ]] || die "TQ_SERVER_ID is missing in $INSTALL_ENV"
-if [[ -n "$SERVER_ID" && "$ENV_SERVER_ID" != "$SERVER_ID" ]]; then
-  die "server_id mismatch: --server is '$SERVER_ID' but $INSTALL_ENV has TQ_SERVER_ID='$ENV_SERVER_ID'"
-fi
+  ENV_TEXTFILE_DIR="$(installed_env_value TQ_TEXTFILE_DIR "$INSTALL_ENV")" || \
+    die "TQ_TEXTFILE_DIR in $INSTALL_ENV cannot be read safely"
+  ENV_TEXTFILE_NAME="$(installed_env_value TQ_TEXTFILE_NAME "$INSTALL_ENV")" || \
+    die "TQ_TEXTFILE_NAME in $INSTALL_ENV cannot be read safely"
+  [[ "$ENV_TEXTFILE_DIR" == /* && "$ENV_TEXTFILE_DIR" != *[[:space:]\"\']* ]] || \
+    die "unsafe TQ_TEXTFILE_DIR in $INSTALL_ENV: $ENV_TEXTFILE_DIR"
+  [[ "$ENV_TEXTFILE_NAME" == "tnauqquant-$STRATEGY.prom" ]] || \
+    die "TQ_TEXTFILE_NAME in $INSTALL_ENV must be tnauqquant-$STRATEGY.prom, found: $ENV_TEXTFILE_NAME"
+  if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
+    init_system_root "$ENV_TEXTFILE_DIR"
+  fi
+  PROM_PATH="$ENV_TEXTFILE_DIR/$ENV_TEXTFILE_NAME"
 
-ENV_EXECUTOR_MAP="$(installed_env_value TQ_EXECUTOR_MAP "$INSTALL_ENV")" || \
-  die "TQ_EXECUTOR_MAP in $INSTALL_ENV cannot be read safely"
-valid_executor_map "$ENV_EXECUTOR_MAP" || \
-  die "existing TQ_EXECUTOR_MAP in $INSTALL_ENV is invalid: $ENV_EXECUTOR_MAP"
-
-ENV_TEXTFILE_DIR="$(installed_env_value TQ_TEXTFILE_DIR "$INSTALL_ENV")" || \
-  die "TQ_TEXTFILE_DIR in $INSTALL_ENV cannot be read safely"
-ENV_TEXTFILE_NAME="$(installed_env_value TQ_TEXTFILE_NAME "$INSTALL_ENV")" || \
-  die "TQ_TEXTFILE_NAME in $INSTALL_ENV cannot be read safely"
-[[ "$ENV_TEXTFILE_DIR" == /* && "$ENV_TEXTFILE_DIR" != *[[:space:]\"\']* ]] || \
-  die "unsafe TQ_TEXTFILE_DIR in $INSTALL_ENV: $ENV_TEXTFILE_DIR"
-[[ "$ENV_TEXTFILE_NAME" == "tnauqquant-$STRATEGY.prom" ]] || \
-  die "TQ_TEXTFILE_NAME in $INSTALL_ENV must be tnauqquant-$STRATEGY.prom, found: $ENV_TEXTFILE_NAME"
-if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
-  init_system_root "$ENV_TEXTFILE_DIR"
-fi
-PROM_PATH="$ENV_TEXTFILE_DIR/$ENV_TEXTFILE_NAME"
-
-# Parse existing TQ_EXECUTOR_MAP into parallel bash 3.2 arrays.
-EXISTING_EXECUTORS=()
-EXISTING_EXCHANGES=()
-UNIQUE_EXCHANGES=()
-old_ifs="$IFS"
-IFS=',' read -r -a raw_entries <<<"$ENV_EXECUTOR_MAP"
-IFS="$old_ifs"
-for entry in "${raw_entries[@]}"; do
-  ex_name="${entry%%=*}"
-  exch_name="${entry#*=}"
-  EXISTING_EXECUTORS+=("$ex_name")
-  EXISTING_EXCHANGES+=("$exch_name")
-  seen_u=0
-  for u in ${UNIQUE_EXCHANGES[@]+"${UNIQUE_EXCHANGES[@]}"}; do
-    if [[ "$u" == "$exch_name" ]]; then
-      seen_u=1
-      break
+  EXISTING_EXECUTORS=()
+  EXISTING_EXCHANGES=()
+  UNIQUE_EXCHANGES=()
+  local old_ifs="$IFS" entry ex_name exch_name seen_u u
+  IFS=',' read -r -a raw_entries <<<"$ENV_EXECUTOR_MAP"
+  IFS="$old_ifs"
+  for entry in "${raw_entries[@]}"; do
+    ex_name="${entry%%=*}"
+    exch_name="${entry#*=}"
+    EXISTING_EXECUTORS+=("$ex_name")
+    EXISTING_EXCHANGES+=("$exch_name")
+    seen_u=0
+    for u in ${UNIQUE_EXCHANGES[@]+"${UNIQUE_EXCHANGES[@]}"}; do
+      if [[ "$u" == "$exch_name" ]]; then
+        seen_u=1
+        break
+      fi
+    done
+    if [[ "$seen_u" -eq 0 ]]; then
+      UNIQUE_EXCHANGES+=("$exch_name")
     fi
   done
-  if [[ "$seen_u" -eq 0 ]]; then
-    UNIQUE_EXCHANGES+=("$exch_name")
-  fi
-done
+}
+
+# ---- Read-only list subcommand ----
 
 if [[ "$SUBCOMMAND" == "list" ]]; then
+  for command_name in awk grep mktemp perl; do
+    command -v "$command_name" >/dev/null 2>&1 || die "missing required command: $command_name"
+  done
+  init_system_root
+  load_installed_instance
+
+  prom_rc=0
+  read_prom_snapshot "$PROM_PATH" || prom_rc=$?
+  case "$prom_rc" in
+    0|10) ;;
+    *) die "${PROM_READ_ERROR:-cannot read prom file safely: $PROM_PATH}" ;;
+  esac
+
   printf 'server_id: %s\n' "$ENV_SERVER_ID"
   printf 'strategy: %s\n' "$ENV_STRATEGY"
   printf 'env_file: %s\n' "$INSTALL_ENV"
-  if [[ -f "$PROM_PATH" ]]; then
-    prom_ts="$(prom_probe_timestamp "$PROM_PATH" "$STRATEGY")"
+  if [[ "$prom_rc" -eq 0 ]]; then
+    prom_ts="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
     printf 'prom_file: %s\n' "$PROM_PATH"
     printf 'probe_timestamp_seconds: %s\n' "${prom_ts:-none}"
   else
@@ -536,10 +789,10 @@ if [[ "$SUBCOMMAND" == "list" ]]; then
     printf '  %s\t%s\n' "${EXISTING_EXECUTORS[$i]}" "${EXISTING_EXCHANGES[$i]}"
   done
   printf 'prom_series_executors:\n'
-  if [[ ! -f "$PROM_PATH" ]]; then
+  if [[ "$prom_rc" -eq 10 ]]; then
     printf '  (prom file missing)\n'
   else
-    prom_execs="$(prom_list_executors "$PROM_PATH")"
+    prom_execs="$(snapshot_list_executors "$PROM_SNAPSHOT")"
     if [[ -n "$prom_execs" ]]; then
       while IFS=$'\t' read -r p_ex p_exch p_tags; do
         printf '  %s\t%s\t(%s)\n' "$p_ex" "$p_exch" "$p_tags"
@@ -553,53 +806,32 @@ fi
 
 # ---- Mutating subcommands (add / remove) ----
 
-for command_name in alloy awk cmp cp date find grep install mktemp perl sed systemctl wc; do
+# Early fail-fast UTC window check (checked again inside the lock before writing).
+check_utc_window
+
+for command_name in awk cmp cp date grep install mktemp mv perl systemctl; do
   command -v "$command_name" >/dev/null 2>&1 || die "missing required command: $command_name"
 done
-[[ -x "$SETUP_SCRIPT" ]] || die "missing executable setup script: $SETUP_SCRIPT"
-[[ -f "$SERVICE_TEMPLATE" ]] || die "missing systemd service template: $SERVICE_TEMPLATE"
-[[ -f "$TIMER_TEMPLATE" ]] || die "missing systemd timer template: $TIMER_TEMPLATE"
+init_system_root
 resolve_systemctl
 
-ACCOUNT_LOCK="$(system_path /run/skyeye-trading-account.lock)"
-ALLOY_LOCK="$(system_path /run/skyeye-alloy.lock)"
-take_account_lock "$ACCOUNT_LOCK"
-check_alloy_lock_free "$ALLOY_LOCK"
+# Acquire the SAME host lock used by setup.sh, setup-linux.sh, retire-linux.sh,
+# and uninstall.sh BEFORE reading any instance file, and hold it until exit
+# (after commit or rollback finishes).
+HOST_LOCK="$(system_path /run/skyeye-alloy.lock)"
+mkdir -p "$(dirname "$HOST_LOCK")"
+if ! skyeye_take_host_lock "$HOST_LOCK"; then
+  printf 'SkyEye trading account: %s\n' "$SKYEYE_INSTALL_ERROR" >&2
+  print_host_retry_hint "Retry after it finishes"
+  exit 1
+fi
 
-skyeye_alloy_version_gate linux || die "$SKYEYE_INSTALL_ERROR. Nothing was changed"
+# Read and validate instance strictly inside the lock.
+load_installed_instance
 
-ALLOY_CONFIG_DIR="$(system_path /etc/alloy)"
-ALLOY_ENV_FILE="$(system_path /etc/default/alloy)"
-ALLOY_METRICS_FRAGMENT="$ALLOY_CONFIG_DIR/trading-metrics.alloy"
-INSTALL_ROOT="$(system_path /usr/local/libexec/skyeye-trading)"
-SYSTEMD_DIR="$(system_path /etc/systemd/system)"
-SERVICE_PATH="$SYSTEMD_DIR/skyeye-trading-probe@.service"
-TIMER_PATH="$SYSTEMD_DIR/skyeye-trading-probe@.timer"
+BACKUP_ROOT="$INSTALL_ENV_DIR/account-backup"
 INSTANCE_SERVICE="skyeye-trading-probe@$STRATEGY.service"
 INSTANCE_TIMER="skyeye-trading-probe@$STRATEGY.timer"
-BACKUP_ROOT="$INSTALL_ENV_DIR/account-backup"
-
-ALLOY_DIRECTORY_SETTING='CONFIG_FILE="/etc/alloy"'
-if [[ -n "$TEST_SYSTEM_ROOT" ]]; then
-  ALLOY_DIRECTORY_SETTING="CONFIG_FILE=\"$ALLOY_CONFIG_DIR\""
-fi
-
-[[ -f "$ALLOY_ENV_FILE" ]] || die "existing Alloy environment file not found: $ALLOY_ENV_FILE"
-if ! grep -qxF -- "$ALLOY_DIRECTORY_SETTING" "$ALLOY_ENV_FILE" || \
-   [[ "$(grep -c '^CONFIG_FILE=' "$ALLOY_ENV_FILE" || true)" != "1" ]]; then
-  die "Alloy is not configured in directory mode ($ALLOY_DIRECTORY_SETTING); trading-account never restarts Alloy. Follow 'Add or remove a Trading target' in agents/alloy/trading/README.md first"
-fi
-"$SYSTEMCTL_BIN" is-active --quiet alloy >/dev/null 2>&1 || \
-  die "Alloy is not active; trading-account only reloads an active Alloy and never restarts it"
-[[ "$(alloy_can_reload)" == "yes" ]] || \
-  die "systemd cannot reload the alloy unit (CanReload != yes); trading-account never restarts Alloy"
-
-ENV_PROBE_USER="$(installed_env_value TQ_PROBE_USER "$INSTALL_ENV")" || \
-  die "TQ_PROBE_USER in $INSTALL_ENV cannot be read safely"
-ENV_PROBE_GROUP="$(installed_env_value TQ_PROBE_GROUP "$INSTALL_ENV")" || \
-  die "TQ_PROBE_GROUP in $INSTALL_ENV cannot be read safely"
-[[ -n "$ENV_PROBE_USER" && -n "$ENV_PROBE_GROUP" ]] || \
-  die "TQ_PROBE_USER and TQ_PROBE_GROUP are required in $INSTALL_ENV"
 
 # Compute the new TQ_EXECUTOR_MAP.
 NEW_EXECUTOR_MAP=""
@@ -662,87 +894,31 @@ else
   WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/skyeye-trading-account.XXXXXX")"
 fi
 chmod 700 "$WORK_DIR"
-cleanup() {
-  rm -rf "$WORK_DIR"
-}
-trap cleanup EXIT
+
+trap 'on_signal HUP 129' HUP
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+trap on_exit EXIT
 
 CANDIDATE_ENV="$WORK_DIR/$STRATEGY.env.new"
 (
   umask 077
-  NEW_MAP="$NEW_EXECUTOR_MAP" LC_ALL=C awk '
-    index($0, "TQ_EXECUTOR_MAP=") == 1 {
-      print "TQ_EXECUTOR_MAP=" ENVIRON["NEW_MAP"]
-      next
-    }
-    { print }
-  ' "$INSTALL_ENV" >"$CANDIDATE_ENV"
+  rewrite_executor_map_exact "$INSTALL_ENV" "$CANDIDATE_ENV" "$NEW_EXECUTOR_MAP"
 )
 chmod 600 "$CANDIDATE_ENV"
 
-if ! verify_single_line_env_diff "$INSTALL_ENV" "$CANDIDATE_ENV" "TQ_EXECUTOR_MAP=$NEW_EXECUTOR_MAP"; then
-  die "refusing to apply: staged env changed more than the single TQ_EXECUTOR_MAP line"
+if ! verify_single_line_env_diff_exact "$INSTALL_ENV" "$CANDIDATE_ENV" "$NEW_EXECUTOR_MAP"; then
+  die "refusing to apply: staged env changed bytes outside the single TQ_EXECUTOR_MAP line"
 fi
-
-# Offline render validation (validates env vars, paths, templates, TQ_BASE_ASSET, TQ_EXECUTOR_MAP).
-RENDER_DIR="$WORK_DIR/render"
-if ! "$SETUP_SCRIPT" --render-only "$RENDER_DIR" --env-file "$CANDIDATE_ENV" >"$WORK_DIR/render.out" 2>&1; then
-  cat "$WORK_DIR/render.out" >&2
-  die "offline render validation failed; host was not changed"
-fi
-
-# Check shared probe.sh and all shared artifacts BEFORE touching the host.
-if [[ ! -f "$INSTALL_ROOT/probe.sh" ]] || ! cmp -s "$RENDER_DIR/probe.sh" "$INSTALL_ROOT/probe.sh"; then
-  die_shared_mismatch "$INSTALL_ROOT/probe.sh"
-fi
-if [[ ! -f "$INSTALL_ROOT/ensure-log-access.sh" ]] || \
-   ! cmp -s "$RENDER_DIR/ensure-log-access.sh" "$INSTALL_ROOT/ensure-log-access.sh"; then
-  die_shared_mismatch "$INSTALL_ROOT/ensure-log-access.sh"
-fi
-if [[ ! -f "$ALLOY_METRICS_FRAGMENT" ]] || \
-   ! cmp -s "$RENDER_DIR/trading-metrics.alloy" "$ALLOY_METRICS_FRAGMENT"; then
-  die_shared_mismatch "$ALLOY_METRICS_FRAGMENT"
-fi
-
-render_unit_for_installed "$SERVICE_TEMPLATE" "$WORK_DIR/installed-probe@.service" \
-  "$INSTALL_ENV_ROOT" "$INSTALL_ROOT/probe.sh" "$INSTALL_ROOT/ensure-log-access.sh" \
-  "$ENV_PROBE_USER" "$ENV_PROBE_GROUP"
-render_unit_for_installed "$TIMER_TEMPLATE" "$WORK_DIR/installed-probe@.timer" \
-  "$INSTALL_ENV_ROOT" "$INSTALL_ROOT/probe.sh" "$INSTALL_ROOT/ensure-log-access.sh" \
-  "$ENV_PROBE_USER" "$ENV_PROBE_GROUP"
-
-if [[ ! -f "$SERVICE_PATH" ]] || ! cmp -s "$WORK_DIR/installed-probe@.service" "$SERVICE_PATH"; then
-  die_shared_mismatch "$SERVICE_PATH"
-fi
-if [[ ! -f "$TIMER_PATH" ]] || ! cmp -s "$WORK_DIR/installed-probe@.timer" "$TIMER_PATH"; then
-  die_shared_mismatch "$TIMER_PATH"
-fi
-
-# Offline Alloy config validation combining existing /etc/alloy with rendered fragment.
-STAGING_ALLOY="$WORK_DIR/alloy-validate"
-mkdir -p "$STAGING_ALLOY"
-find "$ALLOY_CONFIG_DIR" -maxdepth 1 -type f -name '*.alloy' \
-  ! -name "trading-$STRATEGY.alloy" \
-  -exec cp -p {} "$STAGING_ALLOY/" \;
-install -m 644 "$RENDER_DIR/trading-$STRATEGY.alloy" "$STAGING_ALLOY/trading-$STRATEGY.alloy"
-if ! alloy validate "$STAGING_ALLOY" >"$WORK_DIR/alloy-validate.out" 2>&1; then
-  cat "$WORK_DIR/alloy-validate.out" >&2
-  die "offline Alloy validation failed; host was not changed"
-fi
+candidate_readback="$(installed_env_value TQ_EXECUTOR_MAP "$CANDIDATE_ENV")" || \
+  die "staged env TQ_EXECUTOR_MAP cannot be read back safely"
+[[ "$candidate_readback" == "$NEW_EXECUTOR_MAP" ]] || \
+  die "staged env TQ_EXECUTOR_MAP readback mismatch"
 
 PRIOR_TIMER_ENABLED=0
 PRIOR_TIMER_ACTIVE=0
 "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && PRIOR_TIMER_ENABLED=1
 "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && PRIOR_TIMER_ACTIVE=1
-
-timer_label() {
-  case "${1}${2}" in
-    11) printf 'enabled/active' ;;
-    10) printf 'enabled/inactive' ;;
-    01) printf 'disabled/active' ;;
-    *)  printf 'disabled/inactive' ;;
-  esac
-}
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   printf 'Dry run (%s) for %s/%s:\n' "$SUBCOMMAND" "$ENV_SERVER_ID" "$STRATEGY"
@@ -752,24 +928,27 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   printf '  old TQ_EXECUTOR_MAP: %s\n' "$ENV_EXECUTOR_MAP"
   printf '  new TQ_EXECUTOR_MAP: %s\n' "$NEW_EXECUTOR_MAP"
   printf '  timer_state (preserved): %s\n' "$(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE")"
+  if [[ "$PRIOR_TIMER_ACTIVE" -eq 0 ]]; then
+    printf '  note: probe timer is inactive; applying verifies env content and timer state only (no live .prom check)\n'
+  fi
   printf 'Dry run: validation passed (no changes made)\n'
   exit 0
 fi
 
-# Record baseline before mutation.
-BEFORE_PROM_EXISTS=0
-BEFORE_PROM_TS=""
-if [[ -f "$PROM_PATH" ]]; then
-  BEFORE_PROM_EXISTS=1
-  BEFORE_PROM_TS="$(prom_probe_timestamp "$PROM_PATH" "$STRATEGY")"
-fi
-APPLY_START_EPOCH="$(date +%s)"
+# Re-check UTC 18:10-19:30 window INSIDE the lock right before writing.
+check_utc_window
 
+# Capture original owner/group before replacing.
+ORIG_ENV_OWNER="$(file_owner_uid_gid "$INSTALL_ENV")" || \
+  die "cannot inspect ownership of $INSTALL_ENV"
+
+# Create persistent backup before beginning the transaction.
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="$BACKUP_ROOT/$timestamp-$STRATEGY-$$"
 BACKUP_ENV="$BACKUP_DIR/$STRATEGY.env.before"
 install -d -m 700 "$INSTALL_ENV_DIR" "$BACKUP_ROOT" "$BACKUP_DIR"
 install -m 600 "$INSTALL_ENV" "$BACKUP_ENV"
+cmp -s "$INSTALL_ENV" "$BACKUP_ENV" || die "backup verification failed for $BACKUP_ENV"
 {
   printf 'action=%s\n' "$SUBCOMMAND"
   printf 'server_id=%s\n' "$ENV_SERVER_ID"
@@ -788,176 +967,118 @@ if [[ "$INFERRED_EXCHANGE" -eq 1 ]]; then
   printf 'Inferred exchange from existing TQ_EXECUTOR_MAP: %s\n' "$TARGET_EXCHANGE"
 fi
 
-timer_matches_prior() {
-  local cur_e=0 cur_a=0
-  "$SYSTEMCTL_BIN" is-enabled --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && cur_e=1
-  "$SYSTEMCTL_BIN" is-active --quiet "$INSTANCE_TIMER" >/dev/null 2>&1 && cur_a=1
-  [[ "$cur_e" -eq "$PRIOR_TIMER_ENABLED" && "$cur_a" -eq "$PRIOR_TIMER_ACTIVE" ]]
-}
+# Begin transaction: from here any error or signal triggers idempotent rollback.
+TX_STARTED=1
+if ! atomic_replace_env "$CANDIDATE_ENV" "$INSTALL_ENV" "$ORIG_ENV_OWNER"; then
+  ROLLBACK_REASON="atomic replacement of $INSTALL_ENV failed"
+  exit 1
+fi
 
-restore_timer_direct() {
-  case "${PRIOR_TIMER_ENABLED}${PRIOR_TIMER_ACTIVE}" in
-    11)
-      "$SYSTEMCTL_BIN" enable --now "$INSTANCE_TIMER" >/dev/null 2>&1 || return 1
+# Verify according to prior timer state.
+FINAL_PROM_TS=""
+FINAL_PROM_EXECS=""
+if [[ "$PRIOR_TIMER_ACTIVE" -eq 1 ]]; then
+  # Record post-write baseline so only a timer-triggered snapshot written AFTER
+  # our atomic env replacement can satisfy verification.
+  POST_WRITE_EPOCH="$(date +%s)"
+  BASELINE_PROM_EXISTS=0
+  BASELINE_PROM_TS=""
+  base_rc=0
+  read_prom_snapshot "$PROM_PATH" || base_rc=$?
+  case "$base_rc" in
+    0)
+      BASELINE_PROM_EXISTS=1
+      BASELINE_PROM_TS="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
       ;;
     10)
-      "$SYSTEMCTL_BIN" disable --now "$INSTANCE_TIMER" >/dev/null 2>&1 || true
-      "$SYSTEMCTL_BIN" enable "$INSTANCE_TIMER" >/dev/null 2>&1 || return 1
-      ;;
-    01)
-      "$SYSTEMCTL_BIN" disable "$INSTANCE_TIMER" >/dev/null 2>&1 || true
-      "$SYSTEMCTL_BIN" start "$INSTANCE_TIMER" >/dev/null 2>&1 || return 1
+      BASELINE_PROM_EXISTS=0
       ;;
     *)
-      "$SYSTEMCTL_BIN" disable --now "$INSTANCE_TIMER" >/dev/null 2>&1 || true
+      ROLLBACK_REASON="${PROM_READ_ERROR:-cannot read prom file safely: $PROM_PATH}"
+      exit 1
       ;;
   esac
-  timer_matches_prior
-}
 
-rollback_change() {
-  local reason="$1"
-  local setup_had_reload_pending=0
-  printf 'SkyEye trading account: %s; restoring backup from %s\n' "$reason" "$BACKUP_ENV" >&2
-
-  if [[ -f "$WORK_DIR/setup-add.out" ]] && \
-     grep -q "restoring 'systemctl reload alloy' failed" "$WORK_DIR/setup-add.out"; then
-    setup_had_reload_pending=1
-  fi
-
-  # If setup-linux.sh already rolled back cleanly (env + timer + active Alloy, no reload_pending):
-  if [[ "$setup_had_reload_pending" -eq 0 ]] && \
-     cmp -s "$BACKUP_ENV" "$INSTALL_ENV" && \
-     timer_matches_prior && \
-     "$SYSTEMCTL_BIN" is-active --quiet alloy >/dev/null 2>&1; then
-    printf 'status=rolled_back\nrollback_reason=%s\n' "$reason" >>"$BACKUP_DIR/account.meta"
-    printf 'SkyEye trading account: backup already restored cleanly (%s)\n' "$BACKUP_ENV" >&2
-    printf 'Backup record: %s\n' "$BACKUP_DIR" >&2
-    exit 1
-  fi
-
-  # Otherwise try clean restore via setup-linux.sh add with the original env (reload only, never restart).
-  if [[ "$setup_had_reload_pending" -eq 0 ]]; then
-    if "$SETUP_SCRIPT" add --env-file "$BACKUP_ENV" </dev/null >"$WORK_DIR/rollback-add.out" 2>&1 && \
-       cmp -s "$BACKUP_ENV" "$INSTALL_ENV" && \
-       timer_matches_prior; then
-      printf 'status=rolled_back\nrollback_reason=%s\n' "$reason" >>"$BACKUP_DIR/account.meta"
-      printf 'SkyEye trading account: restored original env and timer state (%s)\n' "$BACKUP_ENV" >&2
-      printf 'Backup record: %s\n' "$BACKUP_DIR" >&2
-      exit 1
-    fi
-  fi
-
-  # Fallback direct restore (still never restarts Alloy).
-  local incomplete=0
-  if ! install -m 600 "$BACKUP_ENV" "$INSTALL_ENV"; then
-    incomplete=1
-  fi
-  if ! restore_timer_direct; then
-    incomplete=1
-  fi
-  if ! "$SYSTEMCTL_BIN" reload alloy >/dev/null 2>&1; then
-    incomplete=1
-  fi
-
-  if [[ "$incomplete" -eq 1 ]]; then
-    printf 'status=rollback_incomplete\nalloy_recovery=reload_pending\nrollback_reason=%s\n' \
-      "$reason" >>"$BACKUP_DIR/account.meta"
-    printf '%s\n' \
-      "CRITICAL: rollback_incomplete — original env was restored to $INSTALL_ENV (from $BACKUP_ENV), but recovery reload or timer restoration did not complete." \
-      "Remaining recovery action: sudo systemctl reload alloy (and check: sudo systemctl status $INSTANCE_TIMER)" \
-      "Backup record: $BACKUP_DIR" >&2
-    exit 3
-  fi
-
-  printf 'status=rolled_back\nrollback_reason=%s\n' "$reason" >>"$BACKUP_DIR/account.meta"
-  printf 'SkyEye trading account: restored original env and timer state (%s)\n' "$BACKUP_ENV" >&2
-  printf 'Backup record: %s\n' "$BACKUP_DIR" >&2
-  exit 1
-}
-
-# Apply via setup-linux.sh add (never --restart-alloy, never --enable-probe).
-add_rc=0
-"$SETUP_SCRIPT" add --env-file "$CANDIDATE_ENV" </dev/null >"$WORK_DIR/setup-add.out" 2>&1 || add_rc=$?
-if [[ "$add_rc" -ne 0 ]]; then
-  cat "$WORK_DIR/setup-add.out" >&2
-  rollback_change "setup-linux.sh add failed (rc=$add_rc)"
-fi
-cat "$WORK_DIR/setup-add.out"
-if grep -q '^Alloy action: restart' "$WORK_DIR/setup-add.out" || \
-   ! grep -q '^Alloy action: reload' "$WORK_DIR/setup-add.out"; then
-  rollback_change "setup-linux.sh add did not apply with Alloy reload"
-fi
-if ! cmp -s "$CANDIDATE_ENV" "$INSTALL_ENV"; then
-  rollback_change "installed env does not match expected TQ_EXECUTOR_MAP update"
-fi
-if ! timer_matches_prior; then
-  rollback_change "probe timer state drifted from prior $(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE")"
-fi
-
-# Post-apply verification.
-FINAL_PROM_TS=""
-if [[ "$PRIOR_TIMER_ACTIVE" -eq 1 ]]; then
   verify_start="$SECONDS"
   verify_deadline=$((verify_start + VERIFY_TIMEOUT))
   if [[ "$WAIT_SECONDS" -gt 0 ]]; then
-    printf 'Waiting %ss (one probe cycle) to verify %s updates cleanly...\n' "$WAIT_SECONDS" "$PROM_PATH"
-    sleep "$WAIT_SECONDS"
+    interruptible_sleep "$WAIT_SECONDS"
   fi
+  printf 'Waiting for next timer-triggered probe update to %s (timeout %ss)...\n' \
+    "$PROM_PATH" "$VERIFY_TIMEOUT"
+
   verified=0
-  last_fail_reason="probe metrics did not update within timeout (${VERIFY_TIMEOUT}s)"
+  last_fail_reason="probe timer did not publish an updated .prom snapshot within ${VERIFY_TIMEOUT}s"
   while true; do
-    if ! "$SYSTEMCTL_BIN" is-active --quiet alloy >/dev/null 2>&1; then
-      rollback_change "Alloy became inactive during post-apply verification"
-    fi
     if ! timer_matches_prior; then
-      rollback_change "probe timer state changed during post-apply verification"
+      ROLLBACK_REASON="probe timer state changed during post-write verification"
+      exit 1
     fi
     if "$SYSTEMCTL_BIN" is-failed --quiet "$INSTANCE_SERVICE" >/dev/null 2>&1; then
-      rollback_change "probe service $INSTANCE_SERVICE entered failed state"
+      ROLLBACK_REASON="probe service $INSTANCE_SERVICE entered failed state"
+      exit 1
     fi
 
-    if [[ ! -s "$PROM_PATH" ]]; then
-      last_fail_reason="probe output missing or empty: $PROM_PATH"
-    else
-      cur_ts="$(prom_probe_timestamp "$PROM_PATH" "$STRATEGY")"
-      if [[ -z "$cur_ts" ]]; then
-        last_fail_reason="tnauqquant_probe_timestamp_seconds missing in $PROM_PATH"
-      elif [[ "$BEFORE_PROM_EXISTS" -eq 1 && -n "$BEFORE_PROM_TS" && "$cur_ts" -le "$BEFORE_PROM_TS" ]]; then
-        last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past pre-change timestamp ($BEFORE_PROM_TS)"
-      elif [[ "$BEFORE_PROM_EXISTS" -eq 0 && "$cur_ts" -lt "$APPLY_START_EPOCH" ]]; then
-        last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) predates apply start ($APPLY_START_EPOCH)"
-      else
-        unexpected="$(prom_unexpected_executors "$PROM_PATH" "$NEW_EXECUTOR_MAP")"
-        if [[ -n "$unexpected" ]]; then
-          last_fail_reason="unexpected executor series remain in $PROM_PATH: $(printf '%s' "$unexpected" | tr '\n' ' ')"
+    snap_rc=0
+    read_prom_snapshot "$PROM_PATH" || snap_rc=$?
+    case "$snap_rc" in
+      11|12|13)
+        ROLLBACK_REASON="${PROM_READ_ERROR:-unsafe prom file: $PROM_PATH}"
+        exit 1
+        ;;
+      10)
+        last_fail_reason="probe output missing: $PROM_PATH"
+        ;;
+      0)
+        if [[ -z "$PROM_SNAPSHOT" ]]; then
+          last_fail_reason="probe output is empty: $PROM_PATH"
         else
-          FINAL_PROM_TS="$cur_ts"
-          verified=1
-          break
+          cur_ts="$(snapshot_probe_timestamp "$PROM_SNAPSHOT" "$STRATEGY")"
+          if [[ -z "$cur_ts" ]]; then
+            last_fail_reason="tnauqquant_probe_timestamp_seconds missing in $PROM_PATH"
+          elif [[ "$BASELINE_PROM_EXISTS" -eq 1 && -n "$BASELINE_PROM_TS" && "$cur_ts" -le "$BASELINE_PROM_TS" ]]; then
+            last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past post-write baseline ($BASELINE_PROM_TS); timer may not have triggered"
+          elif [[ "$cur_ts" -le "$POST_WRITE_EPOCH" ]]; then
+            last_fail_reason="tnauqquant_probe_timestamp_seconds ($cur_ts) did not advance past env write second ($POST_WRITE_EPOCH); timer may not have triggered"
+          else
+            unexpected="$(snapshot_unexpected_executors "$PROM_SNAPSHOT" "$NEW_EXECUTOR_MAP")"
+            if [[ -n "$unexpected" ]]; then
+              last_fail_reason="unexpected executor series in $PROM_PATH: $(printf '%s' "$unexpected" | tr '\n' ' ')"
+            else
+              FINAL_PROM_TS="$cur_ts"
+              FINAL_PROM_EXECS="$(snapshot_list_executors "$PROM_SNAPSHOT")"
+              verified=1
+              break
+            fi
+          fi
         fi
-      fi
-    fi
+        ;;
+    esac
 
     if [[ "$SECONDS" -ge "$verify_deadline" ]]; then
       break
     fi
-    sleep "$POLL_INTERVAL"
+    interruptible_sleep "$POLL_INTERVAL"
   done
 
   if [[ "$verified" -ne 1 ]]; then
-    rollback_change "$last_fail_reason"
+    ROLLBACK_REASON="$last_fail_reason"
+    exit 1
   fi
 else
-  if ! "$SYSTEMCTL_BIN" is-active --quiet alloy >/dev/null 2>&1; then
-    rollback_change "Alloy became inactive after apply"
+  # Inactive timer: verify env content/mode and preserved timer state only.
+  if ! cmp -s "$CANDIDATE_ENV" "$INSTALL_ENV" || [[ "$(file_mode "$INSTALL_ENV")" != "600" ]]; then
+    ROLLBACK_REASON="installed env verification failed after atomic write"
+    exit 1
   fi
   if ! timer_matches_prior; then
-    rollback_change "probe timer state drifted from inactive"
+    ROLLBACK_REASON="probe timer state changed from inactive $(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE")"
+    exit 1
   fi
 fi
 
 printf 'status=committed\n' >>"$BACKUP_DIR/account.meta"
+TX_COMMITTED=1
 
 printf '\nAccount %s committed for %s/%s:\n' "$SUBCOMMAND" "$ENV_SERVER_ID" "$STRATEGY"
 printf '  old TQ_EXECUTOR_MAP: %s\n' "$ENV_EXECUTOR_MAP"
@@ -965,17 +1086,16 @@ printf '  new TQ_EXECUTOR_MAP: %s\n' "$NEW_EXECUTOR_MAP"
 printf '  timer_state: %s (preserved)\n' "$(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE")"
 if [[ "$PRIOR_TIMER_ACTIVE" -eq 1 ]]; then
   printf '  prom_verified: %s (probe_timestamp_seconds=%s)\n' "$PROM_PATH" "$FINAL_PROM_TS"
-  prom_execs="$(prom_list_executors "$PROM_PATH")"
-  if [[ -n "$prom_execs" ]]; then
+  if [[ -n "$FINAL_PROM_EXECS" ]]; then
     printf '  prom_series_executors:\n'
     while IFS=$'\t' read -r p_ex p_exch p_tags; do
       printf '    %s\t%s\t(%s)\n' "$p_ex" "$p_exch" "$p_tags"
-    done <<<"$prom_execs"
+    done <<<"$FINAL_PROM_EXECS"
   else
     printf '  prom_series_executors: (none)\n'
   fi
 else
-  printf '  prom_check: live .prom wait not run because probe timer remains %s\n' \
+  printf '  prom_check: not verified because probe timer remains %s (env content and timer state verified)\n' \
     "$(timer_label "$PRIOR_TIMER_ENABLED" "$PRIOR_TIMER_ACTIVE")"
 fi
 printf '  backup_record: %s\n' "$BACKUP_DIR"

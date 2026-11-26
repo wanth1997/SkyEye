@@ -36,7 +36,8 @@ usage() {
     'retire   disable this strategy probe, archive its env, fragment and metrics' \
     '         under /etc/skyeye-trading/retired/, and reload Alloy (see retire-linux.sh).' \
     'account  add, remove or list executors (TQ_EXECUTOR_MAP only) on an already-' \
-    '         installed Linux Trading lane without changing central config (see account-linux.sh).' \
+    '         installed Linux Trading lane by atomically updating its instance env' \
+    '         without reloading Alloy or changing central config (see account-linux.sh).' \
     '         Linux Trading lanes only; macOS (Mac mini) and Windows lanes are out of scope.' \
     '' \
     'Without a subcommand the original installer behaviour is unchanged: it restarts' \

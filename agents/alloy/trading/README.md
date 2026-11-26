@@ -242,11 +242,13 @@ run restarts Alloy once, because the host has no env record yet.
 ### Add or remove an account (executor)
 
 For an already-installed **Linux** Trading lane (installed via `setup-linux.sh`
-under `/etc/skyeye-trading/instances/<strategy>.env`), adding or removing an
-account (`executor`) only changes `TQ_EXECUTOR_MAP` on the host. Prometheus
-recording rules and the Grafana per-account breakdown table group dynamically by
-the `executor` label, so **no repo PR, review, or `scripts/central-deploy` is
-needed**.
+under `/etc/skyeye-trading/instances/<strategy>.env`), `skyeye-trading-probe@.service`
+re-reads its `EnvironmentFile=` on every 15-second probe invocation, and Alloy
+templates do not reference `TQ_EXECUTOR_MAP`. Prometheus recording rules and the
+Grafana per-account breakdown table group dynamically by the `executor` label.
+Adding or removing an account therefore only atomically updates
+`TQ_EXECUTOR_MAP` in the instance env — **no repo PR, review, Alloy reload,
+staged host checkout, or `scripts/central-deploy` is needed**.
 
 > **Scope:** Linux Trading lanes installed via `setup-linux.sh` only (for
 > example Trading01). macOS (Mac mini) and Windows lanes are out of scope.
@@ -262,25 +264,28 @@ scripts/trading-account list --server trading01 --strategy popdex-multi-accounts
 scripts/trading-account add --server trading01 --strategy popdex-multi-accounts \
   --executor popdex-rot3 --dry-run
 
-# Add an executor (omitting --exchange infers it when all existing executors share one exchange;
-# multi-exchange lanes require --exchange <name>)
+# Add an executor on a single-exchange lane (--exchange is inferred automatically)
 scripts/trading-account add --server trading01 --strategy popdex-multi-accounts \
-  --executor popdex-rot3 [--exchange popdex]
+  --executor popdex-rot3
+
+# Add an executor with an explicit --exchange (required on multi-exchange lanes)
+scripts/trading-account add --server trading01 --strategy popdex-multi-accounts \
+  --executor popdex-rot3 --exchange popdex
 
 # Remove an executor (refuses removing the last remaining executor)
 scripts/trading-account remove --server trading01 --strategy popdex-multi-accounts \
   --executor popdex-rot3
 ~~~
 
-Useful transport options on `scripts/trading-account`:
+Transport options on `scripts/trading-account`:
 
+- Default remote mode: uploads only `account-linux.sh`, `linux-common.sh`, and
+  `install-common.sh` to a temporary directory on the host as the SSH user,
+  executes `sudo <tmp>/.../account-linux.sh` (passing `ssh -t` when local
+  stdin/stdout is an interactive TTY so passworded `sudo` can prompt), and
+  always removes the temporary directory on exit.
 - `--ssh-target HOST` (or `SKYEYE_SSH_TARGET`): SSH destination when it differs
   from `--server`.
-- `--remote-dir PATH` (or `SKYEYE_TRADING_REMOTE_DIR`): execute an existing
-  root-owned checkout on the host (supports interactive `sudo` and matches the
-  host's staged `probe.sh`). Without `--remote-dir`, the wrapper streams only
-  allowlisted `agents/alloy/` files into a root-owned mode-`0700` temp directory
-  via `sudo -n`.
 - `--local`: run directly on the local Linux host without SSH.
 
 **Required ordering with `tnauqquant`** (SkyEye never starts, stops, restarts,
@@ -299,25 +304,35 @@ or reads credentials/full configs of `tnauqquant@*`):
    allowlist. (Removing SkyEye first while `tnauqquant` still trades on that
    executor would drop that executor's volume from merged totals.)
 
-**Built-in safety guards:**
+**Built-in safety guards and verification:**
 
 - Refuses mutating commands (`add`/`remove`) during **UTC 18:10–19:30**
-  (Trading01 daily restart + monitoring-prod backup window); read-only `list`
-  remains available anytime.
-- Refuses missing instances, invalid names, duplicate adds, removing a missing
-  or last executor, ambiguous exchange inference, or `--server` / `TQ_SERVER_ID`
-  mismatch.
-- **Never overwrites shared `probe.sh`** or shared unit/metrics files: if the
-  checkout's `probe.sh` differs from `/usr/local/libexec/skyeye-trading/probe.sh`,
-  it refuses immediately (even if all probes are stopped) and prints exact next
-  steps (`--remote-dir` for a matching checkout, or the shared probe rollout
-  procedure below).
+  (checked both at preflight and again inside the host lock immediately before
+  writing); read-only `list` remains available anytime.
+- Serializes with `setup-linux.sh` / `retire-linux.sh` via the shared
+  `/run/skyeye-alloy.lock` held from instance read through verification or
+  rollback.
+- Refuses missing instances, non-mode-`0600` or symlinked env files, symlinked
+  or non-regular `.prom` files, invalid names, duplicate adds, removing a
+  missing or last executor, ambiguous exchange inference, or `--server` /
+  `TQ_SERVER_ID` mismatch.
+- Never modifies Alloy, Alloy fragments, `/etc/default/alloy`, ACLs, systemd
+  units, or shared `probe.sh`.
 - Backs up the existing env under `/etc/skyeye-trading/account-backup/`, edits
-  only the single `TQ_EXECUTOR_MAP=` line, validates offline via `--render-only`
-  and `alloy validate`, reloads Alloy only (never restarts), preserves the probe
-  timer's prior `enabled`/`active` state, waits one probe cycle (~16s) to verify
-  `.prom` refreshes without errors or unexpected executor series, and
-  automatically restores the backed-up env on any failure.
+  only the single `TQ_EXECUTOR_MAP=` line (preserving every other byte and
+  original line endings), and atomically replaces the instance env preserving
+  owner/group and mode `0600`.
+- **Active probe timer**: records the post-write baseline, waits for the next
+  timer-triggered `.prom` snapshot (default timeout 45s) with advancing
+  `tnauqquant_probe_timestamp_seconds`, and checks executor labels on that same
+  snapshot.
+- **Inactive probe timer (disabled or stopped)**: preserves the timer state and
+  verifies env content/mode and timer state only; live probe `.prom` output is
+  not verified.
+- Any verification failure, unexpected error, or interruption (`HUP`/`INT`/`TERM`)
+  automatically restores the backed-up env atomically and verifies the restore
+  with `cmp`; if rollback itself cannot complete, it exits `3` with exact
+  manual recovery and verification commands.
 
 **When you still need the full `trading-target` or shared probe workflow:**
 
