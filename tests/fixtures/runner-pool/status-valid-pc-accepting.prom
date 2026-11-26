@@ -1,0 +1,43 @@
+# HELP pool_status_expected 1 for every host the exporter is configured to read (POOL_HOSTS).
+# TYPE pool_status_expected gauge
+pool_status_expected{host="pc"} 1
+# HELP pool_status_updated_timestamp_seconds updated_at of POOL_STATUS_<HOST>, GitHub's clock.
+# TYPE pool_status_updated_timestamp_seconds gauge
+pool_status_updated_timestamp_seconds{host="pc"} 1795564800
+# HELP pool_status_readable 1 if the status reads as v1 the way pool-pick reads it, else 0.
+# TYPE pool_status_readable gauge
+pool_status_readable{host="pc"} 1
+# HELP pool_status_seq seq: increases by one on every write.
+# TYPE pool_status_seq gauge
+pool_status_seq{host="pc"} 1234
+# HELP pool_status_state 1 for the host's state, 0 for the others.
+# TYPE pool_status_state gauge
+pool_status_state{host="pc",state="accepting"} 1
+pool_status_state{host="pc",state="paused"} 0
+pool_status_state{host="pc",state="held"} 0
+pool_status_state{host="pc",state="draining"} 0
+# HELP pool_class_slots classes.<class>.slots.
+# TYPE pool_class_slots gauge
+pool_class_slots{host="pc",class="heavy"} 1
+pool_class_slots{host="pc",class="light"} 1
+# HELP pool_class_busy classes.<class>.busy: running runners.
+# TYPE pool_class_busy gauge
+pool_class_busy{host="pc",class="heavy"} 1
+pool_class_busy{host="pc",class="light"} 0
+# HELP pool_class_queued classes.<class>.queued: jobs seen but not started.
+# TYPE pool_class_queued gauge
+pool_class_queued{host="pc",class="heavy"} 0
+pool_class_queued{host="pc",class="light"} 0
+# HELP pool_guard_state 1 for guard.state, 0 for the others.
+# TYPE pool_guard_state gauge
+pool_guard_state{host="pc",state="ok"} 1
+pool_guard_state{host="pc",state="paused"} 0
+pool_guard_state{host="pc",state="killing"} 0
+pool_guard_state{host="pc",state="held"} 0
+pool_guard_state{host="pc",state="none"} 0
+# HELP pool_guard_avail_bytes guard.avail_mb in bytes; absent when the host has no reading.
+# TYPE pool_guard_avail_bytes gauge
+pool_guard_avail_bytes{host="pc"} 9542041600
+# HELP pool_refused_24h refused_24h: jobs the policy refused in the last 24 hours.
+# TYPE pool_refused_24h gauge
+pool_refused_24h{host="pc"} 0
