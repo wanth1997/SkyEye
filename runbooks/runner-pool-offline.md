@@ -2,7 +2,7 @@
 
 `prometheus/rules/runner-pool.yml` 目前全部為 shadow（`notification_mode: shadow`），只出現在 Prometheus、Grafana「主機 — Runner 池」與 `ALERTS` series，不會送 Telegram。升級流程見 [`trading-alert-promotion.md`](./trading-alert-promotion.md)。
 
-> 本 repo 為公開倉庫，本文不記任何主機位址、SSH 別名、帳號或憑證。主機端操作請查 private 的 ai-workflow repo：`pool/docs/runbook-pc.md`（Windows PC，`pc`）與 `pool/docs/runbook-srv.md`（Ubuntu PC，`srv`）。
+> 本 repo 為公開倉庫，本文不記任何主機位址、SSH 別名、帳號或憑證。主機端操作請查 private 的 ai-workflow repo：`pool/docs/runbook-win.md`（Windows PC，`win`）與 `pool/docs/runbook-ubuntu.md`（Ubuntu PC，`ubuntu`）。
 
 ## Symptoms
 
@@ -44,7 +44,7 @@ curl -fsS --get http://127.0.0.1:9090/api/v1/query \
   - `json`：GitHub API 回傳非預期或損壞的 JSON，查 exporter log 確認回應異常。
   - **以上 `increase(...[15m])` 皆無增加但 `read_timestamp` 停住**：可能原因為未分類的 HTTP 回應（401/403/404/500–599 以外的狀態碼，如 429 或其他 4xx）或 poll 例外（exporter 不為此遞增 `read_errors_total`，只讓成功時間停住）；查 `sudo docker compose logs --tail=50 pool-status`，同時檢查 log 中的 HTTP 狀態碼與 poll 例外。
 
-### 2. Windows PC（`server_id="pool-pc"`）
+### 2. Windows PC（`server_id="pool-win"`）
 
 `wans-windows` 經 Alloy remote_write 主動推送，停止推送後 5 分鐘內單看 `up` 仍會停在舊值 `1`。必須同時檢查樣本值與新鮮度 `time() - timestamp(up{...})`（分辨整台 Windows 還是 WSL distro／`pool-agent`）：
 
@@ -72,31 +72,31 @@ curl -fsS --get http://127.0.0.1:9090/api/v1/query \
       --data-urlencode 'query=time() - windows_system_boot_time_timestamp{server_id="wans-windows"}' | jq -c '.data.result'
     ```
   - 並於 WSL2 distro `gh-runner` 內跑 `uptime` 確認是整台 Windows 重開還是僅 distro／agent 重啟。
-- 主機端排查與恢復步驟見 ai-workflow repo 的 `pool/docs/runbook-pc.md`。
+- 主機端排查與恢復步驟見 ai-workflow repo 的 `pool/docs/runbook-win.md`。
 
-### 3. Ubuntu PC（`server_id="pool-srv"`）
+### 3. Ubuntu PC（`server_id="pool-ubuntu"`）
 
-1. 從操作機對 `srv` 測試 ping 與 SSH，分辨是整台卡死／斷網（ping 不通或 SSH 卡在 kex）還是 `pool-status.timer`／status token 失效（SSH 進得去）。
-2. **確認 `PoolHostBriefOffline` 是否真的重開過**：SSH 進 `srv` 後查 `journalctl --list-boots` 與前次開機尾端日誌 `journalctl -b -1 -n 50`。
-3. 主機端排查（k3s、ARC、`pool-status.timer`、`pool_srv.py check`）與恢復步驟見 ai-workflow repo 的 `pool/docs/runbook-srv.md`。
+1. 從操作機對 `ubuntu` 測試 ping 與 SSH，分辨是整台卡死／斷網（ping 不通或 SSH 卡在 kex）還是 `pool-status.timer`／status token 失效（SSH 進得去）。
+2. **確認 `PoolHostBriefOffline` 是否真的重開過**：SSH 進 `ubuntu` 後查 `journalctl --list-boots` 與前次開機尾端日誌 `journalctl -b -1 -n 50`。
+3. 主機端排查（k3s、ARC、`pool-status.timer`、`pool_ubuntu.py check`）與恢復步驟見 ai-workflow repo 的 `pool/docs/runbook-ubuntu.md`。
 
 ### 4. 其他告警速查
 
-- **`PoolHostHeld` / `PoolGuardMemoryLow`**：`pc` 查 `pool-guard` 狀態與可用記憶體；`srv` 查節點 `free -m` 與 k3s pods。對應步驟見 ai-workflow repo 的 `pool/docs/runbook-pc.md` 或 `pool/docs/runbook-srv.md`。
+- **`PoolHostHeld` / `PoolGuardMemoryLow`**：`win` 查 `pool-guard` 狀態與可用記憶體；`ubuntu` 查節點 `free -m` 與 k3s pods。對應步驟見 ai-workflow repo 的 `pool/docs/runbook-win.md` 或 `pool/docs/runbook-ubuntu.md`。
 - **`PoolQueueStuck`**：確認主機為 `accepting` 且有空 slot 但 runner 未啟動；依主機查 `pool-agent` 或 ARC controller／listener pod 日誌。
 - **`PoolHostUnreadable` / `PoolHostStatusMissing`**：在主機執行狀態檢查，確認 writer 版本與 status token。
 - **`PoolCacheTokenHits`**：立即通知 Wan 並依 ai-workflow repo 的 cache 安全流程檢視與清理。
 
 ## 計畫性維護：以 `server_id` 下 Alertmanager Silence
 
-執行 `draining`、安裝升級或重開主機前，在 `monitoring-prod` 以 `server_id`（`pool-pc` 或 `pool-srv`）靜音單台主機，避免觸發 `PoolHostOffline`、`PoolHostPausedLong` 或 `PoolHostBriefOffline`。
+執行 `draining`、安裝升級或重開主機前，在 `monitoring-prod` 以 `server_id`（`pool-win` 或 `pool-ubuntu`）靜音單台主機，避免觸發 `PoolHostOffline`、`PoolHostPausedLong` 或 `PoolHostBriefOffline`。
 
 **時間設定**：`--duration` 請在**預計恢復時間之後再多預留約 35 分鐘**（`PoolHostBriefOffline` 會在恢復後持續約 30 分鐘才隨視窗過去自動清除）。提前解除 silence 前，務必先確認該 `server_id` 的相關告警都已清除，避免一解除就立刻送出尚未過視窗的 `PoolHostBriefOffline`。
 
 ```bash
 cd /home/ubuntu/SkyEye
 
-# 新增 silence（將 SERVER_ID 換成 pool-pc 或 pool-srv；duration = 預計維護時間 + 恢復後 35m 緩衝）
+# 新增 silence（將 SERVER_ID 換成 pool-win 或 pool-ubuntu；duration = 預計維護時間 + 恢復後 35m 緩衝）
 sudo docker compose exec -T alertmanager amtool silence add \
   --alertmanager.url=http://127.0.0.1:9093 \
   --duration=2h \

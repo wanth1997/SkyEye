@@ -61,7 +61,7 @@
       "id": 10,
       "type": "table",
       "title": "各主機狀態總覽（每台一列）",
-      "description": "每台預期池主機一列：狀態年齡（嚴格 > 120s 標紅）、state、guard.state、heavy/light 的 busy/slots/queued、可用記憶體（< 2,500 MiB 標紅）、24h 拒絕數、可讀性，以及 pc 對應的 Windows 層 wans-windows 新鮮度與 up 狀態。",
+      "description": "每台預期池主機一列：狀態年齡（嚴格 > 120s 標紅）、state、guard.state、heavy/light 的 busy/slots/queued、可用記憶體（< 2,500 MiB 標紅）、24h 拒絕數、可讀性，以及 win 對應的 Windows 層 wans-windows 新鮮度與 up 狀態。",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "gridPos": { "x": 0, "y": 1, "w": 20, "h": 7 },
       "targets": [
@@ -159,7 +159,7 @@
         {
           "refId": "N",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "max by (host) (label_replace(((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 1) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 0) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) > 120) * 0 + 2), \"host\", \"pc\", \"\", \"\"))",
+          "expr": "max by (host) (label_replace(((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 1) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((up{job=\"integrations/windows\",server_id=\"wans-windows\"} == 0) and (time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) <= 120)) or ((time() - timestamp(up{job=\"integrations/windows\",server_id=\"wans-windows\"}) > 120) * 0 + 2), \"host\", \"win\", \"\", \"\"))",
           "format": "table",
           "instant": true
         }

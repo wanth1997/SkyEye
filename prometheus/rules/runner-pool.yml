@@ -9,18 +9,18 @@ groups:
   - name: runner-pool
     interval: 1m
     rules:
-      # Per-host available memory thresholds (bytes). Both pc and srv start at
+      # Per-host available memory thresholds (bytes). Both win and ubuntu start at
       # 2,500 MiB (2500 * 1048576 = 2621440000, matching status.md's avail_mb *
       # 1048576 conversion). S7 shadow review will record each host's real
-      # minimum under load and tune host="srv" independently here if needed.
+      # minimum under load and tune host="ubuntu" independently here if needed.
       - record: pool_guard_memory_low_threshold_bytes
         labels:
-          host: pc
+          host: win
         expr: "2500 * 1048576"
 
       - record: pool_guard_memory_low_threshold_bytes
         labels:
-          host: srv
+          host: ubuntu
         expr: "2500 * 1048576"
 
       # ── Host availability ──────────────────────────────────────────────────
@@ -108,7 +108,7 @@ groups:
           runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
 
       # Uses per-host pool_guard_memory_low_threshold_bytes when defined, with a
-      # 2,500 MiB default fallback for newly added hosts (e.g. srv2).
+      # 2,500 MiB default fallback for newly added hosts (e.g. ubuntu2).
       - alert: PoolGuardMemoryLow
         expr: |
           (

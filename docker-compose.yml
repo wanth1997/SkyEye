@@ -167,7 +167,7 @@ services:
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
-      - POOL_HOSTS=pc,srv
+      - POOL_HOSTS=win,ubuntu
       - POOL_REPO=wanwanlabs/self-hosted-runner
       - POOL_TOKEN_FILE=/run/secrets/pool-status/github_token
       - POOL_POLL_INTERVAL_SECONDS=30
