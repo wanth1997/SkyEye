@@ -44,7 +44,10 @@ STATUS_STATES = ("accepting", "paused", "held", "draining")
 GUARD_STATES = ("ok", "paused", "killing", "held", "none")
 MIB = 1024 * 1024
 
-HOST_RE = re.compile(r"^(pc|srv([2-9]|[1-9][0-9]+)?)$")
+# Format-only host id validation (pool-host-rename §3, matching pool-pick / hm.py):
+# pool-pick modes auto, pool and github are never host ids.
+HOST_RE = re.compile(r"^[a-z][a-z0-9]*$")
+RESERVED_HOST_IDS = ("auto", "pool", "github")
 REPO_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 NEXT_LINK_RE = re.compile(r';\s*rel="next"(?:\s*;|\s*$)|;\s*rel=next(?:\s*;|\s*$)')
 
@@ -94,7 +97,7 @@ READER_SCHEMA = {
     ],
     "properties": {
         "v": {"const": 1},
-        "host": {"type": "string", "pattern": r"^(pc|srv([2-9]|[1-9][0-9]+)?)$"},
+        "host": {"type": "string", "pattern": r"^(win|ubuntu([2-9]|[1-9][0-9]+)?)$"},
         "seq": {"type": "integer", "minimum": 0},
         "state": {"enum": list(STATUS_STATES)},
         "reason": {"type": "string", "maxLength": 200},
@@ -239,7 +242,7 @@ def parse_updated_at(text: str) -> int | float:
 
 
 def parse_hosts(raw: str | None) -> tuple[list[str] | None, str | None]:
-    """Validate POOL_HOSTS as a comma-separated list of unique pc / srv<n> ids."""
+    """Validate POOL_HOSTS as a comma-separated list of unique host ids (e.g. win, ubuntu, ubuntu2)."""
     if raw is None or not raw.strip(" \t"):
         return None, "POOL_HOSTS is unset or empty"
     hosts: list[str] = []
@@ -248,6 +251,8 @@ def parse_hosts(raw: str | None) -> tuple[list[str] | None, str | None]:
         host = part.strip(" \t")
         if not HOST_RE.fullmatch(host):
             return None, f"invalid host id in POOL_HOSTS: {host!r}"
+        if host in RESERVED_HOST_IDS:
+            return None, f"reserved host id in POOL_HOSTS: {host!r}"
         if host in seen:
             return None, f"duplicate host id in POOL_HOSTS: {host!r}"
         seen.add(host)

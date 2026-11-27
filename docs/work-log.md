@@ -15,6 +15,22 @@
 ---
 -->
 
+## 2026-11-27 10:00 — runner 池主機 id 從 pc／srv 改成 win／ubuntu（WAN-1051）
+
+**改動摘要：** 配合 ai-workflow 的 pool-host-rename 計畫 S5，把 pool-status exporter、compose、recording rules、dashboard、runbook 與測試裡的池主機 id `pc`／`srv` 改成 `win`／`ubuntu`。exporter 不再列舉主機名稱，只檢查格式並拒絕保留字 `auto`、`pool`、`github`。只 merge，部署是計畫 S11，另外申請核准。
+
+**修改的檔案：**
+- `pool-status/exporter.py`：`HOST_RE` 改為只檢查格式、加 `RESERVED_HOST_IDS`，`READER_SCHEMA` 的 host pattern 對齊 ai-workflow `status-v1.schema.json`。
+- `docker-compose.yml`：`POOL_HOSTS=win,ubuntu`。
+- `prometheus/rules/runner-pool.yml`、`grafana/dashboards/Hosts/hosts-runner-pool.json`：主機 label 與說明改名。
+- `runbooks/runner-pool-offline.md`：主機 id、`server_id` 範例（`pool-win`／`pool-ubuntu`）、私有 runbook 檔名；Ubuntu PC 的 ping／SSH 改成先從私有 runbook 查連線目標。
+- `tests/fixtures/runner-pool/`：從 ai-workflow `d1d8338` 原樣同步，更新 `SOURCE.md`。
+- `prometheus/rules/tests/runner-pool.test.yml`、`tests/runner-pool/*.sh`：改名，補格式／保留字／schema 測試。
+
+**原因/備註：**
+- 使用者要求一次全部改完（「全部改 一次痛完就好」）。Windows 的 `instance="WIN-PC"` 與 `server_id="wans-windows"` 不是池主機 id，計畫列為不改。
+- monitoring-prod 仍跑舊名稱，部署前 runner 池的 shadow 規則會對新名稱的 status 檔判讀不到；部署順序依 ai-workflow S10 → SkyEye S11。
+
 ## 2026-11-27 02:10 — 從 Trading inventory 移除 Trading01 popdex-btc（WAN-928）
 
 **改動摘要：** 用 `scripts/trading-target remove --server trading01 --strategy popdex-btc` 刪掉 `popdex-btc` 的 `trading_target_info`，Trading inventory 剩 4 個 target。這是 popdex-multi-accounts 計畫的 S3 repo 步驟，接下來要跑 `central-deploy`，再到 Trading01 retire host probe。

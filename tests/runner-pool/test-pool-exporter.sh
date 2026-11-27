@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Offline test suite for the runner pool status exporter (pool-status):
-#   1. Status v1 fixture parity against ai-workflow@2d8984f fixtures
+#   1. Status v1 fixture parity against ai-workflow@d1d8338 fixtures
 #      (valid .prom match, multi-host family ordering, unknown-field tolerance,
 #      invalid docs keeping only heartbeat, fullmatch patterns, no leaked fields).
 #   2. Local fake GitHub HTTP server end-to-end checks:
@@ -89,9 +89,9 @@ def sample_map(text):
     return out
 
 
-# 1a. SOURCE.md records ai-workflow SHA 2d8984f
+# 1a. SOURCE.md records ai-workflow SHA d1d8338
 source_md = (fixtures_dir / "SOURCE.md").read_text(encoding="utf-8")
-assert_true("2d8984f" in source_md, "SOURCE.md must record ai-workflow commit SHA 2d8984f")
+assert_true("d1d8338" in source_md, "SOURCE.md must record ai-workflow commit SHA d1d8338")
 
 # 1b. Every valid fixture matches its .prom byte-for-byte
 valid_jsons = sorted(fixtures_dir.glob("status-valid-*.json"))
@@ -112,39 +112,39 @@ for path in valid_jsons:
         assert_true(forbidden not in rendered, f"forbidden value leaked in {path.name}: {forbidden!r}")
 
 # 1c. Multi-host rendering: each # HELP / # TYPE once, hosts in POOL_HOSTS order
-pc_doc, _ = mod.read_status((fixtures_dir / "status-valid-pc-accepting.json").read_text(encoding="utf-8"), host="pc")
-srv_doc, _ = mod.read_status((fixtures_dir / "status-valid-srv-draining.json").read_text(encoding="utf-8"), host="srv")
-multi = mod.format_host_metrics(["pc", "srv"], {"pc": (TIMESTAMP, pc_doc), "srv": (TIMESTAMP, srv_doc)})
+win_doc, _ = mod.read_status((fixtures_dir / "status-valid-win-accepting.json").read_text(encoding="utf-8"), host="win")
+ubuntu_doc, _ = mod.read_status((fixtures_dir / "status-valid-ubuntu-draining.json").read_text(encoding="utf-8"), host="ubuntu")
+multi = mod.format_host_metrics(["win", "ubuntu"], {"win": (TIMESTAMP, win_doc), "ubuntu": (TIMESTAMP, ubuntu_doc)})
 for name, _ in mod.STATUS_METRICS:
     assert_eq(multi.count(f"# HELP {name} "), 1, f"multi-host HELP count for {name}")
     assert_eq(multi.count(f"# TYPE {name} gauge\n"), 1, f"multi-host TYPE count for {name}")
 lines = multi.splitlines()
-idx_pc_expected = lines.index('pool_status_expected{host="pc"} 1')
-idx_srv_expected = lines.index('pool_status_expected{host="srv"} 1')
-assert_true(idx_pc_expected < idx_srv_expected, "hosts must appear in POOL_HOSTS order")
-assert_true('pool_guard_avail_bytes{host="pc"} 9542041600' in lines, "pc avail_bytes missing")
-assert_true('pool_guard_avail_bytes{host="srv"}' not in multi, "srv without avail_mb must omit avail_bytes")
-assert_true('pool_cache_token_hits{host="srv"} 0' in lines, "srv cache_token_hits missing")
-assert_true('pool_cache_token_hits{host="pc"}' not in multi, "pc without cache_token_hits must omit metric")
+idx_win_expected = lines.index('pool_status_expected{host="win"} 1')
+idx_ubuntu_expected = lines.index('pool_status_expected{host="ubuntu"} 1')
+assert_true(idx_win_expected < idx_ubuntu_expected, "hosts must appear in POOL_HOSTS order")
+assert_true('pool_guard_avail_bytes{host="win"} 9542041600' in lines, "win avail_bytes missing")
+assert_true('pool_guard_avail_bytes{host="ubuntu"}' not in multi, "ubuntu without avail_mb must omit avail_bytes")
+assert_true('pool_cache_token_hits{host="ubuntu"} 0' in lines, "ubuntu cache_token_hits missing")
+assert_true('pool_cache_token_hits{host="win"}' not in multi, "win without cache_token_hits must omit metric")
 
 # 1d. Unknown fields are ignored (top-level + nested classes/guard)
 extra_raw = (fixtures_dir / "status-invalid-extra-field.json").read_text(encoding="utf-8")
-extra_doc, extra_errs = mod.read_status(extra_raw, host="pc")
+extra_doc, extra_errs = mod.read_status(extra_raw, host="win")
 assert_eq(extra_errs, [], "status-invalid-extra-field.json must be readable by reader rules")
 assert_eq(
-    mod.format_host_metrics(["pc"], {"pc": (TIMESTAMP, extra_doc)}),
-    (fixtures_dir / "status-valid-pc-accepting.prom").read_text(encoding="utf-8"),
-    "extra top-level field must match pc-accepting.prom",
+    mod.format_host_metrics(["win"], {"win": (TIMESTAMP, extra_doc)}),
+    (fixtures_dir / "status-valid-win-accepting.prom").read_text(encoding="utf-8"),
+    "extra top-level field must match win-accepting.prom",
 )
-nested_doc = json.loads((fixtures_dir / "status-valid-srv-accepting.json").read_text(encoding="utf-8"))
+nested_doc = json.loads((fixtures_dir / "status-valid-ubuntu-accepting.json").read_text(encoding="utf-8"))
 nested_doc["classes"]["medium"] = {"slots": 1, "busy": 0, "queued": 0}
 nested_doc["guard"]["temp_c"] = 68
-parsed_nested, nested_errs = mod.read_status(json.dumps(nested_doc), host="srv")
+parsed_nested, nested_errs = mod.read_status(json.dumps(nested_doc), host="ubuntu")
 assert_eq(nested_errs, [], "unknown nested fields must be ignored")
 assert_eq(
-    mod.format_host_metrics(["srv"], {"srv": (TIMESTAMP, parsed_nested)}),
-    (fixtures_dir / "status-valid-srv-accepting.prom").read_text(encoding="utf-8"),
-    "nested unknown fields must match srv-accepting.prom",
+    mod.format_host_metrics(["ubuntu"], {"ubuntu": (TIMESTAMP, parsed_nested)}),
+    (fixtures_dir / "status-valid-ubuntu-accepting.prom").read_text(encoding="utf-8"),
+    "nested unknown fields must match ubuntu-accepting.prom",
 )
 
 # 1e. Invalid fixtures keep only expected, updated_timestamp, readable=0
@@ -156,33 +156,33 @@ for bad_name in (
     "status-invalid-unknown-version.json",
 ):
     bad_raw = (fixtures_dir / bad_name).read_text(encoding="utf-8")
-    bad_doc, bad_errs = mod.read_status(bad_raw, host="pc")
+    bad_doc, bad_errs = mod.read_status(bad_raw, host="win")
     assert_true(bad_doc is None and len(bad_errs) > 0, f"{bad_name} must be unreadable")
-    out = mod.format_host_metrics(["pc"], {"pc": (TIMESTAMP, None)})
+    out = mod.format_host_metrics(["win"], {"win": (TIMESTAMP, None)})
     assert_eq(
         samples_only(out),
         [
-            'pool_status_expected{host="pc"} 1',
-            f'pool_status_updated_timestamp_seconds{{host="pc"}} {TIMESTAMP}',
-            'pool_status_readable{host="pc"} 0',
+            'pool_status_expected{host="win"} 1',
+            f'pool_status_updated_timestamp_seconds{{host="win"}} {TIMESTAMP}',
+            'pool_status_readable{host="win"} 0',
         ],
         f"unreadable sample set for {bad_name}",
     )
 
 # 1f. Pattern fullmatch rejects trailing newlines and non-standard JSON constants
 for field, bad_val in (
-    ("host", "pc\n"),
+    ("host", "win\n"),
     ("config", "a" * 64 + "\n"),
     ("image", "sha256:" + "4" * 64 + "\n"),
     ("runner", "2.330.0\n"),
 ):
-    mutated = json.loads((fixtures_dir / "status-valid-pc-accepting.json").read_text(encoding="utf-8"))
+    mutated = json.loads((fixtures_dir / "status-valid-win-accepting.json").read_text(encoding="utf-8"))
     mutated[field] = bad_val
-    doc, errs = mod.read_status(json.dumps(mutated), host="pc")
+    doc, errs = mod.read_status(json.dumps(mutated), host="win")
     assert_true(doc is None and errs, f"trailing newline in {field} must fail fullmatch")
 
-nan_doc = (fixtures_dir / "status-valid-pc-accepting.json").read_text(encoding="utf-8").replace("1234", "NaN")
-assert_true(mod.read_status(nan_doc, host="pc")[0] is None, "NaN must be rejected")
+nan_doc = (fixtures_dir / "status-valid-win-accepting.json").read_text(encoding="utf-8").replace("1234", "NaN")
+assert_true(mod.read_status(nan_doc, host="win")[0] is None, "NaN must be rejected")
 
 # 1g. updated_at variants
 assert_eq(mod.parse_updated_at("2026-11-25T00:00:00Z"), TIMESTAMP, "Z timestamp")
@@ -195,12 +195,29 @@ for bad_ts in ("2026-11-25T00:00:00", "not-a-time", ""):
     except ValueError:
         pass
 
-# 1h. POOL_HOSTS validation
-assert_eq(mod.parse_hosts("pc,srv")[0], ["pc", "srv"], "valid pc,srv")
-assert_eq(mod.parse_hosts("pc, srv, srv2, srv10")[0], ["pc", "srv", "srv2", "srv10"], "valid spaced list")
-for bad_hosts in (None, "", "   ", "pc,", ",srv", "pc,,srv", "PC", "pc2", "srv0", "srv1", "pc,pc", "pc\n", "bad"):
+# 1h. POOL_HOSTS validation (format-only ^[a-z][a-z0-9]*$, rejecting auto/pool/github)
+assert_eq(mod.parse_hosts("win,ubuntu")[0], ["win", "ubuntu"], "valid win,ubuntu")
+assert_eq(mod.parse_hosts("win, ubuntu, ubuntu2, ubuntu10")[0], ["win", "ubuntu", "ubuntu2", "ubuntu10"], "valid spaced list")
+assert_eq(mod.parse_hosts("win,arm1")[0], ["win", "arm1"], "format-only accepts arbitrary valid host id")
+for bad_hosts in (
+    None, "", "   ", "win,", ",ubuntu", "win,,ubuntu", "WIN", "UBUNTU",
+    "2win", "win-1", "win_1", "auto", "pool", "github", "win,auto", "win,pool", "win,github",
+    "win,win", "win\n",
+):
     hosts_val, err = mod.parse_hosts(bad_hosts)
     assert_true(hosts_val is None and err is not None, f"POOL_HOSTS={bad_hosts!r} must be rejected")
+
+# Status v1 READER_SCHEMA enforces status-v1.schema.json host pattern ^(win|ubuntu([2-9]|[1-9][0-9]+)?)$
+for good_schema_host in ("win", "ubuntu", "ubuntu2", "ubuntu10"):
+    mutated = json.loads((fixtures_dir / "status-valid-win-accepting.json").read_text(encoding="utf-8"))
+    mutated["host"] = good_schema_host
+    doc, errs = mod.read_status(json.dumps(mutated), host=good_schema_host)
+    assert_true(doc is not None and not errs, f"schema must accept host={good_schema_host!r}")
+for bad_schema_host in ("win2", "ubuntu0", "ubuntu1", "other", "WIN"):
+    mutated = json.loads((fixtures_dir / "status-valid-win-accepting.json").read_text(encoding="utf-8"))
+    mutated["host"] = bad_schema_host
+    doc, errs = mod.read_status(json.dumps(mutated), host=bad_schema_host)
+    assert_true(doc is None and errs, f"schema must reject host={bad_schema_host!r}")
 
 # 1i. C9: _positive_float_env accepts only finite positive numbers
 def test_c9_positive_float_env_rejects_non_finite():
@@ -348,8 +365,8 @@ gh_base = f"http://127.0.0.1:{gh_port}"
 gh_thread = threading.Thread(target=gh_server.serve_forever, daemon=True)
 gh_thread.start()
 
-pc_json = (fixtures_dir / "status-valid-pc-accepting.json").read_text(encoding="utf-8")
-srv_json = (fixtures_dir / "status-valid-srv-accepting.json").read_text(encoding="utf-8")
+win_json = (fixtures_dir / "status-valid-win-accepting.json").read_text(encoding="utf-8")
+ubuntu_json = (fixtures_dir / "status-valid-ubuntu-accepting.json").read_text(encoding="utf-8")
 token_path = work_dir / "github_token"
 FAKE_TOKEN_1 = "ghp_test_token_alpha_0123456789"
 FAKE_TOKEN_2 = "ghp_test_token_beta_9876543210"
@@ -359,7 +376,7 @@ try:
     # 2a. Startup state before first poll: read_timestamp=0 and all 8 error reasons=0
     clock_now = [1795565000.0]
     exp = mod.PoolStatusExporter(
-        hosts_raw="pc,srv",
+        hosts_raw="win,ubuntu",
         repo_raw="wanwanlabs/self-hosted-runner",
         token_file=str(token_path),
         api_base=gh_base,
@@ -375,8 +392,8 @@ try:
             "0",
             f"startup error counter for {reason} must be 0",
         )
-    assert_eq(initial['pool_status_expected{host="pc"}'], "1", "expected pc at startup")
-    assert_eq(initial['pool_status_expected{host="srv"}'], "1", "expected srv at startup")
+    assert_eq(initial['pool_status_expected{host="win"}'], "1", "expected win at startup")
+    assert_eq(initial['pool_status_expected{host="ubuntu"}'], "1", "expected ubuntu at startup")
 
     # 2b. Happy path + HTTP server scrape never hits GitHub
     gh_state.set_pages({
@@ -384,9 +401,9 @@ try:
             "total_count": 4,
             "variables": [
                 {"name": "UNRELATED_VAR", "value": "hello", "updated_at": UPDATED_AT},
-                {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
-                {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
-                {"name": "POOL_STATUS_SRV9", "value": srv_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_UBUNTU9", "value": ubuntu_json, "updated_at": UPDATED_AT},
             ],
         }
     })
@@ -399,37 +416,37 @@ try:
     assert_eq(req["accept"], "application/vnd.github+json", "Accept header")
     assert_eq(req["api_version"], "2022-11-28", "X-GitHub-Api-Version header")
 
-    srv_http = mod.create_server(exp, "127.0.0.1", 0)
-    srv_port = srv_http.server_address[1]
-    srv_thread = threading.Thread(target=srv_http.serve_forever, daemon=True)
-    srv_thread.start()
+    http_server = mod.create_server(exp, "127.0.0.1", 0)
+    http_port = http_server.server_address[1]
+    http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    http_thread.start()
     try:
         for _ in range(3):
-            with urllib.request.urlopen(f"http://127.0.0.1:{srv_port}/metrics", timeout=2) as resp:
+            with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/metrics", timeout=2) as resp:
                 assert_eq(resp.status, 200, "/metrics status")
                 assert_true("text/plain" in resp.headers.get("Content-Type", ""), "/metrics content-type")
                 body = resp.read().decode("utf-8")
         assert_eq(len(gh_state.requests), 1, "scraping /metrics must NOT hit GitHub")
         assert_true(FAKE_TOKEN_1 not in body, "token must never appear in /metrics")
-        assert_true('host="srv9"' not in body, "unconfigured host srv9 must be ignored")
+        assert_true('host="ubuntu9"' not in body, "unconfigured host ubuntu9 must be ignored")
         assert_true("UNRELATED_VAR" not in body, "unrelated var must be ignored")
         metrics = sample_map(body)
         assert_eq(metrics["pool_status_exporter_read_timestamp_seconds"], "1795565000", "read_timestamp updated")
-        assert_eq(metrics['pool_status_readable{host="pc"}'], "1", "pc readable")
-        assert_eq(metrics['pool_status_readable{host="srv"}'], "1", "srv readable")
-        assert_eq(metrics['pool_status_seq{host="pc"}'], "1234", "pc seq")
-        assert_eq(metrics['pool_status_seq{host="srv"}'], "88", "srv seq")
+        assert_eq(metrics['pool_status_readable{host="win"}'], "1", "win readable")
+        assert_eq(metrics['pool_status_readable{host="ubuntu"}'], "1", "ubuntu readable")
+        assert_eq(metrics['pool_status_seq{host="win"}'], "1234", "win seq")
+        assert_eq(metrics['pool_status_seq{host="ubuntu"}'], "88", "ubuntu seq")
 
         # HEAD /metrics, GET /healthz, 404, 405
-        head_req = urllib.request.Request(f"http://127.0.0.1:{srv_port}/metrics", method="HEAD")
+        head_req = urllib.request.Request(f"http://127.0.0.1:{http_port}/metrics", method="HEAD")
         with urllib.request.urlopen(head_req, timeout=2) as resp:
             assert_eq(resp.status, 200, "HEAD /metrics status")
             assert_eq(resp.read(), b"", "HEAD /metrics empty body")
-        with urllib.request.urlopen(f"http://127.0.0.1:{srv_port}/healthz", timeout=2) as resp:
+        with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/healthz", timeout=2) as resp:
             assert_eq(resp.status, 200, "/healthz status")
         for url, method, want_code in (
-            (f"http://127.0.0.1:{srv_port}/nope", "GET", 404),
-            (f"http://127.0.0.1:{srv_port}/metrics", "POST", 405),
+            (f"http://127.0.0.1:{http_port}/nope", "GET", 404),
+            (f"http://127.0.0.1:{http_port}/metrics", "POST", 405),
         ):
             try:
                 urllib.request.urlopen(urllib.request.Request(url, method=method), timeout=2)
@@ -437,16 +454,16 @@ try:
             except urllib.error.HTTPError as exc:
                 assert_eq(exc.code, want_code, f"{method} {url} status")
     finally:
-        srv_http.shutdown()
-        srv_http.server_close()
+        http_server.shutdown()
+        http_server.server_close()
 
     # 2c. Pagination via Link: rel="next" (>30 variables across 2 pages)
     filler = [{"name": f"FILLER_{i:02d}", "value": "x", "updated_at": UPDATED_AT} for i in range(29)]
     gh_state.reset()
     gh_state.set_pages(
         pages={
-            1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
-            2: {"total_count": 32, "variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}, {"name": "TAIL", "value": "y", "updated_at": UPDATED_AT}]},
+            1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
+            2: {"total_count": 32, "variables": [{"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT}, {"name": "TAIL", "value": "y", "updated_at": UPDATED_AT}]},
         },
         links={
             1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next", <{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="last"',
@@ -457,27 +474,27 @@ try:
     assert_true(exp.poll_once(), "Link pagination poll must succeed")
     assert_eq(len(gh_state.requests), 2, "Link pagination must fetch 2 pages")
     m = sample_map(exp.render_metrics())
-    assert_eq(m['pool_status_readable{host="pc"}'], "1", "page 1 host pc present")
-    assert_eq(m['pool_status_readable{host="srv"}'], "1", "page 2 host srv present")
+    assert_eq(m['pool_status_readable{host="win"}'], "1", "page 1 host win present")
+    assert_eq(m['pool_status_readable{host="ubuntu"}'], "1", "page 2 host ubuntu present")
 
     # 2d. Pagination via total_count without Link header
     gh_state.reset()
     gh_state.set_pages(
         pages={
-            1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
-            2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+            1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
+            2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT}]},
         },
     )
     clock_now[0] = 1795565060.0
     assert_true(exp.poll_once(), "total_count pagination poll must succeed")
     assert_eq(len(gh_state.requests), 2, "total_count pagination must fetch 2 pages")
     m = sample_map(exp.render_metrics())
-    assert_eq(m['pool_status_readable{host="srv"}'], "1", "page 2 host srv via total_count")
+    assert_eq(m['pool_status_readable{host="ubuntu"}'], "1", "page 2 host ubuntu via total_count")
 
     # 2e. Page 2 error fails entire poll and preserves previous snapshot + read_timestamp
     gh_state.reset()
     gh_state.set_pages(
-        pages={1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]}},
+        pages={1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]}},
         links={1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next"'},
     )
     gh_state.mode = "page2_error"
@@ -486,20 +503,20 @@ try:
     m = sample_map(exp.render_metrics())
     assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565060", "read_timestamp preserved on page 2 error")
     assert_eq(m['pool_status_exporter_read_errors_total{reason="http_5xx"}'], "1", "http_5xx incremented")
-    assert_eq(m['pool_status_readable{host="srv"}'], "1", "cached srv preserved on error")
+    assert_eq(m['pool_status_readable{host="ubuntu"}'], "1", "cached ubuntu preserved on error")
 
     # 2f. Variable disappears: expected stays 1, updated_timestamp and readable disappear
     gh_state.reset()
     gh_state.set_pages({
-        1: {"total_count": 1, "variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+        1: {"total_count": 1, "variables": [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
     })
     clock_now[0] = 1795565120.0
     assert_true(exp.poll_once(), "missing variable poll succeeds")
     m = sample_map(exp.render_metrics())
-    assert_eq(m['pool_status_expected{host="srv"}'], "1", "missing var still emits expected=1")
-    assert_true('pool_status_updated_timestamp_seconds{host="srv"}' not in m, "missing var omits updated_timestamp")
-    assert_true('pool_status_readable{host="srv"}' not in m, "missing var omits readable")
-    assert_eq(m['pool_status_readable{host="pc"}'], "1", "present var pc still readable")
+    assert_eq(m['pool_status_expected{host="ubuntu"}'], "1", "missing var still emits expected=1")
+    assert_true('pool_status_updated_timestamp_seconds{host="ubuntu"}' not in m, "missing var omits updated_timestamp")
+    assert_true('pool_status_readable{host="ubuntu"}' not in m, "missing var omits readable")
+    assert_eq(m['pool_status_readable{host="win"}'], "1", "present var win still readable")
 
     # 2g. Variable name vs document host mismatch -> readable=0, heartbeat preserved,
     #     while the other valid host in the same poll stays fully readable
@@ -508,34 +525,34 @@ try:
         1: {
             "total_count": 2,
             "variables": [
-                {"name": "POOL_STATUS_PC", "value": srv_json, "updated_at": UPDATED_AT},
-                {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_WIN", "value": ubuntu_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT},
             ],
         }
     })
     clock_now[0] = 1795565150.0
     assert_true(exp.poll_once(), "mismatched host doc poll succeeds")
     m = sample_map(exp.render_metrics())
-    assert_eq(m['pool_status_expected{host="pc"}'], "1", "pc expected")
-    assert_eq(m['pool_status_updated_timestamp_seconds{host="pc"}'], str(TIMESTAMP), "pc heartbeat kept")
-    assert_eq(m['pool_status_readable{host="pc"}'], "0", "mismatched host is unreadable")
-    assert_true('pool_status_seq{host="pc"}' not in m, "unreadable host omits seq")
-    assert_eq(m['pool_status_readable{host="srv"}'], "1", "valid host srv stays readable in same poll")
-    assert_eq(m['pool_status_seq{host="srv"}'], "88", "valid host srv keeps seq in same poll")
+    assert_eq(m['pool_status_expected{host="win"}'], "1", "win expected")
+    assert_eq(m['pool_status_updated_timestamp_seconds{host="win"}'], str(TIMESTAMP), "win heartbeat kept")
+    assert_eq(m['pool_status_readable{host="win"}'], "0", "mismatched host is unreadable")
+    assert_true('pool_status_seq{host="win"}' not in m, "unreadable host omits seq")
+    assert_eq(m['pool_status_readable{host="ubuntu"}'], "1", "valid host ubuntu stays readable in same poll")
+    assert_eq(m['pool_status_seq{host="ubuntu"}'], "88", "valid host ubuntu keeps seq in same poll")
 
-    # Also verify a mismatched single variable does not leak host="srv" when POOL_STATUS_SRV is absent
+    # Also verify a mismatched single variable does not leak host="ubuntu" when POOL_STATUS_UBUNTU is absent
     gh_state.reset()
     gh_state.set_pages({
         1: {
             "total_count": 1,
-            "variables": [{"name": "POOL_STATUS_PC", "value": srv_json, "updated_at": UPDATED_AT}],
+            "variables": [{"name": "POOL_STATUS_WIN", "value": ubuntu_json, "updated_at": UPDATED_AT}],
         }
     })
     clock_now[0] = 1795565160.0
     assert_true(exp.poll_once(), "mismatched single variable poll succeeds")
     m = sample_map(exp.render_metrics())
-    assert_eq(m['pool_status_readable{host="pc"}'], "0", "mismatched single var unreadable")
-    assert_true('pool_status_seq{host="srv"}' not in m, "mismatched host must not leak srv metrics")
+    assert_eq(m['pool_status_readable{host="win"}'], "0", "mismatched single var unreadable")
+    assert_true('pool_status_seq{host="ubuntu"}' not in m, "mismatched host must not leak ubuntu metrics")
 
     # 2h. All error modes: 401, 403, 404, 500, 503, redirect, timeout, bad JSON envelope
     # Restore a clean snapshot first so we also prove cache preservation on every error
@@ -544,8 +561,8 @@ try:
         1: {
             "total_count": 2,
             "variables": [
-                {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
-                {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT},
             ],
         }
     })
@@ -579,8 +596,8 @@ try:
         rendered_uncontracted = exp.render_metrics()
         m = sample_map(rendered_uncontracted)
         assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565200", f"read_timestamp unchanged on {uncontracted_code}")
-        assert_eq(m['pool_status_readable{host="pc"}'], "1", f"cached pc preserved on {uncontracted_code}")
-        assert_eq(m['pool_status_readable{host="srv"}'], "1", f"cached srv preserved on {uncontracted_code}")
+        assert_eq(m['pool_status_readable{host="win"}'], "1", f"cached win preserved on {uncontracted_code}")
+        assert_eq(m['pool_status_readable{host="ubuntu"}'], "1", f"cached ubuntu preserved on {uncontracted_code}")
         for reason in mod.ERROR_REASONS:
             assert_eq(
                 m[f'pool_status_exporter_read_errors_total{{reason="{reason}"}}'],
@@ -603,7 +620,7 @@ try:
     for bad_body in (
         "<html>bad gateway</html>",
         json.dumps({"total_count": 1}),
-        json.dumps({"total_count": 1, "variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": "no-tz"}]}),
+        json.dumps({"total_count": 1, "variables": [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": "no-tz"}]}),
         deep_nested_json,
     ):
         gh_state.reset()
@@ -613,7 +630,7 @@ try:
         expected_counts["json"] += 1
         m = sample_map(exp.render_metrics())
         assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565200", "read_timestamp preserved on bad JSON")
-        assert_eq(m['pool_status_readable{host="pc"}'], "1", "cached pc preserved on bad JSON")
+        assert_eq(m['pool_status_readable{host="win"}'], "1", "cached win preserved on bad JSON")
         assert_eq(m['pool_status_exporter_read_errors_total{reason="json"}'], str(expected_counts["json"]), "json error counted")
 
     # C3: Mismatched listings (fewer or more unique variables than total_count, or
@@ -631,7 +648,7 @@ try:
                 1: {
                     "total_count": 1,
                     "variables": [
-                        {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
+                        {"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT},
                         {"name": "OTHER_VAR", "value": "x", "updated_at": UPDATED_AT},
                     ],
                 }
@@ -640,13 +657,13 @@ try:
         ),
         (
             "truncated_link_missing_rel_next",
-            {1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]}},
+            {1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]}},
             {1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=1>; rel="first"'},
         ),
         (
             "short_page2_under_total_count",
             {
-                1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+                1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
                 2: {"total_count": 32, "variables": [{"name": "ONLY_ONE", "value": "y", "updated_at": UPDATED_AT}]},
             },
             {
@@ -657,8 +674,8 @@ try:
         (
             "total_count_changed_mid_pagination",
             {
-                1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
-                2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+                1: {"total_count": 32, "variables": filler + [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
+                2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT}]},
             },
             {1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next"'},
         ),
@@ -670,17 +687,17 @@ try:
         expected_counts["json"] += 1
         m = sample_map(exp.render_metrics())
         assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565200", f"C3 {case_name}: read_timestamp preserved")
-        assert_eq(m['pool_status_updated_timestamp_seconds{host="pc"}'], str(TIMESTAMP), f"C3 {case_name}: pc heartbeat preserved")
-        assert_eq(m['pool_status_updated_timestamp_seconds{host="srv"}'], str(TIMESTAMP), f"C3 {case_name}: srv heartbeat preserved")
-        assert_eq(m['pool_status_readable{host="pc"}'], "1", f"C3 {case_name}: cached pc preserved")
-        assert_eq(m['pool_status_readable{host="srv"}'], "1", f"C3 {case_name}: cached srv preserved")
+        assert_eq(m['pool_status_updated_timestamp_seconds{host="win"}'], str(TIMESTAMP), f"C3 {case_name}: win heartbeat preserved")
+        assert_eq(m['pool_status_updated_timestamp_seconds{host="ubuntu"}'], str(TIMESTAMP), f"C3 {case_name}: ubuntu heartbeat preserved")
+        assert_eq(m['pool_status_readable{host="win"}'], "1", f"C3 {case_name}: cached win preserved")
+        assert_eq(m['pool_status_readable{host="ubuntu"}'], "1", f"C3 {case_name}: cached ubuntu preserved")
         assert_eq(m['pool_status_exporter_read_errors_total{reason="json"}'], str(expected_counts["json"]), f"C3 {case_name}: json counter")
 
     # C11: Fallback pagination without Link or total_count continues past a full page
-    # of duplicate names (pc, pc, srv, empty) and fails with reason="json" (preserving
+    # of duplicate names (win, win, ubuntu, empty) and fails with reason="json" (preserving
     # cache) when repeated full pages exceed MAX_PAGES.
     exp_p1 = mod.PoolStatusExporter(
-        hosts_raw="pc,srv",
+        hosts_raw="win,ubuntu",
         repo_raw="wanwanlabs/self-hosted-runner",
         token_file=str(token_path),
         api_base=gh_base,
@@ -691,32 +708,32 @@ try:
     )
     gh_state.reset()
     gh_state.set_pages({
-        1: {"variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
-        2: {"variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
-        3: {"variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+        1: {"variables": [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
+        2: {"variables": [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
+        3: {"variables": [{"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT}]},
         4: {"variables": []},
     })
     clock_now[0] = 1795565250.0
-    assert_true(exp_p1.poll_once(), "C11 fallback pagination (pc, pc, srv, empty) must succeed")
+    assert_true(exp_p1.poll_once(), "C11 fallback pagination (win, win, ubuntu, empty) must succeed")
     assert_eq(len(gh_state.requests), 4, "C11 fallback pagination must fetch all 4 pages")
     m_p1 = sample_map(exp_p1.render_metrics())
     assert_eq(m_p1["pool_status_exporter_read_timestamp_seconds"], "1795565250", "C11 read_timestamp updated")
-    assert_eq(m_p1['pool_status_readable{host="pc"}'], "1", "C11 pc readable")
-    assert_eq(m_p1['pool_status_readable{host="srv"}'], "1", "C11 srv readable")
+    assert_eq(m_p1['pool_status_readable{host="win"}'], "1", "C11 win readable")
+    assert_eq(m_p1['pool_status_readable{host="ubuntu"}'], "1", "C11 ubuntu readable")
 
     # Exceeding MAX_PAGES on endless full duplicate pages -> json error, cache preserved
     gh_state.reset()
     gh_state.set_pages(
         pages={},
-        default_page={"variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
+        default_page={"variables": [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
     )
     clock_now[0] = 1795565280.0
     assert_true(not exp_p1.poll_once(), "C11 exceeding MAX_PAGES must fail")
     assert_eq(len(gh_state.requests), mod.MAX_PAGES, "C11 must stop at MAX_PAGES requests")
     m_p1_after = sample_map(exp_p1.render_metrics())
     assert_eq(m_p1_after["pool_status_exporter_read_timestamp_seconds"], "1795565250", "C11 MAX_PAGES preserves read_timestamp")
-    assert_eq(m_p1_after['pool_status_readable{host="pc"}'], "1", "C11 MAX_PAGES preserves cached pc")
-    assert_eq(m_p1_after['pool_status_readable{host="srv"}'], "1", "C11 MAX_PAGES preserves cached srv")
+    assert_eq(m_p1_after['pool_status_readable{host="win"}'], "1", "C11 MAX_PAGES preserves cached win")
+    assert_eq(m_p1_after['pool_status_readable{host="ubuntu"}'], "1", "C11 MAX_PAGES preserves cached ubuntu")
     assert_eq(m_p1_after['pool_status_exporter_read_errors_total{reason="json"}'], "1", "C11 MAX_PAGES increments json counter")
 
     # C2: Deeply nested host status document (RecursionError) keeps host heartbeat with
@@ -726,8 +743,8 @@ try:
         1: {
             "total_count": 2,
             "variables": [
-                {"name": "POOL_STATUS_PC", "value": deep_nested_json, "updated_at": UPDATED_AT},
-                {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_WIN", "value": deep_nested_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT},
             ],
         }
     })
@@ -735,25 +752,25 @@ try:
     assert_true(exp.poll_once(), "C2 host RecursionError poll must still succeed")
     m = sample_map(exp.render_metrics())
     assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565300", "C2 host RecursionError updates read_timestamp")
-    assert_eq(m['pool_status_updated_timestamp_seconds{host="pc"}'], str(TIMESTAMP), "C2 host RecursionError keeps pc heartbeat")
-    assert_eq(m['pool_status_readable{host="pc"}'], "0", "C2 host RecursionError marks pc unreadable")
-    assert_eq(m['pool_status_readable{host="srv"}'], "1", "C2 host RecursionError keeps srv readable")
+    assert_eq(m['pool_status_updated_timestamp_seconds{host="win"}'], str(TIMESTAMP), "C2 host RecursionError keeps win heartbeat")
+    assert_eq(m['pool_status_readable{host="win"}'], "0", "C2 host RecursionError marks win unreadable")
+    assert_eq(m['pool_status_readable{host="ubuntu"}'], "1", "C2 host RecursionError keeps ubuntu readable")
 
-    # Next poll with valid pc recovers pc to readable=1
+    # Next poll with valid win recovers win to readable=1
     gh_state.reset()
     gh_state.set_pages({
         1: {
             "total_count": 2,
             "variables": [
-                {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
-                {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT},
+                {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT},
             ],
         }
     })
     clock_now[0] = 1795565330.0
     assert_true(exp.poll_once(), "C2 recovery after host RecursionError must succeed")
     m = sample_map(exp.render_metrics())
-    assert_eq(m['pool_status_readable{host="pc"}'], "1", "C2 pc recovered to readable=1")
+    assert_eq(m['pool_status_readable{host="win"}'], "1", "C2 win recovered to readable=1")
 
     # C1: Re-read token before every HTTP page request:
     # (a) token rotated between page 1 and page 2 -> page 2 uses new token
@@ -767,8 +784,8 @@ try:
     gh_state.reset()
     gh_state.set_pages(
         pages={
-            1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
-            2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+            1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
+            2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT}]},
         },
         links={1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next"'},
         on_page=rotate_after_page1,
@@ -793,8 +810,8 @@ try:
         gh_state.reset()
         gh_state.set_pages(
             pages={
-                1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]},
-                2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT}]},
+                1: {"total_count": 31, "variables": filler + [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]},
+                2: {"total_count": 31, "variables": [{"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT}]},
             },
             links={1: f'<{gh_base}/repos/wanwanlabs/self-hosted-runner/actions/variables?per_page=30&page=2>; rel="next"'},
             on_page=break_token_after_page1,
@@ -805,7 +822,7 @@ try:
         expected_counts["token"] += 1
         m = sample_map(exp.render_metrics())
         assert_eq(m["pool_status_exporter_read_timestamp_seconds"], "1795565360", f"C1 token {mid_action} preserves read_timestamp")
-        assert_eq(m['pool_status_readable{host="srv"}'], "1", f"C1 token {mid_action} preserves cached srv")
+        assert_eq(m['pool_status_readable{host="ubuntu"}'], "1", f"C1 token {mid_action} preserves cached ubuntu")
         assert_eq(m['pool_status_exporter_read_errors_total{reason="token"}'], str(expected_counts["token"]), f"C1 token {mid_action} increments token counter")
 
     # C2: Polling thread loop survives an unexpected exception on one cycle and continues
@@ -830,7 +847,7 @@ try:
     tmp_tok.write_text(f"{FAKE_TOKEN_2}\n", encoding="utf-8")
     os.replace(tmp_tok, token_path)
     gh_state.reset()
-    gh_state.set_pages({1: {"total_count": 1, "variables": [{"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT}]}})
+    gh_state.set_pages({1: {"total_count": 1, "variables": [{"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT}]}})
     clock_now[0] = 1795565500.0
     assert_true(exp.poll_once(), "poll after token rotation must succeed")
     assert_eq(gh_state.requests[0]["auth"], f"Bearer {FAKE_TOKEN_2}", "exporter must re-read rotated token")
@@ -875,13 +892,13 @@ try:
         missing_tok.unlink()
     gh_state.reset()
     gh_state.set_pages({1: {"total_count": 2, "variables": [
-        {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
-        {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+        {"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT},
+        {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT},
     ]}})
     p_port = free_port()
     env = {
         "PATH": os.environ.get("PATH", ""),
-        "POOL_HOSTS": "pc,srv",
+        "POOL_HOSTS": "win,ubuntu",
         "POOL_TOKEN_FILE": str(missing_tok),
         "POOL_API_BASE": gh_base,
         "POOL_POLL_INTERVAL_SECONDS": "0.15",
@@ -917,8 +934,8 @@ try:
         missing_tok.write_text(FAKE_TOKEN_1, encoding="utf-8")
         body2 = wait_until(wait_read_ok)
         m2 = sample_map(body2)
-        assert_eq(m2['pool_status_readable{host="pc"}'], "1", "recovered pc after token placed")
-        assert_eq(m2['pool_status_readable{host="srv"}'], "1", "recovered srv after token placed")
+        assert_eq(m2['pool_status_readable{host="win"}'], "1", "recovered win after token placed")
+        assert_eq(m2['pool_status_readable{host="ubuntu"}'], "1", "recovered ubuntu after token placed")
     finally:
         proc.terminate()
         stdout_txt, stderr_txt = proc.communicate(timeout=5)
@@ -929,21 +946,21 @@ try:
     # deeply nested JSON (RecursionError) when serving the first valid response, so the
     # baseline read_timestamp is deterministically the last success before failure; the
     # polling thread must stay alive, preserve cached metrics, and auto-recover.
-    pc_next_doc = json.loads(pc_json)
-    pc_next_doc["seq"] = 1235
-    pc_next_json = json.dumps(pc_next_doc)
+    win_next_doc = json.loads(win_json)
+    win_next_doc["seq"] = 1235
+    win_next_json = json.dumps(win_next_doc)
     gh_state.reset()
     gh_state.set_pages(
         pages={1: {"total_count": 2, "variables": [
-            {"name": "POOL_STATUS_PC", "value": pc_json, "updated_at": UPDATED_AT},
-            {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+            {"name": "POOL_STATUS_WIN", "value": win_json, "updated_at": UPDATED_AT},
+            {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT},
         ]}},
         switch_to_raw_after_first_ok=deep_nested_json,
     )
     p_port = free_port()
     env = {
         "PATH": os.environ.get("PATH", ""),
-        "POOL_HOSTS": "pc,srv",
+        "POOL_HOSTS": "win,ubuntu",
         "POOL_TOKEN_FILE": str(missing_tok),
         "POOL_API_BASE": gh_base,
         "POOL_POLL_INTERVAL_SECONDS": "0.15",
@@ -961,7 +978,7 @@ try:
     try:
         def wait_initial_seq():
             text = fetch_metrics(p_port)
-            if sample_map(text).get('pool_status_seq{host="pc"}') == "1234":
+            if sample_map(text).get('pool_status_seq{host="win"}') == "1234":
                 return text
             return None
 
@@ -983,22 +1000,22 @@ try:
         b2 = wait_until(wait_json_err)
         m2 = sample_map(b2)
         assert_eq(m2["pool_status_exporter_read_timestamp_seconds"], ts1, "C2 subprocess read_timestamp preserved on RecursionError")
-        assert_eq(m2['pool_status_seq{host="pc"}'], "1234", "C2 subprocess cached pc preserved on RecursionError")
+        assert_eq(m2['pool_status_seq{host="win"}'], "1234", "C2 subprocess cached win preserved on RecursionError")
 
         # Switch back to valid updated payload -> poller thread must still be alive and recover
         gh_state.set_pages({1: {"total_count": 2, "variables": [
-            {"name": "POOL_STATUS_PC", "value": pc_next_json, "updated_at": UPDATED_AT},
-            {"name": "POOL_STATUS_SRV", "value": srv_json, "updated_at": UPDATED_AT},
+            {"name": "POOL_STATUS_WIN", "value": win_next_json, "updated_at": UPDATED_AT},
+            {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_json, "updated_at": UPDATED_AT},
         ]}})
 
         def wait_recovered_seq():
             text = fetch_metrics(p_port)
-            if sample_map(text).get('pool_status_seq{host="pc"}') == "1235":
+            if sample_map(text).get('pool_status_seq{host="win"}') == "1235":
                 return text
             return None
 
         b3 = wait_until(wait_recovered_seq)
-        assert_eq(sample_map(b3)['pool_status_seq{host="pc"}'], "1235", "C2 subprocess recovered after RecursionError")
+        assert_eq(sample_map(b3)['pool_status_seq{host="win"}'], "1235", "C2 subprocess recovered after RecursionError")
     finally:
         proc.terminate()
         stdout_txt, stderr_txt = proc.communicate(timeout=5)
@@ -1006,7 +1023,7 @@ try:
     assert_true(FAKE_TOKEN_1 not in stdout_txt and FAKE_TOKEN_1 not in stderr_txt, "token leaked in C2 subprocess logs!")
 
     # Bad POOL_HOSTS -> HTTP 200, reason="config", read_timestamp=0, zero host metrics, 0 GitHub calls
-    for bad_hosts_env in (None, "", "pc,invalid_host", "pc,pc"):
+    for bad_hosts_env in (None, "", "win,invalid_host", "win,auto", "win,win"):
         gh_state.reset()
         p_port = free_port()
         env = {
@@ -1081,7 +1098,7 @@ assert secret_mounts[0].get("source", "").endswith("/pool-status/secrets"), \
     f"unexpected secret source: {secret_mounts[0]!r}"
 
 env = svc.get("environment", {})
-assert env.get("POOL_HOSTS") == "pc,srv", f"unexpected POOL_HOSTS: {env.get('POOL_HOSTS')!r}"
+assert env.get("POOL_HOSTS") == "win,ubuntu", f"unexpected POOL_HOSTS: {env.get('POOL_HOSTS')!r}"
 assert env.get("POOL_TOKEN_FILE") == "/run/secrets/pool-status/github_token", \
     f"unexpected POOL_TOKEN_FILE: {env.get('POOL_TOKEN_FILE')!r}"
 for k, v in env.items():
@@ -1132,8 +1149,8 @@ chown 1000:65534 /secrets/unreadable_0600
 chmod 0600 /secrets/unreadable_0600
 '
 
-PC_FIXTURE="$(cat "$FIXTURES/status-valid-pc-accepting.json")"
-SRV_FIXTURE="$(cat "$FIXTURES/status-valid-srv-draining.json")"
+WIN_FIXTURE="$(cat "$FIXTURES/status-valid-win-accepting.json")"
+UBUNTU_FIXTURE="$(cat "$FIXTURES/status-valid-ubuntu-draining.json")"
 
 docker run --rm -i --network none --read-only \
   --user 65534:65534 \
@@ -1143,8 +1160,8 @@ docker run --rm -i --network none --read-only \
   -v "$VOL:/run/secrets/pool-status:ro" \
   -e PYTHONDONTWRITEBYTECODE=1 \
   -e PYTHONUNBUFFERED=1 \
-  -e "PC_FIXTURE=$PC_FIXTURE" \
-  -e "SRV_FIXTURE=$SRV_FIXTURE" \
+  -e "WIN_FIXTURE=$WIN_FIXTURE" \
+  -e "UBUNTU_FIXTURE=$UBUNTU_FIXTURE" \
   "$PYTHON_IMAGE" python3 -B -I - <<'PY'
 import errno
 import json
@@ -1189,8 +1206,8 @@ assert root_opts and "ro" in root_opts[-1], f"expected ro mount option on /, got
 
 # Run local fake GitHub server + real exporter.py inside the hardened container
 seen_auth = []
-pc_doc = os.environ["PC_FIXTURE"]
-srv_doc = os.environ["SRV_FIXTURE"]
+win_doc = os.environ["WIN_FIXTURE"]
+ubuntu_doc = os.environ["UBUNTU_FIXTURE"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1199,8 +1216,8 @@ class Handler(BaseHTTPRequestHandler):
         payload = {
             "total_count": 2,
             "variables": [
-                {"name": "POOL_STATUS_PC", "value": pc_doc, "updated_at": "2026-11-25T00:00:00Z"},
-                {"name": "POOL_STATUS_SRV", "value": srv_doc, "updated_at": "2026-11-25T00:00:00Z"},
+                {"name": "POOL_STATUS_WIN", "value": win_doc, "updated_at": "2026-11-25T00:00:00Z"},
+                {"name": "POOL_STATUS_UBUNTU", "value": ubuntu_doc, "updated_at": "2026-11-25T00:00:00Z"},
             ],
         }
         body = json.dumps(payload).encode("utf-8")
@@ -1232,7 +1249,7 @@ def run_case(token_file, want_readable):
         "PATH": os.environ.get("PATH", ""),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
-        "POOL_HOSTS": "pc,srv",
+        "POOL_HOSTS": "win,ubuntu",
         "POOL_TOKEN_FILE": token_file,
         "POOL_API_BASE": f"http://127.0.0.1:{gh_port}",
         "POOL_POLL_INTERVAL_SECONDS": "0.2",
@@ -1254,7 +1271,7 @@ def run_case(token_file, want_readable):
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=1) as resp:
                     body = resp.read().decode("utf-8")
-                if want_readable and 'pool_status_readable{host="pc"} 1' in body:
+                if want_readable and 'pool_status_readable{host="win"} 1' in body:
                     break
                 if not want_readable and 'pool_status_exporter_read_errors_total{reason="token"} 1' in body:
                     break
@@ -1262,8 +1279,8 @@ def run_case(token_file, want_readable):
                 pass
             time.sleep(0.05)
         if want_readable:
-            assert 'pool_status_readable{host="pc"} 1' in body, body
-            assert 'pool_status_readable{host="srv"} 1' in body, body
+            assert 'pool_status_readable{host="win"} 1' in body, body
+            assert 'pool_status_readable{host="ubuntu"} 1' in body, body
             assert 'pool_status_exporter_read_errors_total{reason="token"} 0' in body, body
             assert "ghp_container_test_token_65534" not in body, "token leaked in /metrics"
         else:

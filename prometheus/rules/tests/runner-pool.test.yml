@@ -13,31 +13,31 @@ tests:
       # Exporter succeeds until t=5m (300s), freezes at 300s through t=25m, then resumes fresh at t=26m.
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0+60x5 300x19 1560+60x9'
-      # Host pc: stale updated_at, unreadable, held, paused, low mem, stuck queue, cache hits.
-      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="pc"}'
+      # Host win: stale updated_at, unreadable, held, paused, low mem, stuck queue, cache hits.
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '1x35'
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0+60x5 275x30'
-      - series: 'pool_status_readable{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_readable{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0x35'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="held"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="win",state="held"}'
         values: '1x35'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="paused"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="win",state="paused"}'
         values: '1x35'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="accepting"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="win",state="accepting"}'
         values: '1x35'
-      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '1000000000x35'
-      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="pc",class="heavy"}'
+      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="win",class="heavy"}'
         values: '2x35'
-      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="pc",class="heavy"}'
+      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="win",class="heavy"}'
         values: '0x35'
-      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="pc",class="heavy"}'
+      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="win",class="heavy"}'
         values: '3x35'
-      - series: 'pool_cache_token_hits{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_cache_token_hits{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0x10 2x25'
-      # Host srv: expected variable missing while exporter is stale.
-      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="srv"}'
+      # Host ubuntu: expected variable missing while exporter is stale.
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '1x35'
     alert_rule_test:
       # At t=25m, read_timestamp has been frozen at 300s for 20m (> 600s + 5m for).
@@ -101,7 +101,7 @@ tests:
         values: '1x25'
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0x25'
-      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '1x25'
     alert_rule_test:
       # In promtool, t=0 is epoch 0, so time() - 0 > 600 starts at t=11m and
@@ -191,11 +191,11 @@ tests:
         values: '1x25'
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0+60x25'
-      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '1x25'
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0+60x25'
-      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '1x25'
     alert_rule_test:
       - eval_time: 9m
@@ -207,13 +207,13 @@ tests:
           - exp_labels:
               severity: High
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv status variable is missing from GitHub"
+              summary: "Runner pool host pool-ubuntu status variable is missing from GitHub"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
 
   - name: POOL_STATUS variable reported, deleted (stale), fires after 10m, reappears and recovers
@@ -223,11 +223,11 @@ tests:
         values: '1x35'
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0+60x35'
-      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '1x35'
       # Reports normally steps 0..4 (t=0..4m), variable deleted at step 5 (t=5m: stale then absent
       # through step 20 = t=20m), reappears at step 21 (t=21m=1260s) and resumes updating.
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0+60x4 stale _x15 1260+60x14'
     alert_rule_test:
       - eval_time: 4m
@@ -242,13 +242,13 @@ tests:
           - exp_labels:
               severity: High
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv status variable is missing from GitHub"
+              summary: "Runner pool host pool-ubuntu status variable is missing from GitHub"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
       - eval_time: 20m
         alertname: PoolHostStatusMissing
@@ -256,13 +256,13 @@ tests:
           - exp_labels:
               severity: High
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv status variable is missing from GitHub"
+              summary: "Runner pool host pool-ubuntu status variable is missing from GitHub"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
       - eval_time: 21m
         alertname: PoolHostStatusMissing
@@ -279,19 +279,19 @@ tests:
         values: '1x30'
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0+60x30'
-      # pc: unreadable AND fresh -> only PoolHostUnreadable (no PoolHostOffline).
-      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="pc"}'
+      # win: unreadable AND fresh -> only PoolHostUnreadable (no PoolHostOffline).
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '1x30'
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0+60x30'
-      - series: 'pool_status_readable{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_readable{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0x30'
-      # srv: unreadable (so no pool_status_state series at all) AND stops updating at t=2m.
-      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="srv"}'
+      # ubuntu: unreadable (so no pool_status_state series at all) AND stops updating at t=2m.
+      - series: 'pool_status_expected{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '1x30'
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0 60 120x28'
-      - series: 'pool_status_readable{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_readable{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0x30'
     alert_rule_test:
       - eval_time: 11m
@@ -300,26 +300,26 @@ tests:
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc status document is unreadable"
+              summary: "Runner pool host pool-win status document is unreadable"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv status document is unreadable"
+              summary: "Runner pool host pool-ubuntu status document is unreadable"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
-      # srv went stale (>120s) at t=5m (300 - 120 = 180 > 120), fires at t=15m.
+      # ubuntu went stale (>120s) at t=5m (300 - 120 = 180 > 120), fires at t=15m.
       - eval_time: 14m
         alertname: PoolHostOffline
         exp_alerts: []
@@ -329,13 +329,13 @@ tests:
           - exp_labels:
               severity: High
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv status has not updated for 14m 0s"
+              summary: "Runner pool host pool-ubuntu status has not updated for 14m 0s"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
 
   # ─────────────────────── Content rules & H suppression ────────────────────
@@ -346,85 +346,85 @@ tests:
         values: '1x140'
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0+60x140'
-      # pc: fresh, held, low memory (< 2500 MiB), paused/held queue should NOT fire PoolQueueStuck, cache_token_hits > 0.
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="pc"}'
+      # win: fresh, held, low memory (< 2500 MiB), paused/held queue should NOT fire PoolQueueStuck, cache_token_hits > 0.
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0+60x140'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="held"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="win",state="held"}'
         values: '1x140'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="accepting"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="win",state="accepting"}'
         values: '0x140'
-      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '2097152000x140'
-      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="pc",class="heavy"}'
+      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="win",class="heavy"}'
         values: '2x140'
-      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="pc",class="heavy"}'
+      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="win",class="heavy"}'
         values: '0x140'
-      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="pc",class="heavy"}'
+      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="win",class="heavy"}'
         values: '2x140'
-      - series: 'pool_cache_token_hits{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_cache_token_hits{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0x5 1x135'
-      # srv: fresh, paused for >2h, queued with free slots (paused -> MUST NOT fire PoolQueueStuck), healthy memory.
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+      # ubuntu: fresh, paused for >2h, queued with free slots (paused -> MUST NOT fire PoolQueueStuck), healthy memory.
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0+60x140'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv",state="paused"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="ubuntu",state="paused"}'
         values: '1x140'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv",state="accepting"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="ubuntu",state="accepting"}'
         values: '0x140'
-      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '5368709120x140'
-      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="srv",class="light"}'
+      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="ubuntu",class="light"}'
         values: '2x140'
-      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="srv",class="light"}'
+      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="ubuntu",class="light"}'
         values: '0x140'
-      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="srv",class="light"}'
+      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="ubuntu",class="light"}'
         values: '4x140'
-      # srv2 (future host with no explicit threshold recording rule): accepting, stuck heavy queue, full light queue, low mem via fallback.
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv2"}'
+      # ubuntu2 (future host with no explicit threshold recording rule): accepting, stuck heavy queue, full light queue, low mem via fallback.
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu2"}'
         values: '0+60x140'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv2",state="accepting"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="ubuntu2",state="accepting"}'
         values: '1x140'
-      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="srv2"}'
+      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="ubuntu2"}'
         values: '2097152000x140'
-      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="srv2",class="heavy"}'
+      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="ubuntu2",class="heavy"}'
         values: '2x140'
-      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="srv2",class="heavy"}'
+      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="ubuntu2",class="heavy"}'
         values: '1x140'
-      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="srv2",class="heavy"}'
+      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="ubuntu2",class="heavy"}'
         values: '2x140'
-      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="srv2",class="light"}'
+      - series: 'pool_class_slots{job="pool-status",instance="pool-status:9101",host="ubuntu2",class="light"}'
         values: '2x140'
-      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="srv2",class="light"}'
+      - series: 'pool_class_busy{job="pool-status",instance="pool-status:9101",host="ubuntu2",class="light"}'
         values: '2x140'
-      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="srv2",class="light"}'
+      - series: 'pool_class_queued{job="pool-status",instance="pool-status:9101",host="ubuntu2",class="light"}'
         values: '3x140'
-      # srv3: stale (H false), held + low mem -> content rules MUST NOT fire.
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv3"}'
+      # ubuntu3: stale (H false), held + low mem -> content rules MUST NOT fire.
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu3"}'
         values: '0x140'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv3",state="held"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="ubuntu3",state="held"}'
         values: '1x140'
-      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="srv3"}'
+      - series: 'pool_guard_avail_bytes{job="pool-status",instance="pool-status:9101",host="ubuntu3"}'
         values: '1000000000x140'
-      # srv4: fresh, draining for >2h -> fires PoolHostPausedLong with state="draining".
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv4"}'
+      # ubuntu4: fresh, draining for >2h -> fires PoolHostPausedLong with state="draining".
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu4"}'
         values: '0+60x140'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv4",state="draining"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="ubuntu4",state="draining"}'
         values: '1x140'
     alert_rule_test:
-      # PoolHostHeld: only pc (srv3 is stale).
+      # PoolHostHeld: only win (ubuntu3 is stale).
       - eval_time: 6m
         alertname: PoolHostHeld
         exp_alerts:
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               state: held
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc is in held state and needs operator intervention"
+              summary: "Runner pool host pool-win is in held state and needs operator intervention"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
       # PoolCacheTokenHits: for 0m -> fires right at t=6m when value becomes 1.
       - eval_time: 4m
@@ -436,41 +436,41 @@ tests:
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc cache scan found 1 token-like string(s)"
+              summary: "Runner pool host pool-win cache scan found 1 token-like string(s)"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
-      # PoolGuardMemoryLow: pc (via recording rule) and srv2 (via fallback), NOT srv (healthy) or srv3 (stale).
+      # PoolGuardMemoryLow: win (via recording rule) and ubuntu2 (via fallback), NOT ubuntu (healthy) or ubuntu3 (stale).
       - eval_time: 12m
         alertname: PoolGuardMemoryLow
         exp_alerts:
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc available memory is low (1.953GiB)"
+              summary: "Runner pool host pool-win available memory is low (1.953GiB)"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-srv2
+              server_id: pool-ubuntu2
               notification_mode: shadow
-              host: srv2
+              host: ubuntu2
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv2 available memory is low (1.953GiB)"
+              summary: "Runner pool host pool-ubuntu2 available memory is low (1.953GiB)"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
-      # PoolQueueStuck: ONLY srv2 heavy (accepting + free slot). pc (held), srv (paused), srv2 light (busy==slots) do NOT fire.
+      # PoolQueueStuck: ONLY ubuntu2 heavy (accepting + free slot). win (held), ubuntu (paused), ubuntu2 light (busy==slots) do NOT fire.
       - eval_time: 14m
         alertname: PoolQueueStuck
         exp_alerts: []
@@ -480,14 +480,14 @@ tests:
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-srv2
+              server_id: pool-ubuntu2
               notification_mode: shadow
-              host: srv2
+              host: ubuntu2
               class: heavy
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv2 heavy queue has 2 job(s) waiting with free slots"
+              summary: "Runner pool host pool-ubuntu2 heavy queue has 2 job(s) waiting with free slots"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
       # PoolHostPausedLong: fires after 2h (120m) for both paused and draining (state label merged).
       - eval_time: 119m
@@ -499,24 +499,24 @@ tests:
           - exp_labels:
               severity: Low
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv has been paused or draining (not accepting jobs) for over 2h"
+              summary: "Runner pool host pool-ubuntu has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
           - exp_labels:
               severity: Low
               product: runner-pool
-              server_id: pool-srv4
+              server_id: pool-ubuntu4
               notification_mode: shadow
-              host: srv4
+              host: ubuntu4
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv4 has been paused or draining (not accepting jobs) for over 2h"
+              summary: "Runner pool host pool-ubuntu4 has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
 
   - name: PoolHostPausedLong tracks continuous paused/draining across state transitions
@@ -526,21 +526,21 @@ tests:
         values: '1x165'
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0+60x165'
-      # pc: paused 90m (steps 0..89), then draining 60m (steps 90..149), then accepting (steps 150..165).
+      # win: paused 90m (steps 0..89), then draining 60m (steps 90..149), then accepting (steps 150..165).
       # Continuous non-accepting reaches 2h at t=120m without resetting at t=90m.
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0+60x165'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="paused"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="win",state="paused"}'
         values: '1x89 0x75'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="pc",state="draining"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="win",state="draining"}'
         values: '0x89 1x59 0x15'
-      # srv: paused 130m (steps 0..129, already firing at t=120m), switches to draining at t=130m
+      # ubuntu: paused 130m (steps 0..129, already firing at t=120m), switches to draining at t=130m
       # (steps 130..139) -> must NOT prematurely resolve; returns to accepting at t=140m -> resolves.
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0+60x165'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv",state="paused"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="ubuntu",state="paused"}'
         values: '1x129 0x35'
-      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="srv",state="draining"}'
+      - series: 'pool_status_state{job="pool-status",instance="pool-status:9101",host="ubuntu",state="draining"}'
         values: '0x129 1x9 0x25'
     alert_rule_test:
       - eval_time: 119m
@@ -552,67 +552,67 @@ tests:
           - exp_labels:
               severity: Low
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc has been paused or draining (not accepting jobs) for over 2h"
+              summary: "Runner pool host pool-win has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
           - exp_labels:
               severity: Low
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv has been paused or draining (not accepting jobs) for over 2h"
+              summary: "Runner pool host pool-ubuntu has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
-      # At t=131m and t=135m srv has switched paused -> draining and must remain firing without resolving.
+      # At t=131m and t=135m ubuntu has switched paused -> draining and must remain firing without resolving.
       - eval_time: 131m
         alertname: PoolHostPausedLong
         exp_alerts:
           - exp_labels:
               severity: Low
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc has been paused or draining (not accepting jobs) for over 2h"
+              summary: "Runner pool host pool-win has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
           - exp_labels:
               severity: Low
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv has been paused or draining (not accepting jobs) for over 2h"
+              summary: "Runner pool host pool-ubuntu has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
-      # At t=145m srv has returned to accepting (resolved at 140m) while pc is still draining.
+      # At t=145m ubuntu has returned to accepting (resolved at 140m) while win is still draining.
       - eval_time: 145m
         alertname: PoolHostPausedLong
         exp_alerts:
           - exp_labels:
               severity: Low
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc has been paused or draining (not accepting jobs) for over 2h"
+              summary: "Runner pool host pool-win has been paused or draining (not accepting jobs) for over 2h"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
-      # At t=151m pc has returned to accepting -> both resolved.
+      # At t=151m win has returned to accepting -> both resolved.
       - eval_time: 151m
         alertname: PoolHostPausedLong
         exp_alerts: []
@@ -626,11 +626,11 @@ tests:
       # Exporter reads every 30s: t = 0, 30, 60, ...
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0 30+30x99'
-      # Host srv: normal (A=25s) until t=5m (step 10: updated_at=275),
+      # Host ubuntu: normal (A=25s) until t=5m (step 10: updated_at=275),
       # offline for 3m (steps 11..16: t=5m30s..8m00s, updated_at frozen at 275 -> max A=205s),
       # recovers at step 17 (t=8m30s=510s: updated_at=485, A=25s).
       # Note: promtool VxN expands to N+1 values.
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0 5+30x9 275x5 485+30x83'
     alert_rule_test:
       # During outage: neither PoolHostOffline (<10m) nor PoolHostBriefOffline (H false) fires.
@@ -650,13 +650,13 @@ tests:
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv was offline for 3m 25s and recovered (possible reboot); this alert auto-resolves after ~30m"
+              summary: "Runner pool host pool-ubuntu was offline for 3m 25s and recovered (possible reboot); this alert auto-resolves after ~30m"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
       # After the 30m window passes (last A > 120 was at t=8m00s -> gone by t=39m), auto-resolves.
       - eval_time: 39m
@@ -673,7 +673,7 @@ tests:
         values: '0 30+30x139'
       # Normal until step 10 (t=5m, updated_at=275), offline 15m (steps 11..40: t=5m30s..20m00s),
       # recovers at step 41 (t=20m30s=1230s: updated_at=1205, A=25s).
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0 5+30x9 275x29 1205+30x99'
     alert_rule_test:
       # Pending starts at t=7m -> fires at t=17m; still firing at t=20m.
@@ -683,13 +683,13 @@ tests:
           - exp_labels:
               severity: High
               product: runner-pool
-              server_id: pool-srv
+              server_id: pool-ubuntu
               notification_mode: shadow
-              host: srv
+              host: ubuntu
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-srv status has not updated for 15m 25s"
+              summary: "Runner pool host pool-ubuntu status has not updated for 15m 25s"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
       # Recovers at t=20m30s -> PoolHostOffline resolves at t=21m, BriefOffline stays suppressed.
       - eval_time: 21m
@@ -719,7 +719,7 @@ tests:
         values: '0 30+30x119'
       # Pending starts at t=7m (would fire at t=17m). Frozen steps 11..32 (t=5m30s..16m00s),
       # recovers at step 33 (t=16m30s=990s: updated_at=965 -> outage 11m55s).
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0 5+30x9 275x21 965+30x87'
     alert_rule_test:
       - eval_time: 16m
@@ -734,13 +734,13 @@ tests:
           - exp_labels:
               severity: Medium
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc was offline for 11m 25s and recovered (possible reboot); this alert auto-resolves after ~30m"
+              summary: "Runner pool host pool-win was offline for 11m 25s and recovered (possible reboot); this alert auto-resolves after ~30m"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
 
   - name: boundary right after PoolHostOffline fires (~13m) fires only Offline and never BriefOffline
@@ -753,7 +753,7 @@ tests:
       # Pending starts at t=7m, fires at t=17m. Still frozen at step 35 (t=17m30s, A=775s)
       # to also exercise the 30m boundary where A stayed high after Offline's last firing sample;
       # recovers at step 36 (t=18m00s=1080s: updated_at=1055 -> outage ~13m).
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="pc"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="win"}'
         values: '0 5+30x9 275x24 1055+30x84'
     alert_rule_test:
       - eval_time: 16m
@@ -765,13 +765,13 @@ tests:
           - exp_labels:
               severity: High
               product: runner-pool
-              server_id: pool-pc
+              server_id: pool-win
               notification_mode: shadow
-              host: pc
+              host: win
               job: pool-status
               instance: pool-status:9101
             exp_annotations:
-              summary: "Runner pool host pool-pc status has not updated for 12m 25s"
+              summary: "Runner pool host pool-win status has not updated for 12m 25s"
               runbook_url: "https://github.com/wanth1997/SkyEye/blob/master/runbooks/runner-pool-offline.md"
       - eval_time: 17m
         alertname: PoolHostBriefOffline
@@ -803,7 +803,7 @@ tests:
       # resumes at step 27 (t=13m30s=810s: read_ts=810, updated_ts=785).
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0 30+30x19 600x5 810+30x83'
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0 5+30x19 575x5 785+30x83'
     alert_rule_test:
       - eval_time: 13m
@@ -842,7 +842,7 @@ tests:
         values: '1x20 0x5 1x83'
       - series: 'pool_status_exporter_read_timestamp_seconds{job="pool-status",instance="pool-status:9101"}'
         values: '0 30+30x19 stale _x5 810+30x83'
-      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="srv"}'
+      - series: 'pool_status_updated_timestamp_seconds{job="pool-status",instance="pool-status:9101",host="ubuntu"}'
         values: '0 5+30x19 stale _x5 785+30x83'
     promql_expr_test:
       # Confirm both timestamp series genuinely vanish during the container stop (not carried via lookback).

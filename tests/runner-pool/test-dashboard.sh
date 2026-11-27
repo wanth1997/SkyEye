@@ -138,28 +138,28 @@ stack_by_id = {p["id"]: p for p in stack["panels"] if "id" in p}
 
 behavior_yml = f"""evaluation_interval: 1m
 tests:
-  - name: hosts-runner-pool table queries return one row per host and attach wans-windows up to pc
+  - name: hosts-runner-pool table queries return one row per host and attach wans-windows up to win
     interval: 1m
     input_series:
-      - series: 'pool_status_expected{{job="pool-status",instance="pool-status:9101",host="pc"}}'
+      - series: 'pool_status_expected{{job="pool-status",instance="pool-status:9101",host="win"}}'
         values: '1x5'
-      - series: 'pool_status_expected{{job="pool-status",instance="pool-status:9101",host="srv"}}'
+      - series: 'pool_status_expected{{job="pool-status",instance="pool-status:9101",host="ubuntu"}}'
         values: '1x5'
-      - series: 'pool_status_updated_timestamp_seconds{{job="pool-status",instance="pool-status:9101",host="pc"}}'
+      - series: 'pool_status_updated_timestamp_seconds{{job="pool-status",instance="pool-status:9101",host="win"}}'
         values: '0 35 95 155 215'
-      - series: 'pool_status_updated_timestamp_seconds{{job="pool-status",instance="pool-status:9101",host="srv"}}'
+      - series: 'pool_status_updated_timestamp_seconds{{job="pool-status",instance="pool-status:9101",host="ubuntu"}}'
         values: '0 35 95 155 215'
-      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="pc",state="accepting"}}'
+      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="win",state="accepting"}}'
         values: '1x5'
-      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="pc",state="paused"}}'
+      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="win",state="paused"}}'
         values: '0x5'
-      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="srv",state="draining"}}'
+      - series: 'pool_status_state{{job="pool-status",instance="pool-status:9101",host="ubuntu",state="draining"}}'
         values: '1x5'
-      - series: 'pool_guard_state{{job="pool-status",instance="pool-status:9101",host="pc",state="ok"}}'
+      - series: 'pool_guard_state{{job="pool-status",instance="pool-status:9101",host="win",state="ok"}}'
         values: '1x5'
-      - series: 'pool_guard_state{{job="pool-status",instance="pool-status:9101",host="srv",state="none"}}'
+      - series: 'pool_guard_state{{job="pool-status",instance="pool-status:9101",host="ubuntu",state="none"}}'
         values: '1x5'
-      - series: 'pool_guard_avail_bytes{{job="pool-status",instance="pool-status:9101",host="pc"}}'
+      - series: 'pool_guard_avail_bytes{{job="pool-status",instance="pool-status:9101",host="win"}}'
         values: '9542041600x5'
       - series: 'up{{job="integrations/windows",instance="WIN-PC",product="github-runner",server_id="wans-windows"}}'
         values: '1x5'
@@ -169,28 +169,28 @@ tests:
       - expr: {yaml_expr(get_expr(pool_by_id, 10, "B"))}
         eval_time: 4m
         exp_samples:
-          - labels: '{{host="pc"}}'
+          - labels: '{{host="win"}}'
             value: 25
-          - labels: '{{host="srv"}}'
+          - labels: '{{host="ubuntu"}}'
             value: 25
       - expr: {yaml_expr(get_expr(pool_by_id, 10, "C"))}
         eval_time: 4m
         exp_samples:
-          - labels: '{{host="pc"}}'
+          - labels: '{{host="win"}}'
             value: 1
-          - labels: '{{host="srv"}}'
+          - labels: '{{host="ubuntu"}}'
             value: 4
       - expr: {yaml_expr(get_expr(pool_by_id, 10, "D"))}
         eval_time: 4m
         exp_samples:
-          - labels: '{{host="pc"}}'
+          - labels: '{{host="win"}}'
             value: 1
-          - labels: '{{host="srv"}}'
+          - labels: '{{host="ubuntu"}}'
             value: 2
       - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
         eval_time: 4m
         exp_samples:
-          - labels: '{{host="pc"}}'
+          - labels: '{{host="win"}}'
             value: 1
       - expr: {yaml_expr(get_expr(pool_by_id, 41, "A"))}
         eval_time: 4m
@@ -230,7 +230,7 @@ tests:
       - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
         eval_time: 2m
         exp_samples:
-          - labels: '{{host="pc"}}'
+          - labels: '{{host="win"}}'
             value: 1
       - expr: {yaml_expr(get_expr(pool_by_id, 11, "A"))}
         eval_time: 2m
@@ -241,7 +241,7 @@ tests:
       - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
         eval_time: 4m
         exp_samples:
-          - labels: '{{host="pc"}}'
+          - labels: '{{host="win"}}'
             value: 0
       - expr: {yaml_expr(get_expr(pool_by_id, 11, "A"))}
         eval_time: 4m
@@ -252,7 +252,7 @@ tests:
       - expr: {yaml_expr(get_expr(pool_by_id, 10, "N"))}
         eval_time: 8m
         exp_samples:
-          - labels: '{{host="pc"}}'
+          - labels: '{{host="win"}}'
             value: 2
       - expr: {yaml_expr(get_expr(pool_by_id, 11, "A"))}
         eval_time: 8m
