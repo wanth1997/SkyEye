@@ -13,7 +13,7 @@ set -euo pipefail
 #    4h on pool High vs 30m on general High, group_wait: 0s, server_id in
 #    group_by, BriefOffline route without active_time_intervals).
 # 3. Live Alertmanager Run 1 (outside work-hours):
-#    - Two simultaneous PoolHostOffline alerts (pool-pc, pool-srv) arrive before
+#    - Two simultaneous PoolHostOffline alerts (pool-win, pool-ubuntu) arrive before
 #      the 10s root group_wait (proving group_wait: 0s) as two separate groups
 #      at telegram-high only (not email-high).
 #    - Shadow pool High / Medium / BriefOffline arrive only at shadow-null.
@@ -26,9 +26,9 @@ set -euo pipefail
 #      to telegram-medium, proving Run 1's blocking came from work-hours.
 # 5. Live Alertmanager Run 3 (shortened test-only group_interval and general
 #    High repeat_interval; pool High repeat_interval stays 4h):
-#    - Resolving pool-pc delivers resolved only for pool-pc's group while
-#      pool-srv remains firing without resolving.
-#    - Other product's High repeats (>= 2 deliveries) while pool-srv
+#    - Resolving pool-win delivers resolved only for pool-win's group while
+#      pool-ubuntu remains firing without resolving.
+#    - Other product's High repeats (>= 2 deliveries) while pool-ubuntu
 #      PoolHostOffline delivers only once (4h route, not 30m).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -169,7 +169,7 @@ for i in range(0, len(alert_chunks), 2):
     labels = {}
     for line in labels_m.group(1).splitlines():
         k, v = line.strip().split(":", 1)
-        labels[k.strip()] = v.strip().strip('"').replace("{{ $labels.host }}", "pc")
+        labels[k.strip()] = v.strip().strip('"').replace("{{ $labels.host }}", "win")
     assert labels.get("notification_mode") == "shadow", f"{alertname}: notification_mode must be shadow"
     assert labels.get("product") == "runner-pool", f"{alertname}: product must be runner-pool"
     assert labels.get("server_id"), f"{alertname}: missing server_id"
@@ -245,13 +245,13 @@ add_alert() {
 
 # ── Run 1: outside work-hours (real timings intact) ──────────────────────────
 start_am /tmp/w/am-outside.yml /tmp/am-1
-add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-pc host=pc
-add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-srv host=srv
+add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-win host=win
+add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-ubuntu host=ubuntu
 add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-shadow host=shadow notification_mode=shadow
 add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-page host=page notification_mode=page
-add_alert alertname=PoolHostBriefOffline severity=Medium product=runner-pool server_id=pool-pc host=pc
+add_alert alertname=PoolHostBriefOffline severity=Medium product=runner-pool server_id=pool-win host=win
 add_alert alertname=PoolHostBriefOffline severity=Medium product=runner-pool server_id=pool-shadow host=shadow notification_mode=shadow
-add_alert alertname=PoolHostHeld severity=Medium product=runner-pool server_id=pool-pc host=pc
+add_alert alertname=PoolHostHeld severity=Medium product=runner-pool server_id=pool-win host=win
 add_alert alertname=PoolHostHeld severity=Medium product=runner-pool server_id=pool-shadow host=shadow notification_mode=shadow
 add_alert alertname=HostHighCPU severity=Medium product=ppclub server_id=prod01
 add_alert alertname=BackendDown severity=High product=ppclub server_id=prod01
@@ -267,8 +267,8 @@ stop_am
 
 # ── Run 2: inside work-hours (control test proving work-hours did the blocking)
 start_am /tmp/w/am-inside.yml /tmp/am-2
-add_alert alertname=PoolHostBriefOffline severity=Medium product=runner-pool server_id=pool-pc host=pc
-add_alert alertname=PoolHostHeld severity=Medium product=runner-pool server_id=pool-pc host=pc
+add_alert alertname=PoolHostBriefOffline severity=Medium product=runner-pool server_id=pool-win host=win
+add_alert alertname=PoolHostHeld severity=Medium product=runner-pool server_id=pool-win host=win
 add_alert alertname=HostHighCPU severity=Medium product=ppclub server_id=prod01
 sleep 14
 echo "=== RUN2-FULL ==="
@@ -277,13 +277,13 @@ stop_am
 
 # ── Run 3: independent resolved + repeat_interval 4h vs 30m behavioral proof ─
 start_am /tmp/w/am-repeat.yml /tmp/am-3
-add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-pc host=pc
-add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-srv host=srv
+add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-win host=win
+add_alert alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-ubuntu host=ubuntu
 add_alert alertname=BackendDown severity=High product=ppclub server_id=prod01
 sleep 2
-# End ONLY pool-pc; pool-srv and ppclub BackendDown stay firing.
+# End ONLY pool-win; pool-ubuntu and ppclub BackendDown stay firing.
 add_alert --end="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-pc host=pc
+  alertname=PoolHostOffline severity=High product=runner-pool server_id=pool-win host=win
 sleep 6
 echo "=== RUN3-FULL ==="
 cat /tmp/sink.log
@@ -350,18 +350,18 @@ pool_early_groups = [
     p for r, p in r1_early
     if r == "telegram-high"
     and p.get("groupLabels", {}).get("alertname") == "PoolHostOffline"
-    and p.get("groupLabels", {}).get("server_id") in ("pool-pc", "pool-srv")
+    and p.get("groupLabels", {}).get("server_id") in ("pool-win", "pool-ubuntu")
 ]
 expect("two simultaneous PoolHostOffline hosts arrive within 4s (group_wait: 0s) as two separate groups",
        len(pool_early_groups) == 2
-       and {p["groupLabels"]["server_id"] for p in pool_early_groups} == {"pool-pc", "pool-srv"}
+       and {p["groupLabels"]["server_id"] for p in pool_early_groups} == {"pool-win", "pool-ubuntu"}
        and all(len(p["alerts"]) == 1 for p in pool_early_groups))
 
 expect("non-page PoolHostOffline reaches telegram-high and NOT email-high",
-       ("telegram-high", "runner-pool", "pool-pc", "PoolHostOffline", "firing") in r1_full_set
-       and ("telegram-high", "runner-pool", "pool-srv", "PoolHostOffline", "firing") in r1_full_set
-       and ("email-high", "runner-pool", "pool-pc", "PoolHostOffline", "firing") not in r1_full_set
-       and ("email-high", "runner-pool", "pool-srv", "PoolHostOffline", "firing") not in r1_full_set)
+       ("telegram-high", "runner-pool", "pool-win", "PoolHostOffline", "firing") in r1_full_set
+       and ("telegram-high", "runner-pool", "pool-ubuntu", "PoolHostOffline", "firing") in r1_full_set
+       and ("email-high", "runner-pool", "pool-win", "PoolHostOffline", "firing") not in r1_full_set
+       and ("email-high", "runner-pool", "pool-ubuntu", "PoolHostOffline", "firing") not in r1_full_set)
 
 expect("page PoolHostOffline reaches both email-high and telegram-high with 0s group_wait",
        ("email-high", "runner-pool", "pool-page", "PoolHostOffline", "firing") in r1_early_set
@@ -377,10 +377,10 @@ expect("shadow pool alerts (High, Medium, BriefOffline) go ONLY to shadow-null",
        and shadow_null_alerts == {"PoolHostOffline", "PoolHostBriefOffline", "PoolHostHeld"})
 
 expect("PoolHostBriefOffline delivers to telegram-medium outside work-hours",
-       ("telegram-medium", "runner-pool", "pool-pc", "PoolHostBriefOffline", "firing") in r1_full_set)
+       ("telegram-medium", "runner-pool", "pool-win", "PoolHostBriefOffline", "firing") in r1_full_set)
 
 expect("PoolHostHeld and other products' Medium are blocked outside work-hours",
-       ("telegram-medium", "runner-pool", "pool-pc", "PoolHostHeld", "firing") not in r1_full_set
+       ("telegram-medium", "runner-pool", "pool-win", "PoolHostHeld", "firing") not in r1_full_set
        and ("telegram-medium", "ppclub", "prod01", "HostHighCPU", "firing") not in r1_full_set)
 
 expect("other product High (ppclub BackendDown) still delivers to telegram-high with 0s wait and not email-high",
@@ -389,18 +389,18 @@ expect("other product High (ppclub BackendDown) still delivers to telegram-high 
 
 # Run 2: inside work-hours control
 expect("inside work-hours, PoolHostBriefOffline, PoolHostHeld and ppclub Medium all deliver to telegram-medium",
-       ("telegram-medium", "runner-pool", "pool-pc", "PoolHostBriefOffline", "firing") in r2_full_set
-       and ("telegram-medium", "runner-pool", "pool-pc", "PoolHostHeld", "firing") in r2_full_set
+       ("telegram-medium", "runner-pool", "pool-win", "PoolHostBriefOffline", "firing") in r2_full_set
+       and ("telegram-medium", "runner-pool", "pool-win", "PoolHostHeld", "firing") in r2_full_set
        and ("telegram-medium", "ppclub", "prod01", "HostHighCPU", "firing") in r2_full_set)
 
 # Run 3: separate resolved + repeat_interval 4h vs 30m
-pc_deliveries = [
+win_deliveries = [
     p for r, p in r3_full
-    if r == "telegram-high" and p.get("groupLabels", {}).get("server_id") == "pool-pc"
+    if r == "telegram-high" and p.get("groupLabels", {}).get("server_id") == "pool-win"
 ]
-srv_deliveries = [
+ubuntu_deliveries = [
     p for r, p in r3_full
-    if r == "telegram-high" and p.get("groupLabels", {}).get("server_id") == "pool-srv"
+    if r == "telegram-high" and p.get("groupLabels", {}).get("server_id") == "pool-ubuntu"
 ]
 ppclub_deliveries = [
     p for r, p in r3_full
@@ -409,16 +409,16 @@ ppclub_deliveries = [
     and p.get("groupLabels", {}).get("alertname") == "BackendDown"
 ]
 
-expect("resolving pool-pc delivers resolved in pool-pc's own group while pool-srv stays firing without resolving",
-       any(p.get("status") == "firing" for p in pc_deliveries)
-       and any(p.get("status") == "resolved" for p in pc_deliveries)
-       and all(len(p["alerts"]) == 1 for p in pc_deliveries)
-       and len(srv_deliveries) == 1
-       and srv_deliveries[0].get("status") == "firing"
-       and all(p.get("status") != "resolved" for p in srv_deliveries))
+expect("resolving pool-win delivers resolved in pool-win's own group while pool-ubuntu stays firing without resolving",
+       any(p.get("status") == "firing" for p in win_deliveries)
+       and any(p.get("status") == "resolved" for p in win_deliveries)
+       and all(len(p["alerts"]) == 1 for p in win_deliveries)
+       and len(ubuntu_deliveries) == 1
+       and ubuntu_deliveries[0].get("status") == "firing"
+       and all(p.get("status") != "resolved" for p in ubuntu_deliveries))
 
 expect("pool High stays on 4h repeat (1 delivery) while other product High repeats on the general 30m route (>= 2 deliveries)",
-       len(srv_deliveries) == 1 and len(ppclub_deliveries) >= 2)
+       len(ubuntu_deliveries) == 1 and len(ppclub_deliveries) >= 2)
 
 sys.exit(1 if failures else 0)
 PY
