@@ -76,8 +76,8 @@ curl -fsS --get http://127.0.0.1:9090/api/v1/query \
 
 ### 3. Ubuntu PC（`server_id="pool-ubuntu"`）
 
-1. 從操作機對 `ubuntu` 測試 ping 與 SSH，分辨是整台卡死／斷網（ping 不通或 SSH 卡在 kex）還是 `pool-status.timer`／status token 失效（SSH 進得去）。
-2. **確認 `PoolHostBriefOffline` 是否真的重開過**：SSH 進 `ubuntu` 後查 `journalctl --list-boots` 與前次開機尾端日誌 `journalctl -b -1 -n 50`。
+1. 先依 ai-workflow 的私有 runbook（`pool/docs/runbook-ubuntu.md`，從 ledger `HOSTS:` 取得 SSH 名稱）查出 `ubuntu` 對應的連線目標，再從操作機對該目標測試 ping 與 SSH，分辨是整台卡死／斷網（ping 不通或 SSH 卡在 kex）還是 `pool-status.timer`／status token 失效（SSH 進得去）。
+2. **確認 `PoolHostBriefOffline` 是否真的重開過**：SSH 進該連線目標後查 `journalctl --list-boots` 與前次開機尾端日誌 `journalctl -b -1 -n 50`。
 3. 主機端排查（k3s、ARC、`pool-status.timer`、`pool_ubuntu.py check`）與恢復步驟見 ai-workflow repo 的 `pool/docs/runbook-ubuntu.md`。
 
 ### 4. 其他告警速查
